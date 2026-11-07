@@ -1,0 +1,36 @@
+# Parent pipeline: chains two sub-pipelines, passing outputs between them.
+name: Daily orders
+description: Ingest and transform the day's orders, then report
+parameters:
+  run_date: "2026-01-01"
+
+tasks:
+  - key: ingest
+    type: pipeline
+    pipeline: ingest_orders
+    parameters:
+      run_date: ${params.run_date}
+
+  - key: transform
+    type: pipeline
+    pipeline: transform_orders
+    depends_on: [ingest]
+    parameters:
+      input_path: ${tasks.ingest.output.path}
+
+  - key: report
+    type: shell
+    depends_on: [transform]
+    command: >-
+      echo "Run ${run.id}: ${tasks.ingest.output.row_count} orders,
+      revenue ${tasks.transform.output.total_revenue}"
+
+  - key: health_check
+    type: shell
+    description: Independent branch that runs in parallel with ingest
+    command: echo "workspace is $(pwd)"
+
+outputs:
+  orders: ${tasks.ingest.output.row_count}
+  rejected: ${tasks.ingest.output.rejected}
+  total_revenue: ${tasks.transform.output.total_revenue}

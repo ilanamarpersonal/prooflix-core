@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "prooflix-server",
+      "runtimeExecutable": "/Users/ilan.amar/.local/bin/uv",
+      "runtimeArgs": ["run", "--directory", "server", "prooflix", "serve", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}

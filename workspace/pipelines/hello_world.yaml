@@ -1,0 +1,9 @@
+name: Hello world
+description: The smallest possible pipeline
+parameters:
+  who: world
+
+tasks:
+  - key: greet
+    type: shell
+    command: echo "Hello, ${params.who}!"

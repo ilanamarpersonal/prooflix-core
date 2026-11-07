@@ -1,0 +1,96 @@
+import { Link } from "react-router"
+import { AlertTriangle, Plus, Workflow } from "lucide-react"
+
+import { ErrorAlert } from "@/components/error-alert"
+import { PageHeader } from "@/components/page-header"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { usePipelines } from "@/lib/api"
+
+export function PipelinesPage() {
+  const { data, isLoading, error } = usePipelines()
+
+  return (
+    <>
+      <PageHeader
+        title="Pipelines"
+        description={
+          <>
+            Defined as YAML files in <code className="font-mono">workspace/pipelines/</code>
+          </>
+        }
+        actions={
+          <Button asChild>
+            <Link to="/pipelines/new">
+              <Plus /> New pipeline
+            </Link>
+          </Button>
+        }
+      />
+      {error && <ErrorAlert error={error} />}
+      <Card className="py-2">
+        <CardContent className="px-2">
+          {isLoading ? (
+            <Skeleton className="h-48 w-full" />
+          ) : !data?.length ? (
+            <div className="text-muted-foreground flex flex-col items-center gap-2 py-12 text-sm">
+              <Workflow className="size-8" />
+              No pipelines yet. Add a YAML file or create one here.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Id</TableHead>
+                  <TableHead>Tasks</TableHead>
+                  <TableHead>Sub-pipelines</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell className="max-w-80">
+                      <Link to={`/pipelines/${p.id}`} className="font-medium hover:underline">
+                        {p.name}
+                      </Link>
+                      {p.description && (
+                        <div className="text-muted-foreground truncate text-xs">{p.description}</div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground font-mono text-xs">{p.id}</TableCell>
+                    <TableCell>{p.task_count}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {p.sub_pipelines.length
+                          ? p.sub_pipelines.map((s) => (
+                              <Badge key={s} variant="secondary" asChild>
+                                <Link to={`/pipelines/${s}`}>{s}</Link>
+                              </Badge>
+                            ))
+                          : <span className="text-muted-foreground">—</span>}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {p.valid ? (
+                        <Badge variant="outline" className="text-status-succeeded">valid</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
+                          <AlertTriangle /> {p.errors.length} error{p.errors.length > 1 ? "s" : ""}
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </>
+  )
+}

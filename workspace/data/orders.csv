@@ -1,0 +1,11 @@
+order_id,customer,country,amount,status
+1001, Alice ,IL,120.50,paid
+1002,Bob,US,75.00,paid
+1003,carol,US,210.25,PAID
+1004,Dan,DE,-15.00,refund
+1005,Eve,IL,99.99,paid
+,Frank,FR,40.00,paid
+1007,Grace,DE,310.00,paid
+1008,Heidi,FR,55.10,pending
+1009,Ivan,US,18.75,paid
+1010,Judy,IL,64.00,paid

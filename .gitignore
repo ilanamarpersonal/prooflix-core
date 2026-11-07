@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+client/dist/
+
+# Prooflix runtime state and sample outputs
+workspace/.prooflix/
+workspace/data/output/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/

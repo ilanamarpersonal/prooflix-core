@@ -1,0 +1,24 @@
+# Cleans validated orders and computes revenue per country.
+name: Transform orders
+description: Normalize orders and aggregate revenue by country
+parameters:
+  input_path: ""
+
+tasks:
+  - key: clean
+    type: python
+    entrypoint: jobs.orders:clean
+    parameters:
+      input_path: ${params.input_path}
+
+  - key: aggregate
+    type: python
+    entrypoint: jobs.orders:aggregate
+    depends_on: [clean]
+    parameters:
+      input_path: ${tasks.clean.output.path}
+
+outputs:
+  summary_path: ${tasks.aggregate.output.summary_path}
+  total_revenue: ${tasks.aggregate.output.total_revenue}
+  revenue_by_country: ${tasks.aggregate.output.revenue_by_country}

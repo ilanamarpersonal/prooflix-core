@@ -1,0 +1,30 @@
+[project]
+name = "prooflix"
+version = "0.1.0"
+description = "Prooflix core server: YAML-defined pipelines with sub-pipeline orchestration"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+prooflix = "prooflix.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prooflix"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

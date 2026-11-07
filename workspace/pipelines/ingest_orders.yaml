@@ -1,0 +1,32 @@
+# Reads the raw orders CSV and keeps only valid rows.
+# Called as a sub-pipeline by daily_orders.
+name: Ingest orders
+description: Extract orders from CSV and drop invalid rows
+parameters:
+  source_file: data/orders.csv
+  run_date: "2026-01-01"
+  min_rows: 1
+
+tasks:
+  - key: extract
+    type: python
+    description: Read the CSV into JSON
+    entrypoint: jobs.orders:extract
+    parameters:
+      source_file: ${params.source_file}
+      run_date: ${params.run_date}
+
+  - key: validate
+    type: python
+    description: Drop rows with a missing id or negative amount
+    entrypoint: jobs.orders:validate_orders
+    depends_on: [extract]
+    retries: 1
+    parameters:
+      path: ${tasks.extract.output.path}
+      min_rows: ${params.min_rows}
+
+outputs:
+  path: ${tasks.validate.output.path}
+  row_count: ${tasks.validate.output.valid}
+  rejected: ${tasks.validate.output.invalid}
