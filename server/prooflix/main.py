@@ -23,6 +23,9 @@ from .runs import RunStore
 
 log = logging.getLogger(__name__)
 
+REVALIDATE = "no-cache"  # may be stored, but must be checked with the server first
+IMMUTABLE = "public, max-age=31536000, immutable"
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
@@ -74,5 +77,11 @@ def _mount_client(app: FastAPI, settings: Settings) -> None:
     async def client(path: str):
         target = (dist / path).resolve()
         if path and target.is_file() and dist.resolve() in target.parents:
-            return FileResponse(target)
-        return FileResponse(index)  # client-side routing
+            if path.startswith("assets/"):
+                # Vite puts a content hash in these file names, so a new build
+                # gets new names and the old files can be cached forever.
+                return FileResponse(target, headers={"Cache-Control": IMMUTABLE})
+            return FileResponse(target, headers={"Cache-Control": REVALIDATE})
+        # The page itself (and client-side routes): always check for a newer
+        # build, so a rebuild shows up on a normal reload.
+        return FileResponse(index, headers={"Cache-Control": REVALIDATE})

@@ -95,3 +95,17 @@ def test_cancel(client, sample_workspace):
     assert client.post(f"/api/runs/{run_id}/cancel").status_code == 200
     assert wait_for(client, run_id)["status"] == "CANCELLED"
     assert client.post(f"/api/runs/{run_id}/cancel").status_code == 409
+
+
+def test_client_cache_headers(sample_workspace, tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>")
+    (dist / "assets" / "index-abc123.js").write_text("console.log(1)")
+    (dist / "favicon.svg").write_text("<svg/>")
+    settings = Settings(workspace=sample_workspace, client_dist=dist)
+    with TestClient(create_app(settings)) as c:
+        for path in ("/", "/pipelines/daily_orders"):
+            assert c.get(path).headers["cache-control"] == "no-cache"
+        assert "immutable" in c.get("/assets/index-abc123.js").headers["cache-control"]
+        assert c.get("/favicon.svg").headers["cache-control"] == "no-cache"
