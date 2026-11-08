@@ -11,6 +11,8 @@ export interface GraphNode {
   type: TaskType
   description?: string | null
   pipeline?: string | null
+  /** python tasks: the file holding the entrypoint's module, relative to the workspace */
+  source_file?: string | null
 }
 
 export interface GraphEdge {
@@ -124,18 +126,31 @@ export interface SqlTable {
   schema: string
   /** how to write it in SQL: "orders" in main, "my_project.orders" otherwise */
   qualified: string
+  /** file path: relative to the workspace, or "catalog/…" for the catalog folder */
   source: string
+  /** the file is part of the workspace (a project's data), not the catalog folder */
+  in_workspace: boolean
   row_count: number
   columns: { name: string; type: string }[]
 }
 
 export interface CatalogSchema {
   name: string
+  /** a project's data in the workspace, or the catalog folder */
+  location: "workspace" | "catalog"
   /** project folder relative to the workspace; "" for the workspace's own data */
   project: string
   /** folder its tables come from; null when the project has no data/ folder */
   data_dir: string | null
   tables: SqlTable[]
+}
+
+export interface CatalogImportResult {
+  schema: string
+  /** the data folder the files were written to, relative to the workspace */
+  folder: string
+  tables: string[]
+  created_schema: boolean
 }
 
 export interface SqlResult {

@@ -1,7 +1,7 @@
 import { useMemo } from "react"
-import { ArrowUpRight } from "lucide-react"
 
 import { STATUS_STYLE } from "@/components/status-badge"
+import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
 import { TaskTypeIcon } from "@/components/task-type-icon"
 import type { GraphEdge, GraphNode, RunStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -11,6 +11,8 @@ const NODE_H = 64
 const GAP_X = 64
 const GAP_Y = 16
 const PAD = 8
+
+export type { TaskAction }
 
 interface Placed extends GraphNode {
   x: number
@@ -58,15 +60,15 @@ export function PipelineGraph({
   statuses,
   selected,
   onSelect,
-  onOpen,
+  actions,
 }: {
   nodes: GraphNode[]
   edges: GraphEdge[]
   statuses?: Record<string, RunStatus>
   selected?: string | null
   onSelect?: (key: string) => void
-  /** Called for the "open" affordance on pipeline tasks (sub-pipeline or child run). */
-  onOpen?: (node: GraphNode) => void
+  /** The entries of each task's ⋯ menu (open details, source code, sub-pipeline …). */
+  actions?: (node: GraphNode) => TaskAction[]
 }) {
   const { placed, width, height } = useMemo(() => layout(nodes, edges), [nodes, edges])
 
@@ -75,7 +77,15 @@ export function PipelineGraph({
       <div className="relative" style={{ width, height }}>
         <svg className="absolute inset-0" width={width} height={height} aria-hidden>
           <defs>
-            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <marker
+              id="arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
               <path d="M0,0 L10,5 L0,10 z" className="fill-muted-foreground/60" />
             </marker>
           </defs>
@@ -128,19 +138,7 @@ export function PipelineGraph({
               {tone && (
                 <tone.icon className={cn("size-4 shrink-0", status === "RUNNING" && "animate-spin")} />
               )}
-              {n.type === "pipeline" && onOpen && (
-                <button
-                  type="button"
-                  title="Open sub-pipeline"
-                  className="text-muted-foreground hover:text-foreground shrink-0"
-                  onClick={(ev) => {
-                    ev.stopPropagation()
-                    onOpen(n)
-                  }}
-                >
-                  <ArrowUpRight className="size-4" />
-                </button>
-              )}
+              {actions && <TaskActionsMenu taskKey={n.key} actions={actions(n)} className="-mr-1.5 size-6" />}
             </div>
           )
         })}

@@ -1,7 +1,18 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
-import { ChevronRight, Database, Layers, RefreshCw, Table2 } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  Database,
+  Download,
+  Layers,
+  RefreshCw,
+  Table2,
+  Upload,
+} from "lucide-react"
 
+import { CatalogImportPanel } from "@/components/catalog-import-panel"
+import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
@@ -9,11 +20,11 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useCatalog, useSqlQuery } from "@/lib/api"
+import { catalogExportUrl, useCatalog, useSqlQuery } from "@/lib/api"
 import type { CatalogSchema, SqlTable } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const PREVIEW_ROWS = 50
+const PREVIEW_ROWS = 1000
 
 /** Schemas (the workspace's own data and one per project) and their tables. */
 export function CatalogPage() {
@@ -31,6 +42,22 @@ export function CatalogPage() {
   }, [catalog.data, selectedKey])
   const selectedSchema = catalog.data?.find((s) => s.name === (selected?.schema ?? schemaParam)) ?? null
   const tableCount = catalog.data?.reduce((n, s) => n + s.tables.length, 0) ?? 0
+  const [importing, setImporting] = useState(false)
+
+  // Export what is selected: a table, a schema, or everything.
+  const exportTarget = selected
+    ? {
+        label: "Export table",
+        what: selected.qualified,
+        target: { table: `${selected.schema}.${selected.name}` },
+      }
+    : selectedSchema
+      ? {
+          label: "Export schema",
+          what: `all tables of ${selectedSchema.name}`,
+          target: { schema: selectedSchema.name },
+        }
+      : { label: "Export all", what: "every schema", target: {} }
 
   return (
     <>
@@ -38,15 +65,42 @@ export function CatalogPage() {
         title="Catalog"
         description={
           catalog.data
-            ? `${catalog.data.length} schema${catalog.data.length === 1 ? "" : "s"} · ${tableCount} table${tableCount === 1 ? "" : "s"}. Each imported project is a schema; its tables are the CSV and JSON files in its data/ folder.`
+            ? `${catalog.data.length} schema${catalog.data.length === 1 ? "" : "s"} · ${tableCount} table${tableCount === 1 ? "" : "s"}. Schemas are imported datasets (kept in the catalog folder, outside the workspace) and projects' data/ folders; their CSV and JSON files are the tables.`
             : undefined
         }
         actions={
-          <Button variant="outline" onClick={() => catalog.refetch()} disabled={catalog.isFetching}>
-            <RefreshCw className={cn(catalog.isFetching && "animate-spin")} /> Refresh
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => catalog.refetch()} disabled={catalog.isFetching}>
+              <RefreshCw className={cn(catalog.isFetching && "animate-spin")} /> Refresh
+            </Button>
+            {tableCount > 0 ? (
+              <ExportMenu
+                label={exportTarget.label}
+                what={exportTarget.what}
+                target={exportTarget.target}
+                single={!!selected}
+              />
+            ) : (
+              <Button variant="outline" disabled>
+                <Download /> Export
+              </Button>
+            )}
+            <Button onClick={() => setImporting(true)} disabled={importing}>
+              <Upload /> Import
+            </Button>
+          </>
         }
       />
+      {importing && (
+        <CatalogImportPanel
+          schemas={catalog.data ?? []}
+          defaultSchema={selected?.schema ?? selectedSchema?.name}
+          onClose={() => setImporting(false)}
+          onImported={(r) =>
+            setParams(r.tables.length === 1 ? { table: `${r.schema}.${r.tables[0]}` } : { schema: r.schema })
+          }
+        />
+      )}
       {catalog.error && <ErrorAlert error={catalog.error} />}
       <div className="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)]">
         <Card className="max-h-[75vh] gap-0 overflow-auto py-2">
@@ -54,14 +108,14 @@ export function CatalogPage() {
             <Skeleton className="mx-2 h-64" />
           ) : !catalog.data?.length ? (
             <div className="text-muted-foreground grid gap-2 p-4 text-sm">
-              <p>No schemas yet.</p>
+              <p>No tables yet.</p>
               <p>
                 Import a project in the{" "}
                 <Link to="/workspace" className="underline">
                   Workspace
                 </Link>{" "}
-                tab. Each project becomes a schema, and CSV or JSON files in its{" "}
-                <code className="font-mono">data/</code> folder become its tables.
+                tab with CSV or JSON files in its <code className="font-mono">data/</code> folder. The project
+                becomes a schema and the files its tables.
               </p>
             </div>
           ) : (
@@ -81,7 +135,10 @@ export function CatalogPage() {
         {selected ? (
           <TableDetail table={selected} />
         ) : selectedSchema ? (
-          <SchemaDetail schema={selectedSchema} onSelectTable={(t) => setParams({ table: `${t.schema}.${t.name}` })} />
+          <SchemaDetail
+            schema={selectedSchema}
+            onSelectTable={(t) => setParams({ table: `${t.schema}.${t.name}` })}
+          />
         ) : (
           <Card className="text-muted-foreground grid min-h-64 place-items-center p-6 text-center text-sm">
             Select a schema or a table.
@@ -89,6 +146,78 @@ export function CatalogPage() {
         )}
       </div>
     </>
+  )
+}
+
+/** Export button with a menu: CSV, or Parquet files in a ZIP. */
+function ExportMenu({
+  label,
+  what,
+  target,
+  single,
+}: {
+  label: string
+  what: string
+  target: { table?: string; schema?: string }
+  single: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node))
+        setOpen(false)
+    }
+    document.addEventListener("mousedown", close)
+    document.addEventListener("keydown", close)
+    return () => {
+      document.removeEventListener("mousedown", close)
+      document.removeEventListener("keydown", close)
+    }
+  }, [open])
+
+  const options = [
+    {
+      format: "csv" as const,
+      title: single ? "CSV file" : "CSV files (ZIP)",
+      hint: single ? ".csv" : "one .csv per table, in a .zip",
+    },
+    {
+      format: "parquet" as const,
+      title: "Parquet (ZIP)",
+      hint: single ? ".zip with a .parquet file" : "one .parquet per table, in a .zip",
+    },
+  ]
+
+  return (
+    <div ref={box} className="relative">
+      <Button variant="outline" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
+        <Download /> {label} <ChevronDown className="opacity-60" />
+      </Button>
+      {open && (
+        <div
+          role="menu"
+          className="bg-popover text-popover-foreground absolute right-0 z-30 mt-1 w-64 rounded-md border p-1 shadow-md"
+        >
+          <p className="text-muted-foreground px-2 pt-1 pb-1.5 text-xs">Download {what} as</p>
+          {options.map((o) => (
+            <a
+              key={o.format}
+              role="menuitem"
+              href={catalogExportUrl({ ...target, format: o.format })}
+              download
+              onClick={() => setOpen(false)}
+              className="hover:bg-accent flex flex-col rounded px-2 py-1.5 text-sm"
+            >
+              <span>{o.title}</span>
+              <span className="text-muted-foreground text-xs">{o.hint}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -128,7 +257,11 @@ function SchemaNode({
         >
           <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
         </button>
-        <button type="button" onClick={onSelectSchema} className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left">
+        <button
+          type="button"
+          onClick={onSelectSchema}
+          className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left"
+        >
           <Layers className="text-primary size-4 shrink-0" />
           <span className="truncate font-mono text-xs">{schema.name}</span>
           <span className="text-muted-foreground ml-auto text-xs">{schema.tables.length}</span>
@@ -161,7 +294,13 @@ function SchemaNode({
   )
 }
 
-function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSelectTable: (t: SqlTable) => void }) {
+function SchemaDetail({
+  schema,
+  onSelectTable,
+}: {
+  schema: CatalogSchema
+  onSelectTable: (t: SqlTable) => void
+}) {
   return (
     <Card className="min-w-0 gap-0 overflow-hidden py-0">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
@@ -169,10 +308,17 @@ function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSele
         <span className="font-mono font-medium">{schema.name}</span>
         <Badge variant="secondary">schema</Badge>
         <span className="text-muted-foreground text-sm">
-          {schema.project ? (
+          {schema.location === "catalog" ? (
             <>
-              project{" "}
-              <Link to={`/workspace?${new URLSearchParams({ path: schema.project })}`} className="font-mono hover:underline">
+              catalog folder <code className="font-mono">{schema.data_dir}/</code>
+            </>
+          ) : schema.project ? (
+            <>
+              data of project{" "}
+              <Link
+                to={`/workspace?${new URLSearchParams({ path: schema.project })}`}
+                className="font-mono hover:underline"
+              >
                 {schema.project}/
               </Link>
             </>
@@ -184,7 +330,8 @@ function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSele
       {schema.tables.length === 0 ? (
         <div className="text-muted-foreground p-4 text-sm">
           No tables yet. Add CSV or JSON files to{" "}
-          <code className="font-mono">{schema.data_dir ?? `${schema.project}/data`}/</code> and they show up here.
+          <code className="font-mono">{schema.data_dir ?? `${schema.project}/data`}/</code> and they show up
+          here.
         </div>
       ) : (
         <Table>
@@ -231,15 +378,24 @@ function TableDetail({ table }: { table: SqlTable }) {
           <span className="text-muted-foreground text-sm">
             {table.row_count} row{table.row_count === 1 ? "" : "s"} · {table.columns.length} column
             {table.columns.length === 1 ? "" : "s"} · from{" "}
-            <Link to={`/workspace?${new URLSearchParams({ path: table.source })}`} className="font-mono hover:underline">
-              {table.source}
-            </Link>
+            {table.in_workspace ? (
+              <Link
+                to={`/workspace?${new URLSearchParams({ path: table.source })}`}
+                className="font-mono hover:underline"
+              >
+                {table.source}
+              </Link>
+            ) : (
+              <span className="font-mono">{table.source}</span>
+            )}
           </span>
           <Button
             size="sm"
             variant="outline"
             className="ml-auto"
-            onClick={() => navigate("/sql", { state: { sql: `SELECT *\nFROM ${table.qualified}\nLIMIT 100;` } })}
+            onClick={() =>
+              navigate("/sql", { state: { sql: `SELECT *\nFROM ${table.qualified}\nLIMIT 100;` } })
+            }
           >
             <Database /> Query in SQL Editor
           </Button>
@@ -262,10 +418,8 @@ function TableDetail({ table }: { table: SqlTable }) {
         </Table>
       </Card>
 
-      <Card className="min-w-0 gap-0 overflow-hidden py-0">
-        <div className="text-muted-foreground border-b px-4 py-2 text-sm">
-          Sample data {preview.data && `(first ${preview.data.row_count} row${preview.data.row_count === 1 ? "" : "s"})`}
-        </div>
+      <div className="grid min-w-0 gap-2">
+        <h3 className="text-muted-foreground text-sm">Sample data</h3>
         {preview.error ? (
           <div className="p-4">
             <ErrorAlert title="Could not load sample data" error={preview.error} />
@@ -273,35 +427,14 @@ function TableDetail({ table }: { table: SqlTable }) {
         ) : !preview.data ? (
           <Skeleton className="m-4 h-32" />
         ) : (
-          <div className="max-h-[50vh] overflow-auto">
-            <Table>
-              <TableHeader className="bg-muted sticky top-0">
-                <TableRow>
-                  {preview.data.columns.map((c, i) => (
-                    <TableHead key={i} className="font-mono text-xs">
-                      {c}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {preview.data.rows.map((row, r) => (
-                  <TableRow key={r}>
-                    {row.map((v, c) => (
-                      <TableCell
-                        key={c}
-                        className={cn("font-mono text-xs", typeof v === "number" && "text-right tabular-nums")}
-                      >
-                        {v === null ? <span className="text-muted-foreground italic">NULL</span> : String(v)}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <DataGrid
+            columns={preview.data.columns}
+            rows={preview.data.rows}
+            maxHeight="max-h-[50vh]"
+            footerNote={preview.data.truncated ? `First ${PREVIEW_ROWS.toLocaleString()} rows` : undefined}
+          />
         )}
-      </Card>
+      </div>
     </div>
   )
 }

@@ -9,6 +9,7 @@ files in a workspace, executed by a Python server, and managed from a React
 server/      Python server (FastAPI) and CLI         → docs/server.md
 client/      React + shadcn/ui web client            → docs/client.md
 workspace/   imported projects (each with pipelines/ and src/) → docs/pipelines.md
+catalog/     imported datasets, one folder per schema (CSV/JSON tables)
 docs/        design documents with diagrams           → docs/README.md
 ```
 
@@ -42,6 +43,15 @@ and choose a project folder that has `pipelines/*.yaml` and its Python code in
 its own folder under `workspace/`, and its pipelines appear in the
 **Pipelines** tab, where **Run** starts them and clicking a task shows what it
 printed.
+
+## Catalog
+
+The **Catalog** tab lists schemas and their tables, which you can query in the
+**SQL Editor** as `schema.table`. A schema is either a project's `data/` folder
+in the workspace, or a folder in `catalog/` (next to the workspace, set with
+`PROOFLIX_CATALOG`) for datasets that are not part of a project. **Import**
+adds CSV or JSON files as tables; **Export** downloads a table as CSV, or as a
+ZIP with a Parquet file, and a schema or the whole catalog as a ZIP.
 
 ## Use it from the command line
 

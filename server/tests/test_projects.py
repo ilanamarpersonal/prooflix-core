@@ -104,3 +104,23 @@ def test_sub_pipeline_across_projects_and_child_printout(root):
     assert run.status.value == "SUCCEEDED"
     child_run = ex.store.get(run.tasks["child"].child_run_id)
     assert "Hello World2" in "\n".join(child_run.tasks["hello"].logs)
+
+
+def test_pipeline_graph_points_python_tasks_at_their_source_file(root):
+    from fastapi.testclient import TestClient
+
+    from prooflix.config import Settings
+    from prooflix.main import create_app
+
+    pid = make_project(root, "proj-a", "hi")
+    with TestClient(create_app(Settings(workspace=root, client_dist=root / "no-client"))) as client:
+        nodes = client.get(f"/api/pipelines/{pid}").json()["graph"]["nodes"]
+    assert nodes == [
+        {
+            "key": "hello",
+            "type": "python",
+            "description": None,
+            "pipeline": None,
+            "source_file": "proj-a/src/hello_jobs/hello.py",
+        }
+    ]

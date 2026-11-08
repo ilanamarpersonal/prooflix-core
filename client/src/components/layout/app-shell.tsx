@@ -2,7 +2,8 @@ import { useState } from "react"
 import { Navigate, NavLink, Outlet } from "react-router"
 import { ChevronRight, Moon, Sun } from "lucide-react"
 
-import prooflixMark from "@/assets/prooflix-mark.svg"
+import prooflixLogo from "@/assets/prooflix-logo.svg"
+import prooflixLogoDark from "@/assets/prooflix-logo-dark.svg"
 import { Button } from "@/components/ui/button"
 import { usePipelines } from "@/lib/api"
 import { DEFAULT_SECTION, SECTIONS, useTabs, type Tabs } from "@/lib/tabs"
@@ -15,9 +16,10 @@ export function AppShell() {
     <div className="flex min-h-svh flex-col">
       {/* full-width top bar with the logo */}
       <header className="bg-background sticky top-0 z-20 flex h-14 shrink-0 items-center gap-1 border-b px-4">
-        <div className="mr-3 flex items-center gap-2 font-semibold tracking-tight">
-          <img src={prooflixMark} alt="" className="size-7" />
-          Prooflix
+        <div className="mr-3 flex shrink-0 items-center">
+          {/* the wordmark's navy letters, swapped for light ones in dark mode */}
+          <img src={prooflixLogo} alt="Prooflix" width={105} height={24} className="h-6 w-auto dark:hidden" />
+          <img src={prooflixLogoDark} alt="Prooflix" width={105} height={24} className="hidden h-6 w-auto dark:block" />
         </div>
         {/* on small screens the menu sits in the top bar */}
         <nav className="flex items-center gap-1 md:hidden">

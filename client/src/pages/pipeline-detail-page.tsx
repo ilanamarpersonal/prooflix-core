@@ -1,20 +1,21 @@
 import { useState } from "react"
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
-import { ArrowUpRight, FileCode2, List, Trash2 } from "lucide-react"
+import { ArrowUpRight, FileCode2, List, PanelRightOpen, Trash2, Workflow, X } from "lucide-react"
 
 import { ErrorAlert, ValidationErrors } from "@/components/error-alert"
-import { JsonView } from "@/components/json-view"
+import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
 import { RunButton } from "@/components/run-button"
 import { RunPipelineForm } from "@/components/run-pipeline-form"
 import { RunsTable } from "@/components/runs-table"
+import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
 import { StatusBadge } from "@/components/status-badge"
 import { TaskTypeIcon } from "@/components/task-type-icon"
 import { YamlEditor } from "@/components/yaml-editor"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, useDeletePipeline, usePipeline, useRuns } from "@/lib/api"
@@ -39,6 +40,25 @@ export function PipelineDetailPage() {
   const latest = runs.data?.find((r) => r.pipeline === pipeline.id && r.depth === 0) ?? runs.data?.[0]
   const tasks = (pipeline.spec?.tasks as Record<string, unknown>[] | undefined) ?? []
   const selectedTask = tasks.find((t) => t.key === selected)
+
+  // A task's links: its source code and the pipeline it calls.
+  const taskLinks = (key: string): TaskAction[] => {
+    const node = pipeline.graph.nodes.find((n) => n.key === key)
+    const links: TaskAction[] = []
+    if (node?.source_file)
+      links.push({
+        label: "Open source code",
+        icon: FileCode2,
+        onSelect: () => navigate(`/workspace?${new URLSearchParams({ path: node.source_file! })}`),
+      })
+    if (node?.pipeline)
+      links.push({
+        label: `Open pipeline ${node.pipeline}`,
+        icon: Workflow,
+        onSelect: () => navigate(`/pipelines/${node.pipeline}`),
+      })
+    return links
+  }
 
   const remove = () => {
     if (!confirm(`Delete pipeline '${pipeline.id}'? This deletes its YAML file.`)) return
@@ -86,7 +106,8 @@ export function PipelineDetailPage() {
               <span className="font-medium">Latest run</span>
               <StatusBadge status={latest.status} />
               <span className="text-muted-foreground">
-                <span className="font-mono">{latest.id}</span> · {formatDateTime(latest.started_at ?? latest.created_at)}
+                <span className="font-mono">{latest.id}</span> ·{" "}
+                {formatDateTime(latest.started_at ?? latest.created_at)}
               </span>
               <Button variant="outline" size="sm" className="ml-auto" asChild>
                 <Link to={`/runs/${latest.id}`}>
@@ -120,7 +141,10 @@ export function PipelineDetailPage() {
                 edges={pipeline.graph.edges}
                 selected={selected}
                 onSelect={setSelected}
-                onOpen={(n) => n.pipeline && navigate(`/pipelines/${n.pipeline}`)}
+                actions={(n) => [
+                  { label: "Open task", icon: PanelRightOpen, onSelect: () => setSelected(n.key) },
+                  ...taskLinks(n.key),
+                ]}
               />
             ) : (
               <p className="text-muted-foreground text-sm">Fix the YAML errors to see the graph.</p>
@@ -131,9 +155,28 @@ export function PipelineDetailPage() {
                   <CardTitle className="flex items-center gap-2">
                     <TaskTypeIcon type={selectedTask.type as "python"} /> {String(selectedTask.key)}
                   </CardTitle>
+                  <CardAction>
+                    <TaskActionsMenu
+                      taskKey={String(selectedTask.key)}
+                      actions={[
+                        ...taskLinks(String(selectedTask.key)),
+                        { label: "Close", icon: X, onSelect: () => setSelected(null) },
+                      ]}
+                    />
+                  </CardAction>
                 </CardHeader>
                 <CardContent>
-                  <JsonView value={selectedTask} />
+                  <KeyValues
+                    values={Object.fromEntries(
+                      Object.entries(selectedTask).filter(
+                        ([k, v]) =>
+                          k !== "key" &&
+                          v !== null &&
+                          !(Array.isArray(v) && !v.length) &&
+                          !(typeof v === "object" && !Array.isArray(v) && !Object.keys(v as object).length),
+                      ),
+                    )}
+                  />
                 </CardContent>
               </Card>
             )}

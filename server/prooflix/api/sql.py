@@ -8,20 +8,25 @@ is read only and thrown away afterwards, so queries never change the files.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
+import io
 import json
 import re
 import sqlite3
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..pipelines import Workspace
-from .deps import get_workspace
+from .deps import CatalogPaths, get_catalog_paths
 
 router = APIRouter(prefix="/api/sql", tags=["sql"])
 
@@ -38,15 +43,17 @@ class SqlTable(BaseModel):
     name: str  # table name inside its schema
     schema_name: str = Field(serialization_alias="schema")  # "main" or a project's schema
     qualified: str  # how to write it in SQL: "orders" in main, "my_project.orders" otherwise
-    source: str  # file path relative to the workspace
+    source: str  # file path, relative to the workspace or (for catalog schemas) starting with "catalog/"
+    in_workspace: bool  # the file is part of the workspace (a project's data), not the catalog folder
     row_count: int
     columns: list[SqlColumn]
 
 
 class CatalogSchema(BaseModel):
     name: str
-    project: str  # project folder relative to the workspace; "" for the workspace's own data
-    data_dir: str | None  # the folder its tables come from, relative to the workspace
+    location: Literal["workspace", "catalog"]  # a project's data, or the catalog folder
+    project: str  # project folder relative to the workspace; "" for main and catalog schemas
+    data_dir: str | None  # where its tables come from ("catalog/<name>" for catalog schemas)
     tables: list[SqlTable]
 
 
@@ -70,6 +77,7 @@ class _Loaded:
     source: str
     columns: list[str]
     rows: list[list[Any]]
+    in_workspace: bool = True
 
     @property
     def qualified(self) -> str:
@@ -142,38 +150,64 @@ def schema_name(project_folder: str) -> str:
     return f"{name}_" if name in (MAIN, "temp") else name
 
 
-def schemas(workspace_root: Path) -> list[tuple[str, str, Path]]:
-    """(schema, project folder, data dir) for the workspace and each project.
+@dataclass
+class _Schema:
+    name: str
+    location: Literal["workspace", "catalog"]
+    project: str  # project folder ("" for main and catalog schemas)
+    data_dir: Path
 
-    The workspace's own ``data/`` is the ``main`` schema, so its tables need no
-    prefix in SQL. Each imported project is a schema named after its folder:
-    ``my-project/data/orders.csv`` is ``my_project.orders``.
+
+def schemas(paths: CatalogPaths) -> list[_Schema]:
+    """Schemas and the folders their tables come from.
+
+    - ``main``: the workspace's own ``data/`` folder (tables need no prefix in SQL)
+    - one per project (a workspace folder with ``pipelines/``): its ``data/``
+      folder, named after the project, so ``my-project/data/orders.csv`` is
+      ``my_project.orders``
+    - one per sub-folder of the catalog folder, for data that is not part of a
+      project (imported tables, datasets): ``catalog/banking/customers.csv`` is
+      ``banking.customers``
     """
-    out = [(MAIN, "", workspace_root / "data")]
+    root = paths.root
+    out = [_Schema(MAIN, "workspace", "", root / "data")]
     taken = {MAIN}
-    for project in Workspace(workspace_root).projects():
-        if project == workspace_root:
-            continue
-        name = schema_name(project.name)
+
+    def unique(name: str) -> str:
         while name in taken:
             name += "_"
         taken.add(name)
-        out.append((name, project.name, project / "data"))
+        return name
+
+    for project in Workspace(root).projects():
+        if project != root:
+            out.append(_Schema(unique(schema_name(project.name)), "workspace", project.name, project / "data"))
+    if paths.catalog_dir.is_dir():
+        for folder in sorted(paths.catalog_dir.iterdir()):
+            if folder.is_dir() and not folder.name.startswith((".", "_")):
+                out.append(_Schema(unique(schema_name(folder.name)), "catalog", "", folder))
     return out
 
 
-def load_tables(workspace_root: Path) -> list[_Loaded]:
+def _display_path(paths: CatalogPaths, path: Path, in_workspace: bool) -> str:
+    if in_workspace:
+        return path.relative_to(paths.root).as_posix()
+    return "catalog/" + path.relative_to(paths.catalog_dir).as_posix()
+
+
+def load_tables(paths: CatalogPaths) -> list[_Loaded]:
     tables: list[_Loaded] = []
-    for schema, _project, data_dir in schemas(workspace_root):
-        if data_dir.is_dir():
-            _load_dir(workspace_root, data_dir, schema, tables)
+    for sch in schemas(paths):
+        if sch.data_dir.is_dir():
+            _load_dir(paths, sch, tables)
     return tables
 
 
-def _load_dir(workspace_root: Path, data_dir: Path, schema: str, tables: list[_Loaded]) -> None:
+def _load_dir(paths: CatalogPaths, sch: _Schema, tables: list[_Loaded]) -> None:
     seen: set[str] = set()
-    for path in sorted(data_dir.rglob("*")):
-        rel = path.relative_to(data_dir)
+    in_workspace = sch.location == "workspace"
+    for path in sorted(sch.data_dir.rglob("*")):
+        rel = path.relative_to(sch.data_dir)
         if (
             not path.is_file()
             or path.suffix.lower() not in (".csv", ".json")
@@ -188,7 +222,7 @@ def _load_dir(workspace_root: Path, data_dir: Path, schema: str, tables: list[_L
             name += "_"
         seen.add(name)
         tables.append(
-            _Loaded(schema, name, path.relative_to(workspace_root).as_posix(), loaded[0], loaded[1])
+            _Loaded(sch.name, name, _display_path(paths, path, in_workspace), loaded[0], loaded[1], in_workspace)
         )
 
 
@@ -202,8 +236,8 @@ def _deny_attach(action: int, *_args: Any) -> int:
     return sqlite3.SQLITE_DENY if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH) else sqlite3.SQLITE_OK
 
 
-def open_database(workspace_root: Path) -> tuple[sqlite3.Connection, list[_Loaded]]:
-    tables = load_tables(workspace_root)
+def open_database(paths: CatalogPaths) -> tuple[sqlite3.Connection, list[_Loaded]]:
+    tables = load_tables(paths)
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     # One in-memory database per project schema, attached before ATTACH is denied.
     for schema in sorted({t.schema for t in tables} - {MAIN}):
@@ -244,6 +278,7 @@ def _describe(tables: list[_Loaded]) -> list[SqlTable]:
                 schema_name=t.schema,
                 qualified=t.qualified,
                 source=t.source,
+                in_workspace=t.in_workspace,
                 row_count=len(t.rows),
                 columns=columns,
             )
@@ -252,40 +287,37 @@ def _describe(tables: list[_Loaded]) -> list[SqlTable]:
 
 
 @router.get("/tables", response_model=list[SqlTable], response_model_by_alias=True)
-def list_tables(ws: Workspace = Depends(get_workspace)) -> list[SqlTable]:
-    return _describe(load_tables(ws.root))
+def list_tables(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[SqlTable]:
+    return _describe(load_tables(paths))
 
 
 catalog_router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
 
 @catalog_router.get("", response_model=list[CatalogSchema], response_model_by_alias=True)
-def catalog(ws: Workspace = Depends(get_workspace)) -> list[CatalogSchema]:
-    """Schemas (the workspace's ``main`` and one per project) and their tables.
-
-    ``main`` is listed only when the workspace has its own ``data/`` folder;
-    every project is listed, even without data, so it's clear where to add it.
-    """
-    root = ws.root.resolve()
-    described = _describe(load_tables(root))
+def catalog(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[CatalogSchema]:
+    """Schemas and their tables. Only schemas that have at least one table are listed."""
+    described = _describe(load_tables(paths))
     out = []
-    for schema, project, data_dir in schemas(root):
-        if schema == MAIN and not data_dir.is_dir():
+    for sch in schemas(paths):
+        tables = [t for t in described if t.schema_name == sch.name]
+        if not tables:
             continue
         out.append(
             CatalogSchema(
-                name=schema,
-                project=project,
-                data_dir=data_dir.relative_to(root).as_posix() if data_dir.is_dir() else None,
-                tables=[t for t in described if t.schema_name == schema],
+                name=sch.name,
+                location=sch.location,
+                project=sch.project,
+                data_dir=_display_path(paths, sch.data_dir, sch.location == "workspace"),
+                tables=tables,
             )
         )
     return out
 
 
 @router.post("/query", response_model=SqlResult)
-def run_query(body: SqlQueryIn, ws: Workspace = Depends(get_workspace)) -> SqlResult:
-    conn, _ = open_database(ws.root)
+def run_query(body: SqlQueryIn, paths: CatalogPaths = Depends(get_catalog_paths)) -> SqlResult:
+    conn, _ = open_database(paths)
     started = time.perf_counter()
     deadline = started + QUERY_TIMEOUT_S
     conn.set_progress_handler(lambda: 1 if time.perf_counter() > deadline else 0, 10_000)
@@ -312,4 +344,196 @@ def run_query(body: SqlQueryIn, ws: Workspace = Depends(get_workspace)) -> SqlRe
         row_count=len(rows),
         truncated=len(fetched) > body.limit,
         elapsed_ms=round(elapsed, 1),
+    )
+
+
+# ------------------------------------------------------------------ export / import
+def _csv_bytes(columns: list[str], rows: list[list[Any]]) -> bytes:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(columns)
+    writer.writerows(rows)
+    return buf.getvalue().encode("utf-8")
+
+
+def _download(data: bytes, filename: str, media_type: str) -> Response:
+    return Response(
+        data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _parquet_bytes(columns: list[str], rows: list[list[Any]]) -> bytes:
+    """One Parquet file. A column whose values are all integers (or all numbers)
+    gets an integer (or float) type; anything else is stored as text."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    arrays = []
+    for i, _name in enumerate(columns):
+        values = [row[i] if i < len(row) else None for row in rows]
+        present = [v for v in values if v is not None]
+        if present and all(isinstance(v, int) and not isinstance(v, bool) for v in present):
+            arrays.append(pa.array(values, type=pa.int64()))
+        elif present and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in present):
+            arrays.append(pa.array([None if v is None else float(v) for v in values], type=pa.float64()))
+        else:
+            arrays.append(pa.array([None if v is None else str(v) for v in values], type=pa.string()))
+    names = [c or f"column_{i + 1}" for i, c in enumerate(columns)]
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_arrays(arrays, names=names), buf)
+    return buf.getvalue()
+
+
+ExportFormat = Literal["csv", "parquet"]
+
+
+@catalog_router.get("/export")
+def export(
+    table: str | None = Query(None, description="schema.table: export only that table"),
+    schema: str | None = Query(None, description="export every table of the schema"),
+    format: ExportFormat = Query("csv", description="csv, or parquet (always delivered in a ZIP)"),
+    paths: CatalogPaths = Depends(get_catalog_paths),
+) -> Response:
+    """Download a table, a schema or, with neither, the whole catalog.
+
+    ``format=csv``: a table is a single ``.csv`` file; a schema or the catalog
+    is a ZIP of CSV files. ``format=parquet``: always a ZIP of ``.parquet``
+    files (one for a table).
+    """
+    ext = format
+    encode = _csv_bytes if format == "csv" else _parquet_bytes
+    tables = load_tables(paths)
+    if table:
+        found = next((t for t in tables if f"{t.schema}.{t.name}" == table), None)
+        if found is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Table '{table}' not found")
+        picked, base = [found], f"{found.schema}.{found.name}"
+        if format == "csv":
+            return _download(_csv_bytes(found.columns, found.rows), f"{base}.csv", "text/csv")
+    else:
+        picked = [t for t in tables if schema is None or t.schema == schema]
+        if schema is not None and not picked:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Schema '{schema}' has no tables")
+        base = schema or "catalog"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for t in picked:
+            if table:
+                name = f"{t.schema}.{t.name}.{ext}"
+            elif schema:
+                name = f"{t.name}.{ext}"
+            else:
+                name = f"{t.schema}/{t.name}.{ext}"
+            zf.writestr(name, encode(t.columns, t.rows))
+    suffix = "" if format == "csv" else "-parquet"
+    return _download(buf.getvalue(), f"{base}{suffix}.zip", "application/zip")
+
+
+class CatalogImportFile(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)  # file name, e.g. "orders.csv"
+    content_base64: str
+
+
+class CatalogImportIn(BaseModel):
+    schema_name: str = Field(..., min_length=1, max_length=64, alias="schema")
+    files: list[CatalogImportFile] = Field(..., min_length=1, max_length=100)
+    overwrite: bool = False
+
+    model_config = {"populate_by_name": True}
+
+
+class CatalogImportResult(BaseModel):
+    schema_name: str = Field(serialization_alias="schema")
+    folder: str  # the data folder the files were written to, relative to the workspace
+    tables: list[str]
+    created_schema: bool
+
+
+MAX_CATALOG_IMPORT_BYTES = 50 * 1024 * 1024
+
+
+@catalog_router.post("/import", response_model=CatalogImportResult, response_model_by_alias=True)
+def import_tables(
+    body: CatalogImportIn, paths: CatalogPaths = Depends(get_catalog_paths)
+) -> CatalogImportResult:
+    """Add CSV or JSON files as tables of a schema.
+
+    An existing schema gets the files in its folder (a project's ``data/``, or
+    its catalog folder). A new schema name creates a folder for it in the
+    catalog folder, outside the workspace. Nothing is written if any file is
+    not a readable table, or if a table already exists and ``overwrite`` is
+    false (409 with the conflicting names).
+    """
+    existing = {sch.name: sch for sch in schemas(paths)}
+    requested = body.schema_name.strip()
+    target = existing.get(requested) or existing.get(schema_name(requested))
+    if target is not None:
+        schema, data_dir = target.name, target.data_dir
+        created = not data_dir.is_dir() and target.name != MAIN
+    else:
+        schema = schema_name(requested)
+        folder = re.sub(r"[^0-9A-Za-z_-]+", "-", requested).strip("-_") or schema
+        if folder.startswith((".", "_")):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{requested}' can't be used as a schema name")
+        data_dir = paths.catalog_dir / folder
+        created = True
+
+    decoded: dict[str, bytes] = {}
+    total = 0
+    errors: list[str] = []
+    for f in body.files:
+        name = Path(f.name.replace("\\", "/")).name
+        if name.startswith(".") or Path(name).suffix.lower() not in (".csv", ".json"):
+            errors.append(f"'{f.name}': only .csv and .json files can be imported")
+            continue
+        try:
+            data = base64.b64decode(f.content_base64, validate=True)
+        except (binascii.Error, ValueError):
+            errors.append(f"'{f.name}' is not valid base64")
+            continue
+        total += len(data)
+        decoded[name] = data
+    if total > MAX_CATALOG_IMPORT_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Import is larger than 50 MB")
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, data in decoded.items():
+            probe = Path(tmp) / name
+            probe.write_bytes(data)
+            if _load_file(probe) is None:
+                errors.append(f"'{name}' could not be read as a table (CSV with a header, or JSON objects)")
+    if errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"errors": errors})
+
+    names = {name: table_name(Path(name)) for name in decoded}
+    current = {t.name for t in load_tables(paths) if t.schema == schema}
+    conflicts = sorted(t for t in names.values() if t in current)
+    if conflicts and not body.overwrite:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "errors": [f"{len(conflicts)} table(s) already exist in {schema}; choose overwrite to replace them"],
+                "conflicts": conflicts,
+            },
+        )
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for name, data in decoded.items():
+        stem = Path(name).stem
+        if body.overwrite:  # replace the table even if it came from the other format
+            for other in (".csv", ".json"):
+                (data_dir / f"{stem}{other}").unlink(missing_ok=True)
+        (data_dir / name).write_bytes(data)
+
+    final = next(sch for sch in schemas(paths) if sch.data_dir.resolve() == data_dir.resolve())
+    return CatalogImportResult(
+        schema_name=final.name,
+        folder=_display_path(paths, data_dir, final.location == "workspace"),
+        tables=sorted(names.values()),
+        created_schema=created,
     )

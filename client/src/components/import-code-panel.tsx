@@ -68,9 +68,10 @@ function formatSize(bytes: number) {
 
 /**
  * Upload a folder (or files) of pipelines and code into the workspace.
- * By default a chosen folder is merged into the workspace root, so a project
- * with pipelines/ and src/ lands in workspace/pipelines and workspace/src and
- * its pipelines can run straight away.
+ * By default a chosen folder keeps its name, so each imported project gets its
+ * own folder in the workspace (workspace/<project>/pipelines and src) and its
+ * pipelines can run straight away. Unticking "Keep the folder name" copies the
+ * folder's contents into the destination folder instead.
  */
 export function ImportCodePanel({
   onClose,
@@ -82,7 +83,7 @@ export function ImportCodePanel({
   const folderInput = useRef<HTMLInputElement>(null)
   const filesInput = useRef<HTMLInputElement>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
-  const [keepFolderName, setKeepFolderName] = useState(false)
+  const [keepFolderName, setKeepFolderName] = useState(true)
   const [destination, setDestination] = useState("")
   const [reading, setReading] = useState(false)
   const [result, setResult] = useState<ImportResult | null>(null)

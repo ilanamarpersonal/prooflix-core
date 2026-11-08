@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..pipelines.models import PipelineTask
+from ..pipelines.models import PipelineTask, PythonTask
 from ..pipelines.workspace import PipelineDefinition
 
 
@@ -17,6 +17,8 @@ class GraphNode(BaseModel):
     type: str
     description: str | None = None
     pipeline: str | None = None
+    # python tasks: the file holding the entrypoint's module, relative to the workspace
+    source_file: str | None = None
 
 
 class GraphEdge(BaseModel):
@@ -86,6 +88,22 @@ def summary_of(d: PipelineDefinition, root: Path | None = None) -> PipelineSumma
     )
 
 
+def _module_file(d: PipelineDefinition, entrypoint: str, root: Path | None) -> str | None:
+    """``hello_jobs.hello:run`` -> ``<project>/src/hello_jobs/hello.py`` (or the
+    package's ``__init__.py``), if that file exists."""
+    if root is None or d.path is None:
+        return None
+    src = d.path.resolve().parent.parent / "src"
+    module = entrypoint.split(":", 1)[0].replace(".", "/")
+    for candidate in (src / f"{module}.py", src / module / "__init__.py"):
+        if candidate.is_file():
+            try:
+                return candidate.relative_to(root).as_posix()
+            except ValueError:
+                return None
+    return None
+
+
 def detail_of(d: PipelineDefinition, used_by: list[str], root: Path | None = None) -> PipelineDetail:
     spec = d.spec
     nodes: list[GraphNode] = []
@@ -99,6 +117,7 @@ def detail_of(d: PipelineDefinition, used_by: list[str], root: Path | None = Non
                     type=t.type,
                     description=t.description,
                     pipeline=t.pipeline if isinstance(t, PipelineTask) else None,
+                    source_file=_module_file(d, t.entrypoint, root) if isinstance(t, PythonTask) else None,
                 )
             )
             edges.extend(GraphEdge(source=dep, target=t.key) for dep in t.depends_on if dep in keys)

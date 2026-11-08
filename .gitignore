@@ -9,9 +9,11 @@ __pycache__/
 node_modules/
 client/dist/
 
-# The workspace holds imported projects and run history, not repository code
+# The workspace holds imported projects and run history, and catalog/ holds
+# imported datasets: user content, not repository code
 workspace/*
 !workspace/.gitkeep
+catalog/
 server/tests/fixtures/sample_workspace/data/output/
 
 # OS / editors

@@ -25,6 +25,18 @@
         "client"
       ],
       "port": 5173
+    },
+    {
+      "name": "prooflix-website",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765",
+        "--directory",
+        "/Users/ilan.amar/github/prooflix"
+      ],
+      "port": 8765
     }
   ]
 }

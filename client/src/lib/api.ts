@@ -8,6 +8,7 @@ import {
   type RunTree,
   type SqlResult,
   type SqlTable,
+  type CatalogImportResult,
   type CatalogSchema,
   type ImportResult,
   type RemoveResult,
@@ -73,10 +74,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ parameters }),
     }),
-  listRuns: (params: { pipeline?: string; rootOnly?: boolean } = {}) => {
+  listRuns: (params: { pipeline?: string; rootOnly?: boolean; limit?: number } = {}) => {
     const q = new URLSearchParams()
     if (params.pipeline) q.set("pipeline", params.pipeline)
     q.set("root_only", String(params.rootOnly ?? true))
+    if (params.limit) q.set("limit", String(params.limit))
     return request<Run[]>(`/runs?${q}`)
   },
   getRun: (id: string) => request<Run>(`/runs/${id}`),
@@ -93,6 +95,11 @@ export const api = {
   removeWorkspaceItem: (path: string) =>
     request<RemoveResult>(`/workspace/item?${new URLSearchParams({ path })}`, { method: "DELETE" }),
   catalog: () => request<CatalogSchema[]>("/catalog"),
+  catalogImport: (schema: string, files: { name: string; content_base64: string }[], overwrite = false) =>
+    request<CatalogImportResult>("/catalog/import", {
+      method: "POST",
+      body: JSON.stringify({ schema, files, overwrite }),
+    }),
   sqlTables: () => request<SqlTable[]>("/sql/tables"),
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
@@ -106,9 +113,9 @@ const anyActive = (tree?: RunTree): boolean =>
 export const usePipelines = () => useQuery({ queryKey: ["pipelines"], queryFn: api.listPipelines })
 
 export const usePipeline = (id: string) =>
-  useQuery({ queryKey: ["pipelines", id], queryFn: () => api.getPipeline(id) })
+  useQuery({ queryKey: ["pipelines", id], queryFn: () => api.getPipeline(id), enabled: !!id })
 
-export const useRuns = (params: { pipeline?: string; rootOnly?: boolean } = {}) =>
+export const useRuns = (params: { pipeline?: string; rootOnly?: boolean; limit?: number } = {}) =>
   useQuery({
     queryKey: ["runs", params],
     queryFn: () => api.listRuns(params),
@@ -203,6 +210,37 @@ export function useRemoveWorkspaceItem() {
       qc.invalidateQueries({ queryKey: ["workspace"] })
       qc.invalidateQueries({ queryKey: ["pipelines"] })
       qc.invalidateQueries({ queryKey: ["sql"] })
+    },
+  })
+}
+
+/** Download link for a table (CSV), a schema (ZIP) or the whole catalog (ZIP). */
+export function catalogExportUrl(
+  target: { table?: string; schema?: string; format?: "csv" | "parquet" } = {},
+) {
+  const q = new URLSearchParams()
+  if (target.table) q.set("table", target.table)
+  else if (target.schema) q.set("schema", target.schema)
+  if (target.format && target.format !== "csv") q.set("format", target.format)
+  const qs = q.toString()
+  return `${BASE}/catalog/export${qs ? `?${qs}` : ""}`
+}
+
+export function useCatalogImport() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      schema,
+      files,
+      overwrite,
+    }: {
+      schema: string
+      files: { name: string; content_base64: string }[]
+      overwrite?: boolean
+    }) => api.catalogImport(schema, files, overwrite),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sql"] })
+      qc.invalidateQueries({ queryKey: ["workspace"] })
     },
   })
 }

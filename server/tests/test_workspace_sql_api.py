@@ -226,7 +226,7 @@ def test_project_tables_live_in_their_own_schema(client, sample_workspace):
 def test_catalog_lists_schemas_and_tables(client, sample_workspace):
     _add_project_with_data(sample_workspace)
     cat = {s["name"]: s for s in client.get("/api/catalog").json()}
-    assert list(cat) == ["main", "empty_project", "my_project"]
+    assert list(cat) == ["main", "my_project"]  # empty-project has no tables, so it's not listed
     assert cat["my_project"]["project"] == "my-project"
     assert cat["my_project"]["data_dir"] == "my-project/data"
     assert [t["name"] for t in cat["my_project"]["tables"]] == ["orders"]
@@ -234,7 +234,6 @@ def test_catalog_lists_schemas_and_tables(client, sample_workspace):
         {"name": "id", "type": "INTEGER"},
         {"name": "amount", "type": "INTEGER"},
     ]
-    assert cat["empty_project"]["tables"] == [] and cat["empty_project"]["data_dir"] is None
 
 
 def test_catalog_without_workspace_data_has_no_main(client, sample_workspace):
@@ -242,3 +241,108 @@ def test_catalog_without_workspace_data_has_no_main(client, sample_workspace):
 
     shutil.rmtree(sample_workspace / "data")
     assert client.get("/api/catalog").json() == []
+
+
+# ---------------------------------------------------------------- catalog import / export
+import io as _io
+import zipfile as _zipfile
+
+
+def _upload(name, text):
+    return {"name": name, "content_base64": _b64.b64encode(text.encode()).decode()}
+
+
+def test_catalog_import_into_new_schema_and_export(client, sample_workspace):
+    res = client.post(
+        "/api/catalog/import",
+        json={
+            "schema": "Sales Data",
+            "files": [_upload("deals.csv", "id,amount\n1,10\n2,20\n"), _upload("regions.json", '[{"code":"IL"}]')],
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body == {"schema": "sales_data", "folder": "catalog/Sales-Data", "tables": ["deals", "regions"], "created_schema": True}
+    # a new schema lives in the catalog folder next to the workspace, not in the workspace
+    catalog_dir = sample_workspace.parent / "catalog"
+    assert (catalog_dir / "Sales-Data" / "deals.csv").is_file()
+    assert not (sample_workspace / "Sales-Data").exists()
+    assert "Sales-Data" not in [c["name"] for c in client.get("/api/workspace/tree").json()["children"]]
+    tables = {t["qualified"]: t for t in client.get("/api/sql/tables").json()}
+    assert tables["sales_data.deals"]["source"] == "catalog/Sales-Data/deals.csv"
+    assert tables["sales_data.deals"]["in_workspace"] is False
+    assert tables["orders"]["in_workspace"] is True
+    rows = client.post("/api/sql/query", json={"sql": "SELECT SUM(amount) FROM sales_data.deals"}).json()["rows"]
+    assert rows == [[30]]
+    cat = {c["name"]: c for c in client.get("/api/catalog").json()}
+    assert cat["sales_data"]["location"] == "catalog" and cat["main"]["location"] == "workspace"
+
+    csv_res = client.get("/api/catalog/export", params={"table": "sales_data.deals"})
+    assert csv_res.headers["content-type"].startswith("text/csv")
+    assert "sales_data.deals.csv" in csv_res.headers["content-disposition"]
+    assert csv_res.text.replace("\r\n", "\n") == "id,amount\n1,10\n2,20\n"
+
+    zip_res = client.get("/api/catalog/export", params={"schema": "sales_data"})
+    assert sorted(_zipfile.ZipFile(_io.BytesIO(zip_res.content)).namelist()) == ["deals.csv", "regions.csv"]
+
+    everything = _zipfile.ZipFile(_io.BytesIO(client.get("/api/catalog/export").content)).namelist()
+    assert "sales_data/deals.csv" in everything and "main/orders.csv" in everything
+
+
+def test_catalog_import_conflict_and_overwrite(client, sample_workspace):
+    res = client.post("/api/catalog/import", json={"schema": "main", "files": [_upload("orders.csv", "a\n1\n")]})
+    assert res.status_code == 409
+    assert res.json()["detail"]["conflicts"] == ["orders"]
+    res = client.post(
+        "/api/catalog/import", json={"schema": "main", "files": [_upload("orders.csv", "a\n1\n")], "overwrite": True}
+    )
+    assert res.status_code == 200
+    assert client.post("/api/sql/query", json={"sql": "SELECT * FROM orders"}).json()["rows"] == [[1]]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        [_upload("notes.txt", "hello")],
+        [_upload("bad.json", '{"not": "a list"')],
+        [_upload("empty.csv", "")],
+        [_upload(".hidden.csv", "a\n1\n")],
+    ],
+)
+def test_catalog_import_rejects_non_tables(client, sample_workspace, files):
+    res = client.post("/api/catalog/import", json={"schema": "new_one", "files": files})
+    assert res.status_code == 400
+    assert not (sample_workspace / "new_one").exists()
+    assert not (sample_workspace.parent / "catalog" / "new_one").exists()
+
+
+def test_export_unknown_table_or_schema(client):
+    assert client.get("/api/catalog/export", params={"table": "nope.x"}).status_code == 404
+    assert client.get("/api/catalog/export", params={"schema": "nope"}).status_code == 404
+
+
+def test_export_table_as_parquet_zip(client, sample_workspace):
+    import pyarrow.parquet as pq
+
+    (sample_workspace / "data" / "mixed.csv").write_text("id,amount,label\n1,2.5,a\n2,,b\n3,4,\n")
+    res = client.get("/api/catalog/export", params={"table": "main.mixed", "format": "parquet"})
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/zip"
+    assert 'filename="main.mixed-parquet.zip"' in res.headers["content-disposition"]
+    zf = _zipfile.ZipFile(_io.BytesIO(res.content))
+    assert zf.namelist() == ["main.mixed.parquet"]
+    table = pq.read_table(_io.BytesIO(zf.read("main.mixed.parquet")))
+    assert table.column_names == ["id", "amount", "label"]
+    assert [str(t) for t in table.schema.types] == ["int64", "double", "string"]
+    assert table.to_pylist() == [
+        {"id": 1, "amount": 2.5, "label": "a"},
+        {"id": 2, "amount": None, "label": "b"},
+        {"id": 3, "amount": 4.0, "label": None},
+    ]
+
+
+def test_export_schema_as_parquet_zip(client):
+    res = client.get("/api/catalog/export", params={"schema": "main", "format": "parquet"})
+    names = _zipfile.ZipFile(_io.BytesIO(res.content)).namelist()
+    assert "orders.parquet" in names and all(n.endswith(".parquet") for n in names)
+    assert client.get("/api/catalog/export", params={"format": "xlsx"}).status_code == 422

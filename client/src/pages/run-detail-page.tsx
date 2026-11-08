@@ -1,18 +1,19 @@
 import { useMemo, useState } from "react"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
-import { Ban, List, RotateCw } from "lucide-react"
+import { ArrowUpRight, Ban, FileCode2, List, PanelRightOpen, RotateCw, Workflow, X } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
-import { JsonView } from "@/components/json-view"
+import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
 import { RunTreeView } from "@/components/run-tree-view"
 import { StatusBadge } from "@/components/status-badge"
+import type { TaskAction } from "@/components/task-actions-menu"
 import { TaskRunPanel } from "@/components/task-run-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useCancelRun, usePipelines, useRunTree, useStartRun } from "@/lib/api"
+import { useCancelRun, usePipeline, usePipelines, useRunTree, useStartRun } from "@/lib/api"
 import { TERMINAL_STATUSES, type GraphEdge, type GraphNode, type RunStatus } from "@/lib/types"
 import { formatDateTime, formatDuration } from "@/lib/utils"
 
@@ -24,6 +25,8 @@ export function RunDetailPage() {
   const rerun = useStartRun()
   const [picked, setPicked] = useState<string | null>(null)
   const pipelines = usePipelines()
+  // the pipeline's definition, for each python task's source file
+  const definition = usePipeline(run?.pipeline ?? "")
 
   const graph = useMemo(() => {
     const tasks = Object.values(run?.tasks ?? {})
@@ -59,6 +62,32 @@ export function RunDetailPage() {
     tasks[0]?.key ??
     null
   const selected = selectedKey ? run.tasks[selectedKey] : undefined
+
+  // A task's links: its source code, its sub-run and the pipeline it calls.
+  const taskLinks = (key: string): TaskAction[] => {
+    const task = run.tasks[key]
+    const source = definition.data?.graph.nodes.find((d) => d.key === key)?.source_file
+    const links: TaskAction[] = []
+    if (source)
+      links.push({
+        label: "Open source code",
+        icon: FileCode2,
+        onSelect: () => navigate(`/workspace?${new URLSearchParams({ path: source })}`),
+      })
+    if (task?.child_run_id)
+      links.push({
+        label: "Open sub-run",
+        icon: ArrowUpRight,
+        onSelect: () => navigate(`/runs/${task.child_run_id}`),
+      })
+    if (task?.pipeline)
+      links.push({
+        label: `Open pipeline ${task.pipeline}`,
+        icon: Workflow,
+        onSelect: () => navigate(`/pipelines/${task.pipeline}`),
+      })
+    return links
+  }
 
   return (
     <>
@@ -141,15 +170,19 @@ export function RunDetailPage() {
             statuses={graph.statuses}
             selected={selectedKey}
             onSelect={setPicked}
-            onOpen={(n) => {
-              const child = run.tasks[n.key]?.child_run_id
-              if (child) navigate(`/runs/${child}`)
-            }}
+            actions={(n) => [
+              { label: "Show printout", icon: PanelRightOpen, onSelect: () => setPicked(n.key) },
+              ...taskLinks(n.key),
+            ]}
           />
           {selected ? (
             <TaskRunPanel
               task={selected}
               childRun={run.children.find((c) => c.id === selected.child_run_id)}
+              actions={[
+                ...taskLinks(selected.key),
+                { label: "Close", icon: X, onSelect: () => setPicked(null) },
+              ]}
             />
           ) : (
             <p className="text-muted-foreground text-sm">Click a task to see its printout.</p>
@@ -165,20 +198,22 @@ export function RunDetailPage() {
               <RunTreeView tree={run} currentRunId={run.id} />
             </CardContent>
           </Card>
-          <Card className="gap-3">
-            <CardHeader>
-              <CardTitle className="text-sm">Parameters</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <JsonView value={run.parameters} />
-            </CardContent>
-          </Card>
+          {Object.keys(run.parameters).length > 0 && (
+            <Card className="gap-3">
+              <CardHeader>
+                <CardTitle className="text-sm">Parameters</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <KeyValues values={run.parameters} />
+              </CardContent>
+            </Card>
+          )}
           <Card className="gap-3">
             <CardHeader>
               <CardTitle className="text-sm">Outputs</CardTitle>
             </CardHeader>
             <CardContent>
-              <JsonView value={Object.keys(run.outputs).length ? run.outputs : null} />
+              <KeyValues values={run.outputs} />
             </CardContent>
           </Card>
         </div>

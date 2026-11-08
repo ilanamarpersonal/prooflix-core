@@ -18,8 +18,8 @@ export interface Section {
 export const SECTIONS: Section[] = [
   { id: "pipelines", label: "Pipelines", icon: Workflow, home: "/pipelines", prefixes: ["/pipelines", "/runs"] },
   { id: "sql", label: "SQL Editor", icon: Database, home: "/sql", prefixes: ["/sql"] },
-  { id: "workspace", label: "Workspace", icon: FolderTree, home: "/workspace", prefixes: ["/workspace"] },
   { id: "catalog", label: "Catalog", icon: Library, home: "/catalog", prefixes: ["/catalog"] },
+  { id: "workspace", label: "Workspace", icon: FolderTree, home: "/workspace", prefixes: ["/workspace"] },
 ]
 
 export const DEFAULT_SECTION: SectionId = SECTIONS[0].id
@@ -84,8 +84,9 @@ export function useTabs(): Tabs {
 
   const select = useCallback(
     (id: SectionId) => {
-      // Selecting the tab you're already on takes you back to its start page.
-      navigate(id === active ? sectionById(id).home : pathOf(id))
+      // Pipelines always opens its start page (pipelines and all runs); other
+      // tabs reopen the page they were on, or their start page when already open.
+      navigate(id === active || id === "pipelines" ? sectionById(id).home : pathOf(id))
     },
     [navigate, pathOf, active],
   )

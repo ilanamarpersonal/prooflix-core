@@ -9,12 +9,17 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { usePipelines } from "@/lib/api"
+import { RunsTable } from "@/components/runs-table"
+import { usePipelines, useRuns } from "@/lib/api"
 
 export function PipelinesPage() {
   const { data, isLoading, error } = usePipelines()
   const navigate = useNavigate()
   const hasPipelines = !!data?.length
+  const runs = useRuns({ rootOnly: true, limit: 500 })
+  // All runs of the pipelines in the workspace, newest first.
+  const ids = new Set(data?.map((p) => p.id))
+  const pipelineRuns = data ? runs.data?.filter((r) => ids.has(r.pipeline)) : undefined
 
   return (
     <>
@@ -24,11 +29,6 @@ export function PipelinesPage() {
         actions={
           hasPipelines && (
             <>
-              <Button variant="outline" asChild>
-                <Link to="/runs">
-                  <History /> All runs
-                </Link>
-              </Button>
               <Button variant="outline" asChild>
                 <Link to="/pipelines/new">
                   <Plus /> New pipeline
@@ -140,6 +140,26 @@ export function PipelinesPage() {
           )}
         </CardContent>
       </Card>
+
+      {hasPipelines && (
+        <section className="mt-8">
+          <div className="mb-3 flex items-baseline gap-2">
+            <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+              <History className="size-5" /> All runs
+            </h2>
+            <span className="text-muted-foreground text-sm">
+              {pipelineRuns ? `${pipelineRuns.length} run${pipelineRuns.length === 1 ? "" : "s"} · ` : ""}
+              newest first; sub-pipeline runs open inside their parent run
+            </span>
+          </div>
+          {runs.error && <ErrorAlert error={runs.error} />}
+          <Card className="py-2">
+            <CardContent className="px-2">
+              <RunsTable runs={pipelineRuns} loading={runs.isLoading} />
+            </CardContent>
+          </Card>
+        </section>
+      )}
     </>
   )
 }
