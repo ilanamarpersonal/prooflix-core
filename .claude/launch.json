@@ -4,8 +4,27 @@
     {
       "name": "prooflix-server",
       "runtimeExecutable": "/Users/ilan.amar/.local/bin/uv",
-      "runtimeArgs": ["run", "--directory", "server", "prooflix", "serve", "--port", "8000"],
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "server",
+        "prooflix",
+        "serve",
+        "--port",
+        "8000"
+      ],
       "port": 8000
+    },
+    {
+      "name": "prooflix-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "client"
+      ],
+      "port": 5173
     }
   ]
 }

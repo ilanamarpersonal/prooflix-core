@@ -2,6 +2,7 @@ import { useState } from "react"
 import { NavLink, Outlet } from "react-router"
 import { History, Moon, Sun, Workflow } from "lucide-react"
 
+import prooflixMark from "@/assets/prooflix-mark.svg"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -15,9 +16,7 @@ export function AppShell() {
     <div className="flex min-h-svh">
       <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border hidden w-56 shrink-0 flex-col border-r md:flex">
         <div className="flex h-14 items-center gap-2 px-4 font-semibold tracking-tight">
-          <div className="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md text-sm">
-            P
-          </div>
+          <img src={prooflixMark} alt="" className="size-7" />
           Prooflix
         </div>
         <nav className="flex flex-col gap-1 px-2">
@@ -45,7 +44,10 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* compact top navigation on small screens */}
         <header className="flex h-12 items-center gap-1 border-b px-3 md:hidden">
-          <span className="mr-2 font-semibold">Prooflix</span>
+          <span className="mr-2 flex items-center gap-1.5 font-semibold">
+            <img src={prooflixMark} alt="" className="size-5" />
+            Prooflix
+          </span>
           {NAV.map(({ to, label }) => (
             <NavLink
               key={to}
