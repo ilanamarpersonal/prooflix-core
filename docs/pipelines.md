@@ -2,13 +2,34 @@
 
 A pipeline is a set of **tasks** connected by dependencies (a DAG). A task can
 run Python code, run a shell command, or call **another pipeline** as a
-sub-pipeline. Pipelines are YAML files in `workspace/pipelines/`; the file name
-without `.yaml` is the pipeline **id**.
+sub-pipeline. Pipelines are YAML files in a project's `pipelines/` folder; the
+file name without `.yaml` is the pipeline **id**.
+
+## Projects
+
+The workspace holds **projects**: each top-level folder with a `pipelines/`
+folder (usually brought in with **Workspace → Import code**), plus the
+workspace root itself if it has one. A project keeps the Python code its
+pipelines call in its own `src/`, and its data in `data/`.
+
+```text
+workspace/
+  my-project/
+    pipelines/pipeline1.yaml   -> id "pipeline1"
+    src/hello_jobs/hello.py    -> entrypoint hello_jobs.hello:run
+```
+
+* Pipeline ids must be unique across projects; a duplicate is a validation error.
+* A pipeline can call a pipeline from another project by id.
+* `python` tasks import code from their own project's `src/`; `shell` tasks run
+  in the project folder.
+* Anything a `python` task prints is captured as that task's log (its
+  printout in the UI) and still written to the server's terminal.
 
 ## File format
 
 ```yaml
-# workspace/pipelines/daily_orders.yaml  ->  id "daily_orders"
+# <project>/pipelines/daily_orders.yaml  ->  id "daily_orders"
 name: Daily orders                 # optional display name (defaults to the id)
 description: Ingest and transform  # optional
 

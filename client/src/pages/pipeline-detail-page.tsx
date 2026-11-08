@@ -1,13 +1,15 @@
 import { useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
-import { Play, Trash2 } from "lucide-react"
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
+import { ArrowUpRight, FileCode2, List, Trash2 } from "lucide-react"
 
 import { ErrorAlert, ValidationErrors } from "@/components/error-alert"
 import { JsonView } from "@/components/json-view"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
+import { RunButton } from "@/components/run-button"
 import { RunPipelineForm } from "@/components/run-pipeline-form"
 import { RunsTable } from "@/components/runs-table"
+import { StatusBadge } from "@/components/status-badge"
 import { TaskTypeIcon } from "@/components/task-type-icon"
 import { YamlEditor } from "@/components/yaml-editor"
 import { Badge } from "@/components/ui/badge"
@@ -15,7 +17,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useDeletePipeline, usePipeline, useRuns } from "@/lib/api"
+import { ApiError, useDeletePipeline, usePipeline, useRuns } from "@/lib/api"
+import { formatDateTime } from "@/lib/utils"
 
 export function PipelineDetailPage() {
   const { pipelineId = "" } = useParams()
@@ -23,12 +26,17 @@ export function PipelineDetailPage() {
   const { data: pipeline, isLoading, error } = usePipeline(pipelineId)
   const runs = useRuns({ pipeline: pipelineId, rootOnly: false })
   const del = useDeletePipeline()
-  const [showRunForm, setShowRunForm] = useState(false)
+  const [params] = useSearchParams()
+  const [showRunForm, setShowRunForm] = useState(params.get("run") === "1")
   const [selected, setSelected] = useState<string | null>(null)
 
   if (isLoading) return <Skeleton className="h-96 w-full" />
+  // The pipeline was removed from the workspace: show the list (empty if none are left).
+  if (error instanceof ApiError && error.status === 404) return <Navigate to="/pipelines" replace />
   if (error || !pipeline) return <ErrorAlert title="Could not load pipeline" error={error} />
 
+  // newest run started from this pipeline (not as a sub-run of another one)
+  const latest = runs.data?.find((r) => r.pipeline === pipeline.id && r.depth === 0) ?? runs.data?.[0]
   const tasks = (pipeline.spec?.tasks as Record<string, unknown>[] | undefined) ?? []
   const selectedTask = tasks.find((t) => t.key === selected)
 
@@ -49,12 +57,22 @@ export function PipelineDetailPage() {
         description={pipeline.description}
         actions={
           <>
+            <Button variant="outline" asChild>
+              <Link to="/pipelines">
+                <List /> All pipelines
+              </Link>
+            </Button>
             <Button variant="outline" onClick={remove} disabled={del.isPending}>
               <Trash2 /> Delete
             </Button>
-            <Button onClick={() => setShowRunForm((v) => !v)} disabled={!pipeline.valid}>
-              <Play /> Run
-            </Button>
+            {pipeline.file && (
+              <Button variant="outline" asChild>
+                <Link to={`/workspace?${new URLSearchParams({ path: pipeline.file })}`}>
+                  <FileCode2 /> Source
+                </Link>
+              </Button>
+            )}
+            <RunButton pipeline={pipeline} onNeedsParameters={() => setShowRunForm((v) => !v)} />
           </>
         }
       />
@@ -62,6 +80,22 @@ export function PipelineDetailPage() {
       <div className="mb-4 grid gap-4">
         {del.error && <ErrorAlert title="Could not delete" error={del.error} />}
         <ValidationErrors errors={pipeline.errors} />
+        {latest && (
+          <Card className="py-3">
+            <CardContent className="flex flex-wrap items-center gap-3 px-4 text-sm">
+              <span className="font-medium">Latest run</span>
+              <StatusBadge status={latest.status} />
+              <span className="text-muted-foreground">
+                <span className="font-mono">{latest.id}</span> · {formatDateTime(latest.started_at ?? latest.created_at)}
+              </span>
+              <Button variant="outline" size="sm" className="ml-auto" asChild>
+                <Link to={`/runs/${latest.id}`}>
+                  Open tasks and printout <ArrowUpRight />
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
         {showRunForm && (
           <RunPipelineForm
             pipelineId={pipeline.id}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -36,6 +38,8 @@ class PipelineSummary(BaseModel):
     task_count: int
     sub_pipelines: list[str]
     parameters: dict[str, Any]
+    project: str = ""  # project folder relative to the workspace; "" for the workspace root
+    file: str | None = None  # the pipeline's YAML file, relative to the workspace
 
 
 class PipelineDetail(PipelineSummary):
@@ -58,9 +62,19 @@ class RunRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
-def summary_of(d: PipelineDefinition) -> PipelineSummary:
+def summary_of(d: PipelineDefinition, root: Path | None = None) -> PipelineSummary:
     spec = d.spec
+    file = project = None
+    if root is not None and d.path is not None:
+        try:
+            rel = d.path.resolve().relative_to(root)
+            file = rel.as_posix()
+            project = rel.parent.parent.as_posix()
+        except ValueError:
+            pass
     return PipelineSummary(
+        project="" if project in (None, ".") else project,
+        file=file,
         id=d.id,
         name=d.name,
         description=spec.description if spec else None,
@@ -72,7 +86,7 @@ def summary_of(d: PipelineDefinition) -> PipelineSummary:
     )
 
 
-def detail_of(d: PipelineDefinition, used_by: list[str]) -> PipelineDetail:
+def detail_of(d: PipelineDefinition, used_by: list[str], root: Path | None = None) -> PipelineDetail:
     spec = d.spec
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
@@ -89,7 +103,7 @@ def detail_of(d: PipelineDefinition, used_by: list[str]) -> PipelineDetail:
             )
             edges.extend(GraphEdge(source=dep, target=t.key) for dep in t.depends_on if dep in keys)
     return PipelineDetail(
-        **summary_of(d).model_dump(),
+        **summary_of(d, root).model_dump(),
         source=d.source,
         spec=spec.model_dump(mode="json", exclude_none=True) if spec else None,
         graph=PipelineGraph(nodes=nodes, edges=edges),

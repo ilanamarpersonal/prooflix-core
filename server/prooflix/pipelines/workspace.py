@@ -49,7 +49,14 @@ class PipelineDefinition:
 
 
 class Workspace:
-    """A directory holding ``pipelines/*.yaml`` and Python task code in ``src/``."""
+    """A directory of pipeline **projects**.
+
+    A project is a folder holding ``pipelines/*.yaml`` and the Python code those
+    pipelines call in ``src/``. Projects are the workspace root itself (when it
+    has a ``pipelines/`` folder) and every top-level sub-folder that has one,
+    such as a folder brought in with the Workspace tab's Import code button.
+    Pipeline ids are file names, so they must be unique across projects.
+    """
 
     def __init__(self, root: Path):
         self.root = Path(root).resolve()
@@ -57,22 +64,50 @@ class Workspace:
         self.src_dir = self.root / "src"
 
     # ------------------------------------------------------------------ files
+    def projects(self) -> list[Path]:
+        """Folders that contain a ``pipelines/`` directory, the root first."""
+        found = [self.root] if self.pipelines_dir.is_dir() else []
+        if self.root.is_dir():
+            found += sorted(
+                d
+                for d in self.root.iterdir()
+                if d.is_dir()
+                and not d.name.startswith((".", "_"))
+                and d.name not in ("pipelines", "src", "data")
+                and (d / "pipelines").is_dir()
+            )
+        return found
+
+    def _files(self) -> dict[str, list[Path]]:
+        """Pipeline id -> every file defining it (more than one is an error)."""
+        files: dict[str, list[Path]] = {}
+        for project in self.projects():
+            for p in sorted((project / "pipelines").iterdir()):
+                if p.is_file() and p.suffix in YAML_SUFFIXES and not p.name.startswith("."):
+                    paths = files.setdefault(p.stem, [])
+                    if not any(q.parent == p.parent for q in paths):  # a.yaml + a.yml: keep the first
+                        paths.append(p)
+        return files
+
     def list_ids(self) -> list[str]:
-        if not self.pipelines_dir.is_dir():
-            return []
-        ids = {
-            p.stem
-            for p in self.pipelines_dir.iterdir()
-            if p.is_file() and p.suffix in YAML_SUFFIXES and not p.name.startswith(".")
-        }
-        return sorted(ids)
+        return sorted(self._files())
 
     def path_for(self, pipeline_id: str) -> Path | None:
-        for suffix in YAML_SUFFIXES:
-            path = self.pipelines_dir / f"{pipeline_id}{suffix}"
-            if path.is_file():
-                return path
-        return None
+        paths = self._files().get(pipeline_id)
+        return paths[0] if paths else None
+
+    def project_dir_for(self, pipeline_id: str) -> Path:
+        """The project folder a pipeline belongs to (its ``src/`` holds its code)."""
+        path = self.path_for(pipeline_id)
+        return path.parent.parent if path else self.root
+
+    def project_of(self, pipeline_id: str) -> str:
+        """Project folder relative to the workspace root; "" for the root."""
+        rel = self.project_dir_for(pipeline_id).relative_to(self.root).as_posix()
+        return "" if rel == "." else rel
+
+    def src_dir_for(self, pipeline_id: str) -> Path:
+        return self.project_dir_for(pipeline_id) / "src"
 
     def exists(self, pipeline_id: str) -> bool:
         return self.path_for(pipeline_id) is not None
@@ -91,15 +126,20 @@ class Workspace:
         that file, which lets callers validate an edit in full context.
         """
         overrides = overrides or {}
+        files = self._files()
         defs: dict[str, PipelineDefinition] = {}
-        for pid in self.list_ids():
+        for pid, paths in files.items():
             if pid in overrides:
                 continue
-            path = self.path_for(pid)
-            assert path is not None
-            defs[pid] = parse_pipeline(pid, path.read_text(encoding="utf-8"), path)
+            defs[pid] = parse_pipeline(pid, paths[0].read_text(encoding="utf-8"), paths[0])
         for pid, source in overrides.items():
             defs[pid] = parse_pipeline(pid, source, self.path_for(pid))
+        for pid, paths in files.items():
+            if len(paths) > 1:
+                where = ", ".join(p.relative_to(self.root).as_posix() for p in paths)
+                defs[pid].errors.append(
+                    f"Pipeline id '{pid}' is defined more than once ({where}); rename one of the files"
+                )
         validate_workspace(defs)
         return dict(sorted(defs.items()))
 

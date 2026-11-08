@@ -1,6 +1,7 @@
 """``/api/sql`` routes: run SQL over the workspace's data files.
 
-Every CSV and JSON file under ``workspace/data/`` is loaded into a fresh
+Every CSV and JSON file under ``workspace/data/`` (schema ``main``) and each
+project's ``data/`` folder (a schema named after the project) is loaded into a fresh
 in-memory SQLite database for each request, one table per file. The database
 is read only and thrown away afterwards, so queries never change the files.
 """
@@ -34,10 +35,19 @@ class SqlColumn(BaseModel):
 
 
 class SqlTable(BaseModel):
-    name: str
+    name: str  # table name inside its schema
+    schema_name: str = Field(serialization_alias="schema")  # "main" or a project's schema
+    qualified: str  # how to write it in SQL: "orders" in main, "my_project.orders" otherwise
     source: str  # file path relative to the workspace
     row_count: int
     columns: list[SqlColumn]
+
+
+class CatalogSchema(BaseModel):
+    name: str
+    project: str  # project folder relative to the workspace; "" for the workspace's own data
+    data_dir: str | None  # the folder its tables come from, relative to the workspace
+    tables: list[SqlTable]
 
 
 class SqlQueryIn(BaseModel):
@@ -55,10 +65,18 @@ class SqlResult(BaseModel):
 
 @dataclass
 class _Loaded:
+    schema: str
     name: str
     source: str
     columns: list[str]
     rows: list[list[Any]]
+
+    @property
+    def qualified(self) -> str:
+        return self.name if self.schema == MAIN else f"{self.schema}.{self.name}"
+
+
+MAIN = "main"
 
 
 # ------------------------------------------------------------------ loading
@@ -117,11 +135,42 @@ def _load_file(path: Path) -> tuple[list[str], list[list[Any]]] | None:
     return None
 
 
+def schema_name(project_folder: str) -> str:
+    """``prooflix-test`` -> ``prooflix_test`` (a SQL identifier)."""
+    name = re.sub(r"[^0-9a-zA-Z]+", "_", project_folder).strip("_").lower()
+    name = name if name and not name[0].isdigit() else f"s_{name}"
+    return f"{name}_" if name in (MAIN, "temp") else name
+
+
+def schemas(workspace_root: Path) -> list[tuple[str, str, Path]]:
+    """(schema, project folder, data dir) for the workspace and each project.
+
+    The workspace's own ``data/`` is the ``main`` schema, so its tables need no
+    prefix in SQL. Each imported project is a schema named after its folder:
+    ``my-project/data/orders.csv`` is ``my_project.orders``.
+    """
+    out = [(MAIN, "", workspace_root / "data")]
+    taken = {MAIN}
+    for project in Workspace(workspace_root).projects():
+        if project == workspace_root:
+            continue
+        name = schema_name(project.name)
+        while name in taken:
+            name += "_"
+        taken.add(name)
+        out.append((name, project.name, project / "data"))
+    return out
+
+
 def load_tables(workspace_root: Path) -> list[_Loaded]:
-    data_dir = workspace_root / "data"
-    if not data_dir.is_dir():
-        return []
     tables: list[_Loaded] = []
+    for schema, _project, data_dir in schemas(workspace_root):
+        if data_dir.is_dir():
+            _load_dir(workspace_root, data_dir, schema, tables)
+    return tables
+
+
+def _load_dir(workspace_root: Path, data_dir: Path, schema: str, tables: list[_Loaded]) -> None:
     seen: set[str] = set()
     for path in sorted(data_dir.rglob("*")):
         rel = path.relative_to(data_dir)
@@ -139,9 +188,8 @@ def load_tables(workspace_root: Path) -> list[_Loaded]:
             name += "_"
         seen.add(name)
         tables.append(
-            _Loaded(name, path.relative_to(workspace_root).as_posix(), loaded[0], loaded[1])
+            _Loaded(schema, name, path.relative_to(workspace_root).as_posix(), loaded[0], loaded[1])
         )
-    return tables
 
 
 def _quote(ident: str) -> str:
@@ -157,13 +205,17 @@ def _deny_attach(action: int, *_args: Any) -> int:
 def open_database(workspace_root: Path) -> tuple[sqlite3.Connection, list[_Loaded]]:
     tables = load_tables(workspace_root)
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    # One in-memory database per project schema, attached before ATTACH is denied.
+    for schema in sorted({t.schema for t in tables} - {MAIN}):
+        conn.execute(f"ATTACH DATABASE ':memory:' AS {_quote(schema)}")
     for t in tables:
+        target = f"{_quote(t.schema)}.{_quote(t.name)}"
         cols = ", ".join(_quote(c or f"column_{i + 1}") for i, c in enumerate(t.columns))
-        conn.execute(f"CREATE TABLE {_quote(t.name)} ({cols})")
+        conn.execute(f"CREATE TABLE {target} ({cols})")
         if t.rows:
             marks = ", ".join("?" * len(t.columns))
             conn.executemany(
-                f"INSERT INTO {_quote(t.name)} VALUES ({marks})",
+                f"INSERT INTO {target} VALUES ({marks})",
                 [row[: len(t.columns)] for row in t.rows],
             )
     conn.commit()
@@ -173,26 +225,62 @@ def open_database(workspace_root: Path) -> tuple[sqlite3.Connection, list[_Loade
 
 
 # ------------------------------------------------------------------ routes
-@router.get("/tables", response_model=list[SqlTable])
+def _describe(tables: list[_Loaded]) -> list[SqlTable]:
+    out = []
+    for t in tables:
+        sample = t.rows[:200]
+        columns = []
+        for i, c in enumerate(t.columns):
+            kinds = {type(r[i]).__name__ for r in sample if i < len(r) and r[i] is not None}
+            kind = (
+                "INTEGER" if kinds == {"int"}
+                else "REAL" if kinds and kinds <= {"int", "float"}
+                else "TEXT"
+            )
+            columns.append(SqlColumn(name=c or f"column_{i + 1}", type=kind))
+        out.append(
+            SqlTable(
+                name=t.name,
+                schema_name=t.schema,
+                qualified=t.qualified,
+                source=t.source,
+                row_count=len(t.rows),
+                columns=columns,
+            )
+        )
+    return out
+
+
+@router.get("/tables", response_model=list[SqlTable], response_model_by_alias=True)
 def list_tables(ws: Workspace = Depends(get_workspace)) -> list[SqlTable]:
-    conn, tables = open_database(ws.root)
-    try:
-        out = []
-        for t in tables:
-            info = conn.execute(f"SELECT * FROM {_quote(t.name)} LIMIT 200").fetchall()
-            types = []
-            for i, c in enumerate(t.columns):
-                kinds = {type(r[i]).__name__ for r in info if r[i] is not None}
-                kind = (
-                    "INTEGER" if kinds == {"int"}
-                    else "REAL" if kinds and kinds <= {"int", "float"}
-                    else "TEXT"
-                )
-                types.append(SqlColumn(name=c, type=kind))
-            out.append(SqlTable(name=t.name, source=t.source, row_count=len(t.rows), columns=types))
-        return out
-    finally:
-        conn.close()
+    return _describe(load_tables(ws.root))
+
+
+catalog_router = APIRouter(prefix="/api/catalog", tags=["catalog"])
+
+
+@catalog_router.get("", response_model=list[CatalogSchema], response_model_by_alias=True)
+def catalog(ws: Workspace = Depends(get_workspace)) -> list[CatalogSchema]:
+    """Schemas (the workspace's ``main`` and one per project) and their tables.
+
+    ``main`` is listed only when the workspace has its own ``data/`` folder;
+    every project is listed, even without data, so it's clear where to add it.
+    """
+    root = ws.root.resolve()
+    described = _describe(load_tables(root))
+    out = []
+    for schema, project, data_dir in schemas(root):
+        if schema == MAIN and not data_dir.is_dir():
+            continue
+        out.append(
+            CatalogSchema(
+                name=schema,
+                project=project,
+                data_dir=data_dir.relative_to(root).as_posix() if data_dir.is_dir() else None,
+                tables=[t for t in described if t.schema_name == schema],
+            )
+        )
+    return out
 
 
 @router.post("/query", response_model=SqlResult)

@@ -35,7 +35,7 @@ def _invalid(errors: list[str]) -> HTTPException:
 
 @router.get("", response_model=list[PipelineSummary])
 async def list_pipelines(ws: Workspace = Depends(get_workspace)) -> list[PipelineSummary]:
-    return [summary_of(d) for d in ws.load_all().values()]
+    return [summary_of(d, ws.root) for d in ws.load_all().values()]
 
 
 @router.get("/{pipeline_id}", response_model=PipelineDetail)
@@ -44,7 +44,7 @@ async def get_pipeline(pipeline_id: PipelineId, ws: Workspace = Depends(get_work
     if pipeline_id not in defs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Pipeline '{pipeline_id}' not found")
     used_by = [p for p, d in defs.items() if d.spec and pipeline_id in d.spec.sub_pipelines]
-    return detail_of(defs[pipeline_id], used_by)
+    return detail_of(defs[pipeline_id], used_by, ws.root)
 
 
 @router.post("/{pipeline_id}/validate", response_model=ValidationResult)

@@ -27,6 +27,10 @@ export interface PipelineSummary {
   task_count: number
   sub_pipelines: string[]
   parameters: Record<string, unknown>
+  /** project folder relative to the workspace ("" for the workspace root) */
+  project: string
+  /** the pipeline's YAML file, relative to the workspace */
+  file: string | null
 }
 
 export interface PipelineDetail extends PipelineSummary {
@@ -97,12 +101,41 @@ export interface WorkspaceFile {
   binary: boolean
 }
 
+export interface ImportResult {
+  written: string[]
+  /** ids of pipeline files that were added or replaced */
+  pipelines: string[]
+}
+
+export interface RemoveResult {
+  path: string
+  type: "dir" | "file"
+  /** number of files removed */
+  files: number
+  /** where the item was moved, relative to the workspace */
+  trash: string
+}
+
 // ---------------------------------------------------------------- sql
 export interface SqlTable {
+  /** table name inside its schema */
   name: string
+  /** "main" (the workspace's own data) or a project's schema */
+  schema: string
+  /** how to write it in SQL: "orders" in main, "my_project.orders" otherwise */
+  qualified: string
   source: string
   row_count: number
   columns: { name: string; type: string }[]
+}
+
+export interface CatalogSchema {
+  name: string
+  /** project folder relative to the workspace; "" for the workspace's own data */
+  project: string
+  /** folder its tables come from; null when the project has no data/ folder */
+  data_dir: string | null
+  tables: SqlTable[]
 }
 
 export interface SqlResult {

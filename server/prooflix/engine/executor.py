@@ -28,7 +28,7 @@ from ..pipelines.workspace import Workspace
 from ..runs.models import Run, RunStatus, TaskRun, utcnow
 from ..runs.store import RunStore
 from .context import TaskContext
-from .runners import load_callable, run_python, run_shell
+from .runners import install_print_capture, load_callable, run_python, run_shell
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class PipelineExecutor:
         self.store = store
         self.max_depth = max_depth
         self._active: dict[str, asyncio.Task[Run]] = {}
+        install_print_capture()  # print() inside python tasks goes to the task log
 
     # ------------------------------------------------------------ public API
     def prepare(
@@ -277,14 +278,15 @@ class PipelineExecutor:
         logger = _threadsafe_logger(tr)
         if isinstance(task, PythonTask):
             params = resolve(task.parameters, scope)
-            func = load_callable(self.workspace.src_dir, task.entrypoint)
+            project = self.workspace.project_dir_for(run.pipeline)
+            func = load_callable(project / "src", task.entrypoint)
             ctx = TaskContext(
                 run_id=run.id,
                 root_run_id=run.root_run_id or run.id,
                 pipeline=run.pipeline,
                 task_key=task.key,
                 attempt=attempt,
-                workspace=self.workspace.root,
+                workspace=project,
                 parameters=params,
                 _log=logger,
             )
@@ -295,7 +297,7 @@ class PipelineExecutor:
             command = resolve(task.command, scope)
             env = {k: str(v) for k, v in resolve(task.env, scope).items()}
             tr.log(f"$ {command}")
-            return await run_shell(command, env, self.workspace.root, logger)
+            return await run_shell(command, env, self.workspace.project_dir_for(run.pipeline), logger)
 
         if isinstance(task, PipelineTask):
             return await self._run_sub_pipeline(run, task, tr, scope)

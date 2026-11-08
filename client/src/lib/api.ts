@@ -8,6 +8,9 @@ import {
   type RunTree,
   type SqlResult,
   type SqlTable,
+  type CatalogSchema,
+  type ImportResult,
+  type RemoveResult,
   type ValidationResult,
   type WorkspaceFile,
   type WorkspaceNode,
@@ -19,11 +22,14 @@ const POLL_MS = 1000
 export class ApiError extends Error {
   status: number
   errors: string[]
+  /** the server's raw error detail, for responses that carry more than messages */
+  detail: unknown
 
-  constructor(status: number, message: string, errors: string[] = []) {
+  constructor(status: number, message: string, errors: string[] = [], detail?: unknown) {
     super(message)
     this.status = status
     this.errors = errors
+    this.detail = detail
   }
 }
 
@@ -43,7 +49,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         : Array.isArray(detail)
           ? detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d))
           : []
-    throw new ApiError(res.status, errors[0] ?? res.statusText, errors)
+    throw new ApiError(res.status, errors[0] ?? res.statusText, errors, detail)
   }
   return body as T
 }
@@ -79,6 +85,14 @@ export const api = {
   workspaceTree: () => request<WorkspaceNode>("/workspace/tree"),
   workspaceFile: (path: string) =>
     request<WorkspaceFile>(`/workspace/file?${new URLSearchParams({ path })}`),
+  workspaceImport: (files: { path: string; content_base64: string }[], overwrite = false) =>
+    request<ImportResult>("/workspace/import", {
+      method: "POST",
+      body: JSON.stringify({ files, overwrite }),
+    }),
+  removeWorkspaceItem: (path: string) =>
+    request<RemoveResult>(`/workspace/item?${new URLSearchParams({ path })}`, { method: "DELETE" }),
+  catalog: () => request<CatalogSchema[]>("/catalog"),
   sqlTables: () => request<SqlTable[]>("/sql/tables"),
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
@@ -155,7 +169,40 @@ export const useWorkspaceFile = (path: string | null) =>
     enabled: !!path,
   })
 
+// under ["sql"] so imports and removals refresh it too
+export const useCatalog = () => useQuery({ queryKey: ["sql", "catalog"], queryFn: api.catalog })
+
 export const useSqlTables = () => useQuery({ queryKey: ["sql", "tables"], queryFn: api.sqlTables })
 
 export const useSqlQuery = () =>
   useMutation({ mutationFn: ({ sql, limit }: { sql: string; limit?: number }) => api.sqlQuery(sql, limit) })
+
+export function useImportWorkspace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      files,
+      overwrite,
+    }: {
+      files: { path: string; content_base64: string }[]
+      overwrite?: boolean
+    }) => api.workspaceImport(files, overwrite),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workspace"] })
+      qc.invalidateQueries({ queryKey: ["pipelines"] })
+      qc.invalidateQueries({ queryKey: ["sql"] })
+    },
+  })
+}
+
+export function useRemoveWorkspaceItem() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string) => api.removeWorkspaceItem(path),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workspace"] })
+      qc.invalidateQueries({ queryKey: ["pipelines"] })
+      qc.invalidateQueries({ queryKey: ["sql"] })
+    },
+  })
+}

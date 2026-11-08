@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
-import { Database, FolderTree, Workflow, type LucideIcon } from "lucide-react"
+import { Database, FolderTree, Library, Workflow, type LucideIcon } from "lucide-react"
 
-export type SectionId = "pipelines" | "sql" | "workspace"
+export type SectionId = "pipelines" | "sql" | "workspace" | "catalog"
 
 export interface Section {
   id: SectionId
@@ -19,6 +19,7 @@ export const SECTIONS: Section[] = [
   { id: "pipelines", label: "Pipelines", icon: Workflow, home: "/pipelines", prefixes: ["/pipelines", "/runs"] },
   { id: "sql", label: "SQL Editor", icon: Database, home: "/sql", prefixes: ["/sql"] },
   { id: "workspace", label: "Workspace", icon: FolderTree, home: "/workspace", prefixes: ["/workspace"] },
+  { id: "catalog", label: "Catalog", icon: Library, home: "/catalog", prefixes: ["/catalog"] },
 ]
 
 export const DEFAULT_SECTION: SectionId = SECTIONS[0].id

@@ -14,7 +14,7 @@ import type { SqlResult, SqlTable } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const DRAFT_KEY = "prooflix-sql-draft"
-const DEFAULT_SQL = "SELECT country, COUNT(*) AS orders, SUM(amount) AS total\nFROM orders\nGROUP BY country\nORDER BY total DESC;"
+const DEFAULT_SQL = "-- Tables are listed on the left; a project's tables are written schema.table\nSELECT 1;"
 
 // Kept outside the component so the last result is still there when you
 // switch to another tab and come back.
@@ -86,8 +86,8 @@ export function SqlEditorPage() {
         title="SQL Editor"
         description={
           <>
-            Read-only SQL (SQLite) over the CSV and JSON files in{" "}
-            <code className="font-mono">workspace/data/</code>
+            Read-only SQL (SQLite) over the CSV and JSON files in the{" "}
+            <code className="font-mono">data/</code> folders of the workspace and its projects
           </>
         }
       />
@@ -174,7 +174,7 @@ function TableList({
       ) : (
         <div className="py-1">
           {tables.map((t) => (
-            <TableItem key={t.name} table={t} onInsert={onInsert} />
+            <TableItem key={t.qualified} table={t} onInsert={onInsert} />
           ))}
         </div>
       )}
@@ -199,12 +199,12 @@ function TableItem({ table, onInsert }: { table: SqlTable; onInsert: (text: stri
         </button>
         <button
           type="button"
-          onClick={() => onInsert(table.name)}
+          onClick={() => onInsert(table.qualified)}
           title={`${table.source} · ${table.row_count} rows`}
           className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
         >
           <Table2 className="text-primary size-4 shrink-0" />
-          <span className="truncate font-mono text-xs">{table.name}</span>
+          <span className="truncate font-mono text-xs">{table.qualified}</span>
         </button>
       </div>
       {open && (

@@ -9,9 +9,10 @@ __pycache__/
 node_modules/
 client/dist/
 
-# Prooflix runtime state and sample outputs
-workspace/.prooflix/
-workspace/data/output/
+# The workspace holds imported projects and run history, not repository code
+workspace/*
+!workspace/.gitkeep
+server/tests/fixtures/sample_workspace/data/output/
 
 # OS / editors
 .DS_Store

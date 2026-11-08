@@ -8,7 +8,7 @@ files in a workspace, executed by a Python server, and managed from a React
 ```text
 server/      Python server (FastAPI) and CLI         → docs/server.md
 client/      React + shadcn/ui web client            → docs/client.md
-workspace/   sample workspace: pipelines/*.yaml, src/ → docs/pipelines.md
+workspace/   imported projects (each with pipelines/ and src/) → docs/pipelines.md
 docs/        design documents with diagrams           → docs/README.md
 ```
 
@@ -34,13 +34,26 @@ npm install
 npm run dev
 ```
 
+## Add pipelines
+
+The workspace starts empty. In the web client open **Workspace → Import code**
+and choose a project folder that has `pipelines/*.yaml` and its Python code in
+`src/` (for example `prooflix-assets-bundle`). Each imported project lives in
+its own folder under `workspace/`, and its pipelines appear in the
+**Pipelines** tab, where **Run** starts them and clicking a task shows what it
+printed.
+
 ## Use it from the command line
 
 ```bash
 cd server
 uv run prooflix validate
-uv run prooflix run daily_orders -p run_date=2026-11-07
+uv run prooflix run pipeline1
 ```
+
+The sample pipelines used by the tests (`daily_orders` and friends) are in
+`server/tests/fixtures/sample_workspace/`; point the CLI at them with
+`--workspace tests/fixtures/sample_workspace`.
 
 ## A pipeline that calls sub-pipelines
 

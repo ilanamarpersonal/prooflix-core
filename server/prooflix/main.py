@@ -57,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runs.router)
     app.include_router(workspace_api.router)
     app.include_router(sql.router)
+    app.include_router(sql.catalog_router)
 
     @app.get("/api/health", tags=["meta"])
     async def health() -> dict:

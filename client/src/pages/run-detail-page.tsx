@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
-import { Link, useNavigate, useParams } from "react-router"
-import { Ban, RotateCw } from "lucide-react"
+import { Link, Navigate, useNavigate, useParams } from "react-router"
+import { Ban, List, RotateCw } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { JsonView } from "@/components/json-view"
@@ -12,7 +12,7 @@ import { TaskRunPanel } from "@/components/task-run-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useCancelRun, useRunTree, useStartRun } from "@/lib/api"
+import { useCancelRun, usePipelines, useRunTree, useStartRun } from "@/lib/api"
 import { TERMINAL_STATUSES, type GraphEdge, type GraphNode, type RunStatus } from "@/lib/types"
 import { formatDateTime, formatDuration } from "@/lib/utils"
 
@@ -23,25 +23,40 @@ export function RunDetailPage() {
   const cancel = useCancelRun()
   const rerun = useStartRun()
   const [picked, setPicked] = useState<string | null>(null)
+  const pipelines = usePipelines()
 
   const graph = useMemo(() => {
     const tasks = Object.values(run?.tasks ?? {})
-    const nodes: GraphNode[] = tasks.map((t) => ({ key: t.key, type: t.type, pipeline: t.pipeline }))
+    const nodes: GraphNode[] = tasks.map((t) => ({
+      key: t.key,
+      type: t.type,
+      pipeline: t.pipeline,
+    }))
     const edges: GraphEdge[] = tasks.flatMap((t) => t.depends_on.map((d) => ({ source: d, target: t.key })))
     const statuses = Object.fromEntries(tasks.map((t) => [t.key, t.status])) as Record<string, RunStatus>
     return { nodes, edges, statuses }
   }, [run])
 
-  if (isLoading) return <Skeleton className="h-96 w-full" />
+  if (isLoading || pipelines.isLoading) return <Skeleton className="h-96 w-full" />
+  // A run of a pipeline that is no longer in the workspace: back to the pipelines list.
+  if (run && pipelines.data && !pipelines.data.some((p) => p.id === run.pipeline)) {
+    return <Navigate to="/pipelines" replace />
+  }
   if (error || !run) return <ErrorAlert title="Could not load run" error={error} />
 
   const active = !TERMINAL_STATUSES.includes(run.status)
   const tasks = Object.values(run.tasks)
-  // Default selection: the first failed task, else the running one.
+  // Default selection: the running task, else the first failed one, else the
+  // task that started last, so its printout is shown without a click.
+  const lastStarted = [...tasks]
+    .filter((t) => t.started_at)
+    .sort((a, b) => (a.started_at! < b.started_at! ? 1 : -1))[0]
   const selectedKey =
     picked ??
-    tasks.find((t) => t.status === "FAILED")?.key ??
     tasks.find((t) => t.status === "RUNNING")?.key ??
+    tasks.find((t) => t.status === "FAILED")?.key ??
+    lastStarted?.key ??
+    tasks[0]?.key ??
     null
   const selected = selectedKey ? run.tasks[selectedKey] : undefined
 
@@ -79,37 +94,47 @@ export function RunDetailPage() {
           </>
         }
         actions={
-          active ? (
-            <Button variant="outline" onClick={() => cancel.mutate(run.id)} disabled={cancel.isPending}>
-              <Ban /> Cancel
+          <>
+            <Button variant="outline" asChild>
+              <Link to="/pipelines">
+                <List /> All pipelines
+              </Link>
             </Button>
-          ) : (
-            run.depth === 0 && (
-              <Button
-                variant="outline"
-                disabled={rerun.isPending}
-                onClick={() =>
-                  rerun.mutate(
-                    { id: run.pipeline, parameters: run.parameters },
-                    { onSuccess: (r) => navigate(`/runs/${r.id}`) },
-                  )
-                }
-              >
-                <RotateCw /> Run again
+            {active ? (
+              <Button variant="outline" onClick={() => cancel.mutate(run.id)} disabled={cancel.isPending}>
+                <Ban /> Cancel
               </Button>
-            )
-          )
+            ) : (
+              run.depth === 0 && (
+                <Button
+                  variant="outline"
+                  disabled={rerun.isPending}
+                  onClick={() =>
+                    rerun.mutate(
+                      { id: run.pipeline, parameters: run.parameters },
+                      { onSuccess: (r) => navigate(`/runs/${r.id}`) },
+                    )
+                  }
+                >
+                  <RotateCw /> Run again
+                </Button>
+              )
+            )}
+          </>
         }
       />
 
       <div className="mb-4 grid gap-4">
         {cancel.error && <ErrorAlert title="Could not cancel" error={cancel.error} />}
         {rerun.error && <ErrorAlert title="Could not start the run" error={rerun.error} />}
-        {run.error && run.status !== "SUCCEEDED" && <ErrorAlert title="Run error" error={new Error(run.error)} />}
+        {run.error && run.status !== "SUCCEEDED" && (
+          <ErrorAlert title="Run error" error={new Error(run.error)} />
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="grid min-w-0 content-start gap-4">
+          <p className="text-muted-foreground -mb-2 text-xs">Click a task to see its printout below.</p>
           <PipelineGraph
             nodes={graph.nodes}
             edges={graph.edges}
@@ -122,9 +147,12 @@ export function RunDetailPage() {
             }}
           />
           {selected ? (
-            <TaskRunPanel task={selected} />
+            <TaskRunPanel
+              task={selected}
+              childRun={run.children.find((c) => c.id === selected.child_run_id)}
+            />
           ) : (
-            <p className="text-muted-foreground text-sm">Select a task to see its output and logs.</p>
+            <p className="text-muted-foreground text-sm">Click a task to see its printout.</p>
           )}
         </div>
 

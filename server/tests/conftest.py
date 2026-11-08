@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from prooflix.config import DEFAULT_WORKSPACE
 from prooflix.pipelines import Workspace
+
+SAMPLE_WORKSPACE = Path(__file__).parent / "fixtures" / "sample_workspace"
 
 TASKS_PY = '''
 import asyncio
@@ -65,7 +66,7 @@ def ws_factory(tmp_path: Path) -> WorkspaceFactory:
 
 @pytest.fixture
 def sample_workspace(tmp_path: Path) -> Path:
-    """A copy of the repository's sample workspace."""
+    """A copy of the sample workspace kept with the tests (pipelines, src, data)."""
     dest = tmp_path / "sample"
-    shutil.copytree(DEFAULT_WORKSPACE, dest, ignore=shutil.ignore_patterns(".prooflix", "output"))
+    shutil.copytree(SAMPLE_WORKSPACE, dest, ignore=shutil.ignore_patterns(".prooflix", "output"))
     return dest
