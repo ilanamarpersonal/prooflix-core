@@ -1,5 +1,5 @@
 import { Link } from "react-router"
-import { AlertTriangle, Plus, Workflow } from "lucide-react"
+import { AlertTriangle, History, Plus, Workflow } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
@@ -23,11 +23,18 @@ export function PipelinesPage() {
           </>
         }
         actions={
-          <Button asChild>
-            <Link to="/pipelines/new">
-              <Plus /> New pipeline
-            </Link>
-          </Button>
+          <>
+            <Button variant="outline" asChild>
+              <Link to="/runs">
+                <History /> All runs
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link to="/pipelines/new">
+                <Plus /> New pipeline
+              </Link>
+            </Button>
+          </>
         }
       />
       {error && <ErrorAlert error={error} />}

@@ -6,7 +6,11 @@ import {
   type PipelineSummary,
   type Run,
   type RunTree,
+  type SqlResult,
+  type SqlTable,
   type ValidationResult,
+  type WorkspaceFile,
+  type WorkspaceNode,
 } from "./types"
 
 const BASE = "/api"
@@ -72,6 +76,12 @@ export const api = {
   getRun: (id: string) => request<Run>(`/runs/${id}`),
   getRunTree: (id: string) => request<RunTree>(`/runs/${id}/tree`),
   cancelRun: (id: string) => request<Run>(`/runs/${id}/cancel`, { method: "POST" }),
+  workspaceTree: () => request<WorkspaceNode>("/workspace/tree"),
+  workspaceFile: (path: string) =>
+    request<WorkspaceFile>(`/workspace/file?${new URLSearchParams({ path })}`),
+  sqlTables: () => request<SqlTable[]>("/sql/tables"),
+  sqlQuery: (sql: string, limit = 1000) =>
+    request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
 }
 
 const isActive = (r?: { status: Run["status"] }) => !!r && !TERMINAL_STATUSES.includes(r.status)
@@ -134,3 +144,18 @@ export function useDeletePipeline() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipelines"] }),
   })
 }
+
+export const useWorkspaceTree = () =>
+  useQuery({ queryKey: ["workspace", "tree"], queryFn: api.workspaceTree })
+
+export const useWorkspaceFile = (path: string | null) =>
+  useQuery({
+    queryKey: ["workspace", "file", path],
+    queryFn: () => api.workspaceFile(path!),
+    enabled: !!path,
+  })
+
+export const useSqlTables = () => useQuery({ queryKey: ["sql", "tables"], queryFn: api.sqlTables })
+
+export const useSqlQuery = () =>
+  useMutation({ mutationFn: ({ sql, limit }: { sql: string; limit?: number }) => api.sqlQuery(sql, limit) })

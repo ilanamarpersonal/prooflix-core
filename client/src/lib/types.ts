@@ -78,3 +78,37 @@ export interface Run {
 export interface RunTree extends Run {
   children: RunTree[]
 }
+
+// ---------------------------------------------------------------- workspace
+export interface WorkspaceNode {
+  name: string
+  /** relative to the workspace root, "/" separated; "" for the root */
+  path: string
+  type: "dir" | "file"
+  size?: number | null
+  children?: WorkspaceNode[] | null
+}
+
+export interface WorkspaceFile {
+  path: string
+  size: number
+  content: string | null
+  truncated: boolean
+  binary: boolean
+}
+
+// ---------------------------------------------------------------- sql
+export interface SqlTable {
+  name: string
+  source: string
+  row_count: number
+  columns: { name: string; type: string }[]
+}
+
+export interface SqlResult {
+  columns: string[]
+  rows: unknown[][]
+  row_count: number
+  truncated: boolean
+  elapsed_ms: number
+}

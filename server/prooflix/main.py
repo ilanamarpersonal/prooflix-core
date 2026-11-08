@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import __version__
-from .api import pipelines, runs
+from .api import pipelines, runs, sql, workspace as workspace_api
 from .config import Settings
 from .engine import PipelineExecutor
 from .pipelines import Workspace
@@ -52,6 +52,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(pipelines.router)
     app.include_router(runs.router)
+    app.include_router(workspace_api.router)
+    app.include_router(sql.router)
 
     @app.get("/api/health", tags=["meta"])
     async def health() -> dict:
