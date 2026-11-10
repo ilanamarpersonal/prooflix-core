@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
-import { ChevronRight, Layers, Loader2, Maximize2, Minimize2, Play, Plus, RefreshCw, Table2, X } from "lucide-react"
+import {
+  ChevronRight,
+  Layers,
+  Library,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Play,
+  Plus,
+  RefreshCw,
+  Table2,
+  X,
+} from "lucide-react"
 
 import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
@@ -663,9 +675,19 @@ function TableList({
           <p className="text-muted-foreground p-3 text-sm">No tables yet. Import Parquet files in the Catalog tab.</p>
         ) : (
           <div className="py-1">
-            {[...bySchema].map(([schema, list]) => (
-              <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} />
-            ))}
+            {groupByCatalog(bySchema).map(({ catalog, schemas }) =>
+              catalog ? (
+                <CatalogItem key={`catalog:${catalog}`} catalog={catalog}>
+                  {schemas.map(([schema, list]) => (
+                    <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} catalog={catalog} />
+                  ))}
+                </CatalogItem>
+              ) : (
+                schemas.map(([schema, list]) => (
+                  <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} />
+                ))
+              ),
+            )}
           </div>
         )}
       </div>
@@ -676,15 +698,20 @@ function TableList({
   )
 }
 
-function SchemaItem({
-  schema,
-  tables,
-  onInsert,
-}: {
-  schema: string
-  tables: SqlTable[]
-  onInsert: (text: string) => void
-}) {
+/** Schemas in server order, with the schemas of each catalog gathered under it. */
+function groupByCatalog(bySchema: Map<string, SqlTable[]>): { catalog: string; schemas: [string, SqlTable[]][] }[] {
+  const groups: { catalog: string; schemas: [string, SqlTable[]][] }[] = []
+  for (const entry of bySchema) {
+    const catalog = entry[1][0]?.catalog ?? ""
+    const last = groups[groups.length - 1]
+    if (catalog && last?.catalog === catalog) last.schemas.push(entry)
+    else groups.push({ catalog, schemas: [entry] })
+  }
+  return groups
+}
+
+/** A catalog (a tenant folder in data/) and its schemas, such as bronze and gold. */
+function CatalogItem({ catalog, children }: { catalog: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(true)
   return (
     <div>
@@ -692,23 +719,70 @@ function SchemaItem({
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
+        aria-label={open ? `Collapse catalog ${catalog}` : `Expand catalog ${catalog}`}
         className="hover:bg-accent flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-sm"
       >
         <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
-        <Layers className="text-primary size-4 shrink-0" />
-        <span className="truncate font-mono text-xs font-medium">{schema}</span>
-        <span className="text-muted-foreground ml-auto text-xs">{tables.length}</span>
+        <Library className="text-primary size-4 shrink-0" />
+        <span className="truncate font-mono text-xs font-medium">{catalog}</span>
+        <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">catalog</span>
       </button>
-      {open && tables.map((t) => <TableItem key={t.qualified} table={t} onInsert={onInsert} />)}
+      {open && children}
     </div>
   )
 }
 
-function TableItem({ table, onInsert }: { table: SqlTable; onInsert: (text: string) => void }) {
+function SchemaItem({
+  schema,
+  tables,
+  onInsert,
+  catalog = "",
+}: {
+  schema: string
+  tables: SqlTable[]
+  onInsert: (text: string) => void
+  /** set inside a catalog: indented and labelled with the schema's own name ("bronze") */
+  catalog?: string
+}) {
+  const [open, setOpen] = useState(true)
+  const nested = !!catalog
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        title={schema}
+        className={cn(
+          "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-1.5 text-left text-sm",
+          nested ? "pl-5" : "pl-1.5",
+        )}
+      >
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <Layers className="text-primary size-4 shrink-0" />
+        <span className="truncate font-mono text-xs font-medium">
+          {nested ? schema.slice(catalog.length + 1) : schema}
+        </span>
+        <span className="text-muted-foreground ml-auto text-xs">{tables.length}</span>
+      </button>
+      {open && tables.map((t) => <TableItem key={t.qualified} table={t} onInsert={onInsert} nested={nested} />)}
+    </div>
+  )
+}
+
+function TableItem({
+  table,
+  onInsert,
+  nested = false,
+}: {
+  table: SqlTable
+  onInsert: (text: string) => void
+  nested?: boolean
+}) {
   const [open, setOpen] = useState(false)
   return (
     <div>
-      <div className="hover:bg-accent flex items-center gap-1 pr-2 pl-5 text-sm">
+      <div className={cn("hover:bg-accent flex items-center gap-1 pr-2 text-sm", nested ? "pl-9" : "pl-5")}>
         <button
           type="button"
           onClick={() => setOpen(!open)}
@@ -736,7 +810,10 @@ function TableItem({ table, onInsert }: { table: SqlTable; onInsert: (text: stri
               type="button"
               onClick={() => onInsert(c.name)}
               title={`Insert ${c.name}`}
-              className="hover:bg-accent flex w-full items-center justify-between gap-2 py-0.5 pr-3 pl-16 text-left"
+              className={cn(
+                "hover:bg-accent flex w-full items-center justify-between gap-2 py-0.5 pr-3 text-left",
+                nested ? "pl-20" : "pl-16",
+              )}
             >
               <span className="truncate font-mono text-xs">{c.name}</span>
               <span className="text-muted-foreground text-[10px] uppercase">{c.type}</span>
