@@ -125,9 +125,10 @@ export function WorkspacePage() {
           {tree.isLoading ? (
             <Skeleton className="m-1 h-64" />
           ) : (
-            tree.data?.children?.map((n) => (
-              <TreeNode key={n.path} node={n} depth={0} selected={selected} onSelect={(path) => setParams({ path })} />
-            ))
+            tree.data && (
+              // the workspace folder itself is the root of the tree
+              <TreeNode node={tree.data} depth={0} selected={selected} onSelect={(path) => setParams({ path })} />
+            )
           )}
         </Card>
         {selectedNode?.type === "dir" ? (
@@ -144,6 +145,7 @@ export function WorkspacePage() {
   )
 }
 
+const ROOT = "." // the workspace folder's path in the tree
 const INDENT = 16 // px per level
 const ROW_PAD = 4 // px before the first level's arrow
 
@@ -170,7 +172,8 @@ function TreeNode({
   selected: string | null
   onSelect: (path: string) => void
 }) {
-  const containsSelected = !!selected && selected.startsWith(`${node.path}/`)
+  // the root's path is "." and its children's paths don't start with it
+  const containsSelected = !!selected && (node.path === ROOT ? selected !== ROOT : selected.startsWith(`${node.path}/`))
   const [open, setOpen] = useState(depth === 0 || containsSelected)
   // Open the folders leading to a file selected from elsewhere (e.g. after an import).
   useEffect(() => {
@@ -283,10 +286,13 @@ function FolderViewer({
     <Card className="min-w-0 gap-0 self-start overflow-hidden py-0">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
         <FolderOpen className="text-primary size-4" />
-        <code className="min-w-0 flex-1 truncate font-mono text-sm">{node.path}/</code>
-        <Button variant="outline" size="sm" onClick={() => onRemove(node)} disabled={removing}>
-          <Trash2 /> Remove folder
-        </Button>
+        <code className="min-w-0 flex-1 truncate font-mono text-sm">{node.path === ROOT ? node.name : node.path}/</code>
+        {/* the workspace folder itself can't be removed from here */}
+        {node.path !== ROOT && (
+          <Button variant="outline" size="sm" onClick={() => onRemove(node)} disabled={removing}>
+            <Trash2 /> Remove folder
+          </Button>
+        )}
       </div>
       <div className="text-muted-foreground grid gap-1 p-4 text-sm">
         <p>
