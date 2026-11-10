@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import {
   ChevronRight,
+  Download,
   Layers,
   Library,
   Loader2,
@@ -11,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Table2,
+  Upload,
   X,
 } from "lucide-react"
 
@@ -69,6 +71,26 @@ function saveEditorHeight(h: number) {
   } catch {
     /* storage unavailable */
   }
+}
+
+const MAX_SQL_FILE_BYTES = 1024 * 1024 // a query file larger than 1 MB is almost certainly not a query
+
+/** "Daily totals" -> "Daily totals.sql"; characters file systems reject become "_". */
+function sqlFileName(title: string) {
+  const base = title.replace(/[\\/:*?"<>|\x00-\x1f]+/g, "_").trim() || "query"
+  return base.toLowerCase().endsWith(".sql") ? base : `${base}.sql`
+}
+
+/** Hand the browser a text file to save (it goes to the Downloads folder or asks where). */
+function downloadText(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/sql;charset=utf-8" }))
+  const a = document.createElement("a")
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function nextTitle(tabs: QueryTab[]) {
@@ -200,6 +222,7 @@ export function SqlEditorPage() {
             }}
             apiRef={editorApi}
             tables={tables.data ?? []}
+            onLoadFile={(title, sql) => addTab(sql, title)}
           />
         </div>
       </div>
@@ -300,6 +323,7 @@ function QueryEditor({
   onMounted,
   apiRef,
   tables,
+  onLoadFile,
 }: {
   tab: QueryTab
   onSqlChange: (sql: string) => void
@@ -308,8 +332,29 @@ function QueryEditor({
   apiRef: React.MutableRefObject<{ insert: (text: string) => void } | null>
   /** for code completion: schema. -> tables, schema.table. -> columns */
   tables: SqlTable[]
+  /** a .sql file was chosen with Load SQL: open it in a new query tab */
+  onLoadFile: (title: string, sql: string) => void
 }) {
   const sql = tab.sql
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const save = () => {
+    if (sql.trim()) downloadText(sqlFileName(tab.title), sql.endsWith("\n") ? sql : `${sql}\n`)
+  }
+  const load = async (file: File) => {
+    setLoadError(null)
+    if (file.size > MAX_SQL_FILE_BYTES) {
+      setLoadError(`${file.name} is larger than 1 MB, so it was not opened.`)
+      return
+    }
+    try {
+      const text = (await file.text()).replace(/^\uFEFF/, "") // drop a byte-order mark
+      onLoadFile(file.name.replace(/\.(sql|txt)$/i, "") || file.name, text)
+    } catch {
+      setLoadError(`${file.name} could not be read.`)
+    }
+  }
   const [result, setResult] = useState<SqlResult | null>(results.get(tab.id) ?? null)
   const query = useSqlQuery()
   const editor = useRef<HTMLTextAreaElement>(null)
@@ -442,6 +487,11 @@ function QueryEditor({
               suggest(e.currentTarget.value, e.currentTarget.selectionStart, true)
               return
             }
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+              e.preventDefault() // the browser's own "save page" isn't useful here
+              save()
+              return
+            }
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault()
               const el = e.currentTarget
@@ -509,6 +559,34 @@ function QueryEditor({
         <Button onClick={() => run()} disabled={query.isPending || !sql.trim()}>
           {query.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run
         </Button>
+        <Button
+          variant="outline"
+          onClick={save}
+          disabled={!sql.trim()}
+          title={`Download this query as ${sqlFileName(tab.title)} (⌘/Ctrl + S)`}
+        >
+          <Download /> Save SQL
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => fileInput.current?.click()}
+          title="Open a .sql file in a new query tab"
+        >
+          <Upload /> Load SQL
+        </Button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".sql,.txt,application/sql,text/plain"
+          className="hidden"
+          aria-hidden
+          tabIndex={-1}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = "" // so choosing the same file again still triggers a load
+            if (file) void load(file)
+          }}
+        />
         <span className="text-muted-foreground text-xs">
           <kbd className="font-sans">⌘</kbd>/<kbd className="font-sans">Ctrl</kbd> + Enter runs the query, or just the
           selected text · type <code className="font-mono">schema.</code> for its tables,{" "}
@@ -529,6 +607,11 @@ function QueryEditor({
           onReset={() => resize(DEFAULT_EDITOR_HEIGHT, true)}
           max={maxEditorHeight}
         />
+      )}
+      {loadError && (
+        <div className="shrink-0">
+          <ErrorAlert title="Could not load the file" error={new Error(loadError)} />
+        </div>
       )}
       {query.error && (
         <div className="shrink-0">
