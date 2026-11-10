@@ -1,3 +1,4 @@
+import { useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
 import { AlarmClock, AlertTriangle, FolderInput, History, Plus, Workflow } from "lucide-react"
 
@@ -10,11 +11,27 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Pager } from "@/components/pager"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ResizeDivider } from "@/components/resize-divider"
 import { RunsTable } from "@/components/runs-table"
 import { usePipelines, useRuns } from "@/lib/api"
 import { describeCron } from "@/lib/schedule"
 import { usePagination } from "@/lib/use-pagination"
-import { formatDateTime } from "@/lib/utils"
+import { useFillHeight } from "@/lib/use-fill-height"
+import { cn, formatDateTime } from "@/lib/utils"
+
+const LIST_HEIGHT_KEY = "prooflix-pipelines-list-height"
+const DEFAULT_LIST_HEIGHT = 300
+const MIN_LIST_HEIGHT = 150 // header, a row and the pager
+const MIN_RUNS_HEIGHT = 200 // the runs heading, a few rows and the pager
+
+function loadListHeight() {
+  try {
+    const h = Number(localStorage.getItem(LIST_HEIGHT_KEY))
+    return h >= MIN_LIST_HEIGHT && h <= 3000 ? h : DEFAULT_LIST_HEIGHT
+  } catch {
+    return DEFAULT_LIST_HEIGHT
+  }
+}
 
 export function PipelinesPage() {
   const { data, isLoading, error } = usePipelines()
@@ -25,6 +42,27 @@ export function PipelinesPage() {
   // All runs of the pipelines in the workspace, newest first.
   const ids = new Set(data?.map((p) => p.id))
   const pipelineRuns = data ? runs.data?.filter((r) => ids.has(r.pipeline)) : undefined
+
+  // On md+ screens the two lists fill the window; the divider between them sets how
+  // tall the pipelines list is and the runs get the rest. Each scrolls inside.
+  const panels = useRef<HTMLDivElement>(null)
+  const panelsHeight = useFillHeight(panels)
+  const split = !!panelsHeight && hasPipelines
+  const [listHeight, setListHeight] = useState(loadListHeight)
+  const clampList = (h: number) =>
+    Math.round(
+      Math.min(Math.max(h, MIN_LIST_HEIGHT), Math.max(MIN_LIST_HEIGHT, (panelsHeight ?? 2000) - MIN_RUNS_HEIGHT - 20)),
+    )
+  const resizeList = (h: number, save = false) => {
+    const next = clampList(h)
+    setListHeight(next)
+    if (save)
+      try {
+        localStorage.setItem(LIST_HEIGHT_KEY, String(next))
+      } catch {
+        /* storage unavailable */
+      }
+  }
 
   return (
     <>
@@ -44,150 +82,170 @@ export function PipelinesPage() {
         }
       />
       {error && <ErrorAlert error={error} />}
-      <Card className="py-2">
-        <CardContent className="px-2">
-          {isLoading ? (
-            <Skeleton className="h-48 w-full" />
-          ) : !hasPipelines ? (
-            <div className="text-muted-foreground flex flex-col items-center gap-3 py-14 text-center text-sm">
-              <Workflow className="size-8" />
-              <div>
-                <p className="text-foreground font-medium">No pipelines yet</p>
-                <p>
-                  Import a project with a <code className="font-mono">pipelines/</code> folder (and its code in{" "}
-                  <code className="font-mono">src/</code>) to run its pipelines here.
-                </p>
+      <div ref={panels} style={split ? { height: panelsHeight } : undefined} className={cn(split && "flex flex-col")}>
+        <Card
+          className={cn("py-2", split && "min-h-0 shrink-0")}
+          style={split ? { height: clampList(listHeight) } : undefined}
+        >
+          <CardContent className={cn("px-2", split && "flex min-h-0 flex-1 flex-col")}>
+            {isLoading ? (
+              <Skeleton className="h-48 w-full" />
+            ) : !hasPipelines ? (
+              <div className="text-muted-foreground flex flex-col items-center gap-3 py-14 text-center text-sm">
+                <Workflow className="size-8" />
+                <div>
+                  <p className="text-foreground font-medium">No pipelines yet</p>
+                  <p>
+                    Import a project with a <code className="font-mono">pipelines/</code> folder (and its code in{" "}
+                    <code className="font-mono">src/</code>) to run its pipelines here.
+                  </p>
+                </div>
+                <Button asChild>
+                  <Link to="/workspace">
+                    <FolderInput /> Import code in Workspace
+                  </Link>
+                </Button>
               </div>
-              <Button asChild>
-                <Link to="/workspace">
-                  <FolderInput /> Import code in Workspace
-                </Link>
-              </Button>
-            </div>
-          ) : (
-            <>
-              <Table containerClassName="max-h-[60vh] overflow-y-auto">
-                <TableHeader className="bg-card sticky top-0 z-10 shadow-[inset_0_-1px_0_var(--border)]">
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Id</TableHead>
-                    <TableHead>Project</TableHead>
-                    <TableHead>Tasks</TableHead>
-                    <TableHead>Sub-pipelines</TableHead>
-                    <TableHead>Trigger</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-0" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pager.items.map((p) => (
-                    <TableRow
-                      key={p.id}
-                      className="cursor-pointer"
-                      onClick={(e) => {
-                        // the whole row opens the pipeline, except its links and buttons
-                        if (!(e.target as HTMLElement).closest("a,button")) navigate(`/pipelines/${p.id}`)
-                      }}
-                    >
-                      <TableCell className="max-w-80">
-                        <Link to={`/pipelines/${p.id}`} className="font-medium hover:underline">
-                          {p.name}
-                        </Link>
-                        {p.description && <div className="text-muted-foreground truncate text-xs">{p.description}</div>}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground font-mono text-xs">{p.id}</TableCell>
-                      <TableCell className="text-muted-foreground font-mono text-xs">
-                        {p.file ? (
-                          <Link to={`/workspace?${new URLSearchParams({ path: p.file })}`} className="hover:underline">
-                            {p.project || "workspace"}
+            ) : (
+              <>
+                <Table containerClassName={cn("max-h-[60vh] overflow-y-auto", split && "max-h-none min-h-0 flex-1")}>
+                  <TableHeader className="bg-card sticky top-0 z-10 shadow-[inset_0_-1px_0_var(--border)]">
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Id</TableHead>
+                      <TableHead>Project</TableHead>
+                      <TableHead>Tasks</TableHead>
+                      <TableHead>Sub-pipelines</TableHead>
+                      <TableHead>Trigger</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="w-0" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pager.items.map((p) => (
+                      <TableRow
+                        key={p.id}
+                        className="cursor-pointer"
+                        onClick={(e) => {
+                          // the whole row opens the pipeline, except its links and buttons
+                          if (!(e.target as HTMLElement).closest("a,button")) navigate(`/pipelines/${p.id}`)
+                        }}
+                      >
+                        <TableCell className="max-w-80">
+                          <Link to={`/pipelines/${p.id}`} className="font-medium hover:underline">
+                            {p.name}
                           </Link>
-                        ) : (
-                          p.project || "workspace"
-                        )}
-                      </TableCell>
-                      <TableCell>{p.task_count}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {p.sub_pipelines.length ? (
-                            p.sub_pipelines.map((s) => (
-                              <Badge key={s} variant="secondary" asChild>
-                                <Link to={`/pipelines/${s}`}>{s}</Link>
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
+                          {p.description && (
+                            <div className="text-muted-foreground truncate text-xs">{p.description}</div>
                           )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {!p.schedule ? (
-                          <span className="text-muted-foreground">Manual</span>
-                        ) : (
-                          <div title={`${p.schedule.cron} (${p.schedule.timezone})`}>
-                            <div className="flex items-center gap-1">
-                              <AlarmClock className="text-primary size-3.5" />
-                              {describeCron(p.schedule.cron)}
-                              {!p.schedule.enabled && (
-                                <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
-                                  paused
+                        </TableCell>
+                        <TableCell className="text-muted-foreground font-mono text-xs">{p.id}</TableCell>
+                        <TableCell className="text-muted-foreground font-mono text-xs">
+                          {p.file ? (
+                            <Link
+                              to={`/workspace?${new URLSearchParams({ path: p.file })}`}
+                              className="hover:underline"
+                            >
+                              {p.project || "workspace"}
+                            </Link>
+                          ) : (
+                            p.project || "workspace"
+                          )}
+                        </TableCell>
+                        <TableCell>{p.task_count}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {p.sub_pipelines.length ? (
+                              p.sub_pipelines.map((s) => (
+                                <Badge key={s} variant="secondary" asChild>
+                                  <Link to={`/pipelines/${s}`}>{s}</Link>
                                 </Badge>
-                              )}
-                            </div>
-                            {p.schedule.enabled && p.schedule.next_run && (
-                              <div className="text-muted-foreground">next {formatDateTime(p.schedule.next_run)}</div>
+                              ))
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
                             )}
                           </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {p.valid ? (
-                          <Badge variant="outline" className="text-status-succeeded">
-                            valid
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
-                            <AlertTriangle /> {p.errors.length} error
-                            {p.errors.length > 1 ? "s" : ""}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <RunButton
-                          pipeline={p}
-                          size="sm"
-                          variant="outline"
-                          onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <Pager pagination={pager} label="pipelines" />
-            </>
-          )}
-        </CardContent>
-      </Card>
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {!p.schedule ? (
+                            <span className="text-muted-foreground">Manual</span>
+                          ) : (
+                            <div title={`${p.schedule.cron} (${p.schedule.timezone})`}>
+                              <div className="flex items-center gap-1">
+                                <AlarmClock className="text-primary size-3.5" />
+                                {describeCron(p.schedule.cron)}
+                                {!p.schedule.enabled && (
+                                  <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+                                    paused
+                                  </Badge>
+                                )}
+                              </div>
+                              {p.schedule.enabled && p.schedule.next_run && (
+                                <div className="text-muted-foreground">next {formatDateTime(p.schedule.next_run)}</div>
+                              )}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {p.valid ? (
+                            <Badge variant="outline" className="text-status-succeeded">
+                              valid
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
+                              <AlertTriangle /> {p.errors.length} error
+                              {p.errors.length > 1 ? "s" : ""}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <RunButton
+                            pipeline={p}
+                            size="sm"
+                            variant="outline"
+                            onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <Pager pagination={pager} label="pipelines" />
+              </>
+            )}
+          </CardContent>
+        </Card>
 
-      {hasPipelines && (
-        <section className="mt-8">
-          <div className="mb-3 flex items-baseline gap-2">
-            <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-              <History className="size-5" /> All runs
-            </h2>
-            <span className="text-muted-foreground text-sm">
-              {pipelineRuns ? `${pipelineRuns.length} run${pipelineRuns.length === 1 ? "" : "s"} · ` : ""}
-              newest first; sub-pipeline runs open inside their parent run
-            </span>
-          </div>
-          {runs.error && <ErrorAlert error={runs.error} />}
-          <Card className="py-2">
-            <CardContent className="px-2">
-              <RunsTable runs={pipelineRuns} loading={runs.isLoading} />
-            </CardContent>
-          </Card>
-        </section>
-      )}
+        {split && (
+          <ResizeDivider
+            className="my-2"
+            label="Resize the pipelines list and the runs"
+            value={clampList(listHeight)}
+            onResize={(h) => resizeList(h)}
+            onDone={(h) => resizeList(h, true)}
+            onReset={() => resizeList(DEFAULT_LIST_HEIGHT, true)}
+          />
+        )}
+        {hasPipelines && (
+          <section className={cn(split ? "flex min-h-0 flex-1 flex-col" : "mt-8")}>
+            <div className="mb-3 flex shrink-0 items-baseline gap-2">
+              <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+                <History className="size-5" /> All runs
+              </h2>
+              <span className="text-muted-foreground text-sm">
+                {pipelineRuns ? `${pipelineRuns.length} run${pipelineRuns.length === 1 ? "" : "s"} · ` : ""}
+                newest first; sub-pipeline runs open inside their parent run
+              </span>
+            </div>
+            {runs.error && <ErrorAlert error={runs.error} />}
+            <Card className={cn("py-2", split && "min-h-0 flex-1")}>
+              <CardContent className={cn("px-2", split && "min-h-0 flex-1")}>
+                <RunsTable runs={pipelineRuns} loading={runs.isLoading} fill={split} />
+              </CardContent>
+            </Card>
+          </section>
+        )}
+      </div>
     </>
   )
 }

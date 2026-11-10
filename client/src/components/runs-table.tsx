@@ -7,18 +7,21 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { Run } from "@/lib/types"
 import { usePagination } from "@/lib/use-pagination"
-import { formatDateTime, formatDuration } from "@/lib/utils"
+import { cn, formatDateTime, formatDuration } from "@/lib/utils"
 
 export function RunsTable({
   runs,
   loading,
   showPipeline = true,
   pageSize = 25,
+  fill = false,
 }: {
   runs?: Run[]
   loading?: boolean
   showPipeline?: boolean
   pageSize?: number
+  /** on md+ screens, stretch to the parent's height and scroll inside it */
+  fill?: boolean
 }) {
   const pager = usePagination(runs, pageSize)
   if (loading) return <Skeleton className="h-40 w-full" />
@@ -26,8 +29,8 @@ export function RunsTable({
     return <p className="text-muted-foreground py-8 text-center text-sm">No runs yet.</p>
   }
   return (
-    <>
-      <Table containerClassName="max-h-[60vh] overflow-y-auto">
+    <div className={cn(fill && "flex min-h-0 flex-col md:h-full")}>
+      <Table containerClassName={cn("max-h-[60vh] overflow-y-auto", fill && "md:max-h-none md:min-h-0 md:flex-1")}>
         <TableHeader className="bg-card sticky top-0 z-10 shadow-[inset_0_-1px_0_var(--border)]">
           <TableRow>
             <TableHead>Run</TableHead>
@@ -76,7 +79,7 @@ export function RunsTable({
         </TableBody>
       </Table>
       <Pager pagination={pager} label="runs" />
-    </>
+    </div>
   )
 }
 
