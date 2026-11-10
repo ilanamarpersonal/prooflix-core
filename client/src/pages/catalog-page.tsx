@@ -65,7 +65,7 @@ export function CatalogPage() {
         title="Catalog"
         description={
           catalog.data
-            ? `${catalog.data.length} schema${catalog.data.length === 1 ? "" : "s"} · ${tableCount} table${tableCount === 1 ? "" : "s"}. Schemas are imported datasets (kept in the catalog folder, outside the workspace) and projects' data/ folders; their CSV and JSON files are the tables.`
+            ? `${catalog.data.length} schema${catalog.data.length === 1 ? "" : "s"} · ${tableCount} table${tableCount === 1 ? "" : "s"}. Schemas are imported datasets (kept in the catalog folder, outside the workspace) and projects' data/ folders; their Parquet files are the tables (a folder of Parquet files is one table).`
             : undefined
         }
         actions={
@@ -114,7 +114,7 @@ export function CatalogPage() {
                 <Link to="/workspace" className="underline">
                   Workspace
                 </Link>{" "}
-                tab with CSV or JSON files in its <code className="font-mono">data/</code> folder. The project
+                tab with Parquet files in its <code className="font-mono">data/</code> folder. The project
                 becomes a schema and the files its tables.
               </p>
             </div>
@@ -329,7 +329,7 @@ function SchemaDetail({
       </div>
       {schema.tables.length === 0 ? (
         <div className="text-muted-foreground p-4 text-sm">
-          No tables yet. Add CSV or JSON files to{" "}
+          No tables yet. Add Parquet files to{" "}
           <code className="font-mono">{schema.data_dir ?? `${schema.project}/data`}/</code> and they show up
           here.
         </div>

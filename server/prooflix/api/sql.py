@@ -1,9 +1,11 @@
 """``/api/sql`` routes: run SQL over the workspace's data files.
 
-Every CSV and JSON file under ``workspace/data/`` (schema ``main``) and each
-project's ``data/`` folder (a schema named after the project) is loaded into a fresh
-in-memory SQLite database for each request, one table per file. The database
-is read only and thrown away afterwards, so queries never change the files.
+The catalog reads data lake files only: the Parquet files under ``workspace/data/``
+(schema ``main``), each project's ``data/`` folder (a schema named after the project)
+and each catalog sub-folder. A folder of Parquet files is one table (its files are
+read together), and a Parquet file directly in a schema's folder is a table of its
+own. The tables are loaded into a fresh in-memory SQLite database for each request.
+The database is read only and thrown away afterwards, so queries never change the files.
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from __future__ import annotations
 import base64
 import binascii
 import csv
+import datetime as dt
+import decimal
 import io
 import json
 import re
@@ -85,62 +89,73 @@ class _Loaded:
 
 
 MAIN = "main"
+DATA_SUFFIX = ".parquet"  # the catalog reads data lake (Parquet) files only
 
 
 # ------------------------------------------------------------------ loading
 def table_name(rel: Path) -> str:
-    """``output/2026-11-07/clean_orders.json`` -> ``output_2026_11_07_clean_orders``."""
-    name = re.sub(r"[^0-9a-zA-Z]+", "_", rel.with_suffix("").as_posix()).strip("_").lower()
+    """``output/2026-11-07/clean_orders`` -> ``output_2026_11_07_clean_orders``.
+
+    ``rel`` is a table's folder (or, for a file directly in a schema's folder, the
+    file) relative to the schema's folder; a file extension is dropped.
+    """
+    rel = rel.with_suffix("") if rel.suffix.lower() == DATA_SUFFIX else rel
+    name = re.sub(r"[^0-9a-zA-Z]+", "_", rel.as_posix()).strip("_").lower()
     return name if name and not name[0].isdigit() else f"t_{name}"
 
 
+def table_key(rel_file: Path) -> Path:
+    """Which table a Parquet file belongs to: its folder, or the file itself when
+    it sits directly in the schema's folder.
+
+    ``destination/customers/part-0.parquet`` -> ``destination/customers``;
+    ``orders.parquet`` -> ``orders.parquet``.
+    """
+    return rel_file if rel_file.parent == Path(".") else rel_file.parent
+
+
 def _cell(value: Any) -> Any:
-    """Store numbers as numbers, nested values as JSON text, blanks as NULL."""
+    """A Parquet value as a SQLite value: numbers stay numbers, booleans become
+    0/1, dates and timestamps ISO 8601 text, nested values JSON text. Parquet
+    columns are typed, so text stays text."""
     if isinstance(value, bool):
         return int(value)
     if value is None or isinstance(value, (int, float)):
         return value
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, dt.datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, (dt.date, dt.time)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.hex()
     if isinstance(value, (dict, list)):
-        return json.dumps(value)
-    text = str(value)
-    if text.strip() == "":
-        return None
-    for cast in (int, float):
-        try:
-            return cast(text)
-        except ValueError:
-            pass
-    return text
+        return json.dumps(value, default=str)
+    return str(value)
 
 
-def _from_records(records: list[dict]) -> tuple[list[str], list[list[Any]]]:
+def _load_parquet(files: list[Path]) -> tuple[list[str], list[list[Any]]] | None:
+    """Columns and rows of one or more Parquet files read as a single table
+    (columns are the union of the files' columns, in first-seen order).
+    None if any file is not readable Parquet."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    records: list[dict] = []
     columns: list[str] = []
-    for rec in records:
-        for key in rec:
-            if key not in columns:
-                columns.append(key)
-    return columns, [[_cell(rec.get(c)) for c in columns] for rec in records]
-
-
-def _load_file(path: Path) -> tuple[list[str], list[list[Any]]] | None:
-    if path.suffix.lower() == ".csv":
-        with path.open(newline="", encoding="utf-8", errors="replace") as f:
-            reader = csv.reader(f)
-            header = next(reader, None)
-            if not header:
-                return None
-            return [h.strip() for h in header], [
-                [_cell(v) for v in row] + [None] * (len(header) - len(row)) for row in reader
-            ]
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    for path in files:
+        try:
+            table = pq.read_table(path)
+        except (pa.ArrowException, OSError):
+            return None
+        for name in table.column_names:
+            if name not in columns:
+                columns.append(name)
+        records.extend(table.to_pylist())
+    if not columns:
         return None
-    if isinstance(data, dict):
-        data = [data]
-    if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
-        return _from_records(data)
-    return None
+    return columns, [[_cell(rec.get(c)) for c in columns] for rec in records]
 
 
 def schema_name(project_folder: str) -> str:
@@ -163,11 +178,11 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
 
     - ``main``: the workspace's own ``data/`` folder (tables need no prefix in SQL)
     - one per project (a workspace folder with ``pipelines/``): its ``data/``
-      folder, named after the project, so ``my-project/data/orders.csv`` is
+      folder, named after the project, so ``my-project/data/orders.parquet`` is
       ``my_project.orders``
     - one per sub-folder of the catalog folder, for data that is not part of a
-      project (imported tables, datasets): ``catalog/banking/customers.csv`` is
-      ``banking.customers``
+      project (imported tables, datasets): ``catalog/banking/customers.parquet``
+      is ``banking.customers``
     """
     root = paths.root
     out = [_Schema(MAIN, "workspace", "", root / "data")]
@@ -204,25 +219,28 @@ def load_tables(paths: CatalogPaths) -> list[_Loaded]:
 
 
 def _load_dir(paths: CatalogPaths, sch: _Schema, tables: list[_Loaded]) -> None:
+    """Add the schema's tables: one per folder of Parquet files, plus one per
+    Parquet file directly in the schema's folder. Other files are ignored."""
+    groups: dict[Path, list[Path]] = {}
+    for path in sorted(sch.data_dir.rglob(f"*{DATA_SUFFIX}"), key=lambda p: p.as_posix()):
+        rel = path.relative_to(sch.data_dir)
+        if path.is_file() and path.suffix.lower() == DATA_SUFFIX and not any(
+            p.startswith((".", "_")) for p in rel.parts
+        ):
+            groups.setdefault(table_key(rel), []).append(path)
     seen: set[str] = set()
     in_workspace = sch.location == "workspace"
-    for path in sorted(sch.data_dir.rglob("*")):
-        rel = path.relative_to(sch.data_dir)
-        if (
-            not path.is_file()
-            or path.suffix.lower() not in (".csv", ".json")
-            or any(p.startswith(".") for p in rel.parts)
-        ):
-            continue
-        loaded = _load_file(path)
+    for key, files in groups.items():
+        loaded = _load_parquet(files)
         if loaded is None:
             continue
-        name = table_name(rel)
+        name = table_name(key)
         while name in seen:
             name += "_"
         seen.add(name)
+        source = sch.data_dir / key
         tables.append(
-            _Loaded(sch.name, name, _display_path(paths, path, in_workspace), loaded[0], loaded[1], in_workspace)
+            _Loaded(sch.name, name, _display_path(paths, source, in_workspace), loaded[0], loaded[1], in_workspace)
         )
 
 
@@ -433,7 +451,7 @@ def export(
 
 
 class CatalogImportFile(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)  # file name, e.g. "orders.csv"
+    name: str = Field(..., min_length=1, max_length=200)  # file name, e.g. "orders.parquet"
     content_base64: str
 
 
@@ -459,7 +477,7 @@ MAX_CATALOG_IMPORT_BYTES = 50 * 1024 * 1024
 def import_tables(
     body: CatalogImportIn, paths: CatalogPaths = Depends(get_catalog_paths)
 ) -> CatalogImportResult:
-    """Add CSV or JSON files as tables of a schema.
+    """Add Parquet files as tables of a schema.
 
     An existing schema gets the files in its folder (a project's ``data/``, or
     its catalog folder). A new schema name creates a folder for it in the
@@ -486,8 +504,8 @@ def import_tables(
     errors: list[str] = []
     for f in body.files:
         name = Path(f.name.replace("\\", "/")).name
-        if name.startswith(".") or Path(name).suffix.lower() not in (".csv", ".json"):
-            errors.append(f"'{f.name}': only .csv and .json files can be imported")
+        if name.startswith((".", "_")) or Path(name).suffix.lower() != DATA_SUFFIX:
+            errors.append(f"'{f.name}': only Parquet (.parquet) files can be imported")
             continue
         try:
             data = base64.b64decode(f.content_base64, validate=True)
@@ -505,8 +523,8 @@ def import_tables(
         for name, data in decoded.items():
             probe = Path(tmp) / name
             probe.write_bytes(data)
-            if _load_file(probe) is None:
-                errors.append(f"'{name}' could not be read as a table (CSV with a header, or JSON objects)")
+            if _load_parquet([probe]) is None:
+                errors.append(f"'{name}' could not be read as a Parquet table")
     if errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"errors": errors})
 
@@ -524,10 +542,6 @@ def import_tables(
 
     data_dir.mkdir(parents=True, exist_ok=True)
     for name, data in decoded.items():
-        stem = Path(name).stem
-        if body.overwrite:  # replace the table even if it came from the other format
-            for other in (".csv", ".json"):
-                (data_dir / f"{stem}{other}").unlink(missing_ok=True)
         (data_dir / name).write_bytes(data)
 
     final = next(sch for sch in schemas(paths) if sch.data_dir.resolve() == data_dir.resolve())

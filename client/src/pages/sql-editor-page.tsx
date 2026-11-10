@@ -145,7 +145,7 @@ export function SqlEditorPage() {
         title="SQL Editor"
         description={
           <>
-            Read-only SQL (SQLite) over the CSV and JSON files in the <code className="font-mono">data/</code>{" "}
+            Read-only SQL (SQLite) over the Parquet files in the <code className="font-mono">data/</code>{" "}
             folders of the workspace and its projects
           </>
         }
@@ -558,7 +558,7 @@ function TableList({
           <Skeleton className="m-2 h-40" />
         ) : !bySchema.size ? (
           <p className="text-muted-foreground p-3 text-sm">
-            No tables yet. Import CSV or JSON files in the Catalog tab.
+            No tables yet. Import Parquet files in the Catalog tab.
           </p>
         ) : (
           <div className="py-1">

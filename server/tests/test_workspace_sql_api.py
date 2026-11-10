@@ -1,21 +1,43 @@
-import json
+import datetime as dt
+import io
+from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.csv as pacsv
+import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
-from prooflix.api.sql import table_name
+from prooflix.api.sql import table_key, table_name
 from prooflix.config import Settings
 from prooflix.main import create_app
 
 
+def write_parquet(path: Path, rows: list[dict]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    return path
+
+
+def parquet_bytes(rows: list[dict]) -> bytes:
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(rows), buf)
+    return buf.getvalue()
+
+
 @pytest.fixture
 def client(sample_workspace, tmp_path):
-    out = sample_workspace / "data" / "output" / "2026-01-01"
-    out.mkdir(parents=True)
-    (out / "clean_orders.json").write_text(
-        json.dumps([{"order_id": 1, "amount": 10.5, "tags": ["a"]}, {"order_id": 2, "amount": 4}])
+    data = sample_workspace / "data"
+    # the catalog reads Parquet only: data/orders.parquet is the table "orders"
+    pq.write_table(pacsv.read_csv(data / "orders.csv"), data / "orders.parquet")
+    # a folder of Parquet files is one table: output/2026-01-01/clean_orders
+    out = data / "output" / "2026-01-01" / "clean_orders"
+    write_parquet(out / "part-0.parquet", [{"order_id": 1, "amount": 10.5, "tags": ["a"]}])
+    write_parquet(out / "part-1.parquet", [{"order_id": 2, "amount": 4.0, "tags": None}])
+    write_parquet(
+        data / "output" / "2026-01-01" / "summary" / "summary.parquet",
+        [{"total": 14.5, "day": dt.date(2026, 1, 1), "at": dt.datetime(2026, 1, 1, 8, 30)}],
     )
-    (out / "summary.json").write_text(json.dumps({"total": 14.5, "by_country": {"IL": 14.5}}))
     (sample_workspace / ".prooflix").mkdir(exist_ok=True)
     settings = Settings(workspace=sample_workspace, client_dist=tmp_path / "no-client")
     with TestClient(create_app(settings)) as c:
@@ -45,21 +67,40 @@ def test_read_file_refuses_paths_outside_or_hidden(client, path):
 
 
 # ---------------------------------------------------------------- sql
-def test_table_name():
-    from pathlib import Path
+def test_table_name_and_key():
+    assert table_name(Path("orders.parquet")) == "orders"
+    assert table_name(Path("output/2026-11-07/clean_orders")) == "output_2026_11_07_clean_orders"
+    assert table_name(Path("2026.parquet")) == "t_2026"
+    assert table_key(Path("orders.parquet")) == Path("orders.parquet")
+    assert table_key(Path("destination/customers/part-0.parquet")) == Path("destination/customers")
 
-    assert table_name(Path("orders.csv")) == "orders"
-    assert table_name(Path("output/2026-11-07/clean_orders.json")) == "output_2026_11_07_clean_orders"
-    assert table_name(Path("2026.csv")) == "t_2026"
 
-
-def test_tables_lists_csv_and_json_files(client):
+def test_tables_are_parquet_files_and_folders_only(client, sample_workspace):
+    (sample_workspace / "data" / "notes.json").write_text('[{"a": 1}]')  # not a data lake file
     tables = {t["name"]: t for t in client.get("/api/sql/tables").json()}
-    assert tables["orders"]["source"] == "data/orders.csv"
+    assert set(tables) == {"orders", "output_2026_01_01_clean_orders", "output_2026_01_01_summary"}
+    assert tables["orders"]["source"] == "data/orders.parquet"
     assert tables["orders"]["row_count"] > 0
     clean = tables["output_2026_01_01_clean_orders"]
+    assert clean["source"] == "data/output/2026-01-01/clean_orders"
+    assert clean["row_count"] == 2  # both part files
     assert [c["name"] for c in clean["columns"]] == ["order_id", "amount", "tags"]
-    assert tables["output_2026_01_01_summary"]["row_count"] == 1
+    summary = tables["output_2026_01_01_summary"]
+    assert summary["row_count"] == 1
+    assert [c["type"] for c in summary["columns"]] == ["REAL", "TEXT", "TEXT"]
+
+
+def test_dates_and_timestamps_are_iso_text(client):
+    rows = client.post("/api/sql/query", json={"sql": "SELECT day, at FROM output_2026_01_01_summary"}).json()["rows"]
+    assert rows == [["2026-01-01", "2026-01-01 08:30:00"]]
+
+
+def test_hidden_and_underscore_parquet_files_are_skipped(client, sample_workspace):
+    write_parquet(sample_workspace / "data" / "_tmp" / "x.parquet", [{"a": 1}])
+    write_parquet(sample_workspace / "data" / ".cache" / "y.parquet", [{"a": 1}])
+    (sample_workspace / "data" / "broken.parquet").write_text("not parquet")
+    names = {t["name"] for t in client.get("/api/sql/tables").json()}
+    assert not names & {"t_tmp", "tmp", "cache", "broken"}
 
 
 def test_query_returns_rows_with_numbers(client):
@@ -202,15 +243,14 @@ def _add_project_with_data(root):
     (project / "pipelines" / "proj_p.yaml").write_text(
         "tasks:\n  - key: a\n    type: shell\n    command: 'true'\n"
     )
-    (project / "data").mkdir()
-    (project / "data" / "orders.csv").write_text("id,amount\n1,5\n2,7\n")
+    write_parquet(project / "data" / "orders.parquet", [{"id": 1, "amount": 5}, {"id": 2, "amount": 7}])
     (root / "empty-project" / "pipelines").mkdir(parents=True)
 
 
 def test_project_tables_live_in_their_own_schema(client, sample_workspace):
     _add_project_with_data(sample_workspace)
     tables = {t["qualified"]: t for t in client.get("/api/sql/tables").json()}
-    assert tables["orders"]["schema"] == "main"  # the workspace's own data/orders.csv
+    assert tables["orders"]["schema"] == "main"  # the workspace's own data/orders.parquet
     assert tables["my_project.orders"]["schema"] == "my_project"
     assert tables["my_project.orders"]["name"] == "orders"
     body = client.post("/api/sql/query", json={"sql": "SELECT SUM(amount) FROM my_project.orders"}).json()
@@ -248,8 +288,9 @@ import io as _io
 import zipfile as _zipfile
 
 
-def _upload(name, text):
-    return {"name": name, "content_base64": _b64.b64encode(text.encode()).decode()}
+def _upload(name, content):
+    data = content if isinstance(content, bytes) else content.encode()
+    return {"name": name, "content_base64": _b64.b64encode(data).decode()}
 
 
 def test_catalog_import_into_new_schema_and_export(client, sample_workspace):
@@ -257,7 +298,10 @@ def test_catalog_import_into_new_schema_and_export(client, sample_workspace):
         "/api/catalog/import",
         json={
             "schema": "Sales Data",
-            "files": [_upload("deals.csv", "id,amount\n1,10\n2,20\n"), _upload("regions.json", '[{"code":"IL"}]')],
+            "files": [
+                _upload("deals.parquet", parquet_bytes([{"id": 1, "amount": 10}, {"id": 2, "amount": 20}])),
+                _upload("regions.parquet", parquet_bytes([{"code": "IL"}])),
+            ],
         },
     )
     assert res.status_code == 200, res.text
@@ -265,11 +309,11 @@ def test_catalog_import_into_new_schema_and_export(client, sample_workspace):
     assert body == {"schema": "sales_data", "folder": "catalog/Sales-Data", "tables": ["deals", "regions"], "created_schema": True}
     # a new schema lives in the catalog folder next to the workspace, not in the workspace
     catalog_dir = sample_workspace.parent / "catalog"
-    assert (catalog_dir / "Sales-Data" / "deals.csv").is_file()
+    assert (catalog_dir / "Sales-Data" / "deals.parquet").is_file()
     assert not (sample_workspace / "Sales-Data").exists()
     assert "Sales-Data" not in [c["name"] for c in client.get("/api/workspace/tree").json()["children"]]
     tables = {t["qualified"]: t for t in client.get("/api/sql/tables").json()}
-    assert tables["sales_data.deals"]["source"] == "catalog/Sales-Data/deals.csv"
+    assert tables["sales_data.deals"]["source"] == "catalog/Sales-Data/deals.parquet"
     assert tables["sales_data.deals"]["in_workspace"] is False
     assert tables["orders"]["in_workspace"] is True
     rows = client.post("/api/sql/query", json={"sql": "SELECT SUM(amount) FROM sales_data.deals"}).json()["rows"]
@@ -290,12 +334,11 @@ def test_catalog_import_into_new_schema_and_export(client, sample_workspace):
 
 
 def test_catalog_import_conflict_and_overwrite(client, sample_workspace):
-    res = client.post("/api/catalog/import", json={"schema": "main", "files": [_upload("orders.csv", "a\n1\n")]})
+    upload = _upload("orders.parquet", parquet_bytes([{"a": 1}]))
+    res = client.post("/api/catalog/import", json={"schema": "main", "files": [upload]})
     assert res.status_code == 409
     assert res.json()["detail"]["conflicts"] == ["orders"]
-    res = client.post(
-        "/api/catalog/import", json={"schema": "main", "files": [_upload("orders.csv", "a\n1\n")], "overwrite": True}
-    )
+    res = client.post("/api/catalog/import", json={"schema": "main", "files": [upload], "overwrite": True})
     assert res.status_code == 200
     assert client.post("/api/sql/query", json={"sql": "SELECT * FROM orders"}).json()["rows"] == [[1]]
 
@@ -304,9 +347,10 @@ def test_catalog_import_conflict_and_overwrite(client, sample_workspace):
     "files",
     [
         [_upload("notes.txt", "hello")],
-        [_upload("bad.json", '{"not": "a list"')],
-        [_upload("empty.csv", "")],
-        [_upload(".hidden.csv", "a\n1\n")],
+        [_upload("deals.csv", "id,amount\n1,10\n")],  # CSV and JSON are not data lake files
+        [_upload("regions.json", '[{"code":"IL"}]')],
+        [_upload("bad.parquet", "not parquet")],
+        [_upload(".hidden.parquet", parquet_bytes([{"a": 1}]))],
     ],
 )
 def test_catalog_import_rejects_non_tables(client, sample_workspace, files):
@@ -324,7 +368,10 @@ def test_export_unknown_table_or_schema(client):
 def test_export_table_as_parquet_zip(client, sample_workspace):
     import pyarrow.parquet as pq
 
-    (sample_workspace / "data" / "mixed.csv").write_text("id,amount,label\n1,2.5,a\n2,,b\n3,4,\n")
+    write_parquet(
+        sample_workspace / "data" / "mixed.parquet",
+        [{"id": 1, "amount": 2.5, "label": "a"}, {"id": 2, "amount": None, "label": "b"}, {"id": 3, "amount": 4.0, "label": None}],
+    )
     res = client.get("/api/catalog/export", params={"table": "main.mixed", "format": "parquet"})
     assert res.status_code == 200, res.text
     assert res.headers["content-type"] == "application/zip"

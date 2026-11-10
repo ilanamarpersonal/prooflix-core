@@ -31,7 +31,7 @@ const tableNameOf = (file: string) => {
   return name && !/^\d/.test(name) ? name : `t_${name}`
 }
 
-/** Upload CSV or JSON files as tables of an existing or a new schema. */
+/** Upload Parquet files as tables of an existing or a new schema. */
 export function CatalogImportPanel({
   schemas,
   defaultSchema,
@@ -86,7 +86,7 @@ export function CatalogImportPanel({
           <div>
             <h2 className="font-medium">Import tables</h2>
             <p className="text-muted-foreground text-sm">
-              Each CSV (with a header row) or JSON file (a list of objects) becomes a table of the schema.
+              Each Parquet file becomes a table of the schema.
             </p>
           </div>
           <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onClose} aria-label="Close import">
@@ -136,13 +136,13 @@ export function CatalogImportPanel({
             <FilePlus2 /> Choose files
           </Button>
           <span className="text-muted-foreground text-sm">
-            {files.length ? `${files.length} file${files.length === 1 ? "" : "s"} chosen` : ".csv or .json"}
+            {files.length ? `${files.length} file${files.length === 1 ? "" : "s"} chosen` : ".parquet"}
           </span>
           <input
             ref={input}
             type="file"
             multiple
-            accept=".csv,.json"
+            accept=".parquet"
             className="hidden"
             onChange={(e) => {
               setFiles(Array.from(e.target.files ?? []))

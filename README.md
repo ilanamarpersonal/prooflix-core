@@ -9,7 +9,7 @@ files in a workspace, executed by a Python server, and managed from a React
 server/      Python server (FastAPI) and CLI         → docs/server.md
 client/      React + shadcn/ui web client            → docs/client.md
 workspace/   imported projects (each with pipelines/ and src/) → docs/pipelines.md
-catalog/     imported datasets, one folder per schema (CSV/JSON tables)
+catalog/     imported datasets, one folder per schema (Parquet tables)
 docs/        design documents with diagrams           → docs/README.md
 ```
 
