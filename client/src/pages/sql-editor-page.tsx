@@ -692,7 +692,7 @@ function TableList({
         )}
       </div>
       <p className="text-muted-foreground shrink-0 border-t px-3 py-2 text-xs">
-        Click a table or column to type its name into the query at the cursor.
+        Click a table to see its columns, and a column to type its name into the query at the cursor.
       </p>
     </Card>
   )
@@ -782,26 +782,24 @@ function TableItem({
   const [open, setOpen] = useState(false)
   return (
     <div>
-      <div className={cn("hover:bg-accent flex items-center gap-1 pr-2 text-sm", nested ? "pl-9" : "pl-5")}>
-        <button
-          type="button"
-          onClick={() => setOpen(!open)}
-          aria-label={open ? `Hide columns of ${table.name}` : `Show columns of ${table.name}`}
-          aria-expanded={open}
-          className="grid size-5 shrink-0 place-items-center"
-        >
+      {/* clicking a table shows or hides its columns; it doesn't type anything into the query */}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={open ? `Hide columns of ${table.name}` : `Show columns of ${table.name}`}
+        title={`${table.qualified} · ${table.row_count} rows · ${table.source}`}
+        className={cn(
+          "hover:bg-accent flex w-full items-center gap-1 py-1 pr-2 text-left text-sm",
+          nested ? "pl-9" : "pl-5",
+        )}
+      >
+        <span className="grid size-5 shrink-0 place-items-center">
           <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
-        </button>
-        <button
-          type="button"
-          onClick={() => onInsert(table.qualified)}
-          title={`Insert ${table.qualified} · ${table.row_count} rows · ${table.source}`}
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-        >
-          <Table2 className="text-muted-foreground size-4 shrink-0" />
-          <span className="truncate font-mono text-xs">{table.name}</span>
-        </button>
-      </div>
+        </span>
+        <Table2 className="text-muted-foreground size-4 shrink-0" />
+        <span className="truncate font-mono text-xs">{table.name}</span>
+      </button>
       {open && (
         <div className="pb-1">
           {table.columns.map((c) => (
