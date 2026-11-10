@@ -6,6 +6,7 @@ import {
   type PipelineSummary,
   type Run,
   type RunTree,
+  type SchedulePreview,
   type SqlResult,
   type SqlTable,
   type CatalogImportResult,
@@ -69,6 +70,11 @@ export const api = {
       body: JSON.stringify({ source }),
     }),
   deletePipeline: (id: string) => request<void>(`/pipelines/${id}`, { method: "DELETE" }),
+  setSchedule: (id: string, schedule: { cron: string; timezone: string; enabled: boolean }) =>
+    request<PipelineDetail>(`/pipelines/${id}/schedule`, { method: "PUT", body: JSON.stringify(schedule) }),
+  removeSchedule: (id: string) => request<PipelineDetail>(`/pipelines/${id}/schedule`, { method: "DELETE" }),
+  previewSchedule: (cron: string, timezone: string) =>
+    request<SchedulePreview>("/schedules/preview", { method: "POST", body: JSON.stringify({ cron, timezone }) }),
   startRun: (id: string, parameters: Record<string, unknown>) =>
     request<Run>(`/pipelines/${id}/runs`, {
       method: "POST",
@@ -85,8 +91,7 @@ export const api = {
   getRunTree: (id: string) => request<RunTree>(`/runs/${id}/tree`),
   cancelRun: (id: string) => request<Run>(`/runs/${id}/cancel`, { method: "POST" }),
   workspaceTree: () => request<WorkspaceNode>("/workspace/tree"),
-  workspaceFile: (path: string) =>
-    request<WorkspaceFile>(`/workspace/file?${new URLSearchParams({ path })}`),
+  workspaceFile: (path: string) => request<WorkspaceFile>(`/workspace/file?${new URLSearchParams({ path })}`),
   workspaceImport: (files: { path: string; content_base64: string }[], overwrite = false) =>
     request<ImportResult>("/workspace/import", {
       method: "POST",
@@ -106,8 +111,7 @@ export const api = {
 }
 
 const isActive = (r?: { status: Run["status"] }) => !!r && !TERMINAL_STATUSES.includes(r.status)
-const anyActive = (tree?: RunTree): boolean =>
-  !!tree && (isActive(tree) || tree.children.some(anyActive))
+const anyActive = (tree?: RunTree): boolean => !!tree && (isActive(tree) || tree.children.some(anyActive))
 
 // ---------------------------------------------------------------- query hooks
 export const usePipelines = () => useQuery({ queryKey: ["pipelines"], queryFn: api.listPipelines })
@@ -158,6 +162,24 @@ export function useSavePipeline() {
   })
 }
 
+/** Set (schedule given) or remove (null) a pipeline's schedule. */
+export function useSetSchedule() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      schedule,
+    }: {
+      id: string
+      schedule: { cron: string; timezone: string; enabled: boolean } | null
+    }) => (schedule ? api.setSchedule(id, schedule) : api.removeSchedule(id)),
+    onSuccess: (data) => {
+      qc.setQueryData(["pipelines", data.id], data)
+      qc.invalidateQueries({ queryKey: ["pipelines"] })
+    },
+  })
+}
+
 export function useDeletePipeline() {
   const qc = useQueryClient()
   return useMutation({
@@ -166,8 +188,7 @@ export function useDeletePipeline() {
   })
 }
 
-export const useWorkspaceTree = () =>
-  useQuery({ queryKey: ["workspace", "tree"], queryFn: api.workspaceTree })
+export const useWorkspaceTree = () => useQuery({ queryKey: ["workspace", "tree"], queryFn: api.workspaceTree })
 
 export const useWorkspaceFile = (path: string | null) =>
   useQuery({
@@ -187,13 +208,8 @@ export const useSqlQuery = () =>
 export function useImportWorkspace() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({
-      files,
-      overwrite,
-    }: {
-      files: { path: string; content_base64: string }[]
-      overwrite?: boolean
-    }) => api.workspaceImport(files, overwrite),
+    mutationFn: ({ files, overwrite }: { files: { path: string; content_base64: string }[]; overwrite?: boolean }) =>
+      api.workspaceImport(files, overwrite),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workspace"] })
       qc.invalidateQueries({ queryKey: ["pipelines"] })
@@ -215,9 +231,7 @@ export function useRemoveWorkspaceItem() {
 }
 
 /** Download link for a table (CSV), a schema (ZIP) or the whole catalog (ZIP). */
-export function catalogExportUrl(
-  target: { table?: string; schema?: string; format?: "csv" | "parquet" } = {},
-) {
+export function catalogExportUrl(target: { table?: string; schema?: string; format?: "csv" | "parquet" } = {}) {
   const q = new URLSearchParams()
   if (target.table) q.set("table", target.table)
   else if (target.schema) q.set("schema", target.schema)

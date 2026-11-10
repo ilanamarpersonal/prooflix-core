@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router"
-import { AlertTriangle, FolderInput, History, Plus, Workflow } from "lucide-react"
+import { AlarmClock, AlertTriangle, FolderInput, History, Plus, Workflow } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
@@ -7,15 +7,20 @@ import { RunButton } from "@/components/run-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Pager } from "@/components/pager"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { RunsTable } from "@/components/runs-table"
 import { usePipelines, useRuns } from "@/lib/api"
+import { describeCron } from "@/lib/schedule"
+import { usePagination } from "@/lib/use-pagination"
+import { formatDateTime } from "@/lib/utils"
 
 export function PipelinesPage() {
   const { data, isLoading, error } = usePipelines()
   const navigate = useNavigate()
   const hasPipelines = !!data?.length
+  const pager = usePagination(data, 10)
   const runs = useRuns({ rootOnly: true, limit: 500 })
   // All runs of the pipelines in the workspace, newest first.
   const ids = new Set(data?.map((p) => p.id))
@@ -60,83 +65,106 @@ export function PipelinesPage() {
               </Button>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Id</TableHead>
-                  <TableHead>Project</TableHead>
-                  <TableHead>Tasks</TableHead>
-                  <TableHead>Sub-pipelines</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-0" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.map((p) => (
-                  <TableRow
-                    key={p.id}
-                    className="cursor-pointer"
-                    onClick={(e) => {
-                      // the whole row opens the pipeline, except its links and buttons
-                      if (!(e.target as HTMLElement).closest("a,button")) navigate(`/pipelines/${p.id}`)
-                    }}
-                  >
-                    <TableCell className="max-w-80">
-                      <Link to={`/pipelines/${p.id}`} className="font-medium hover:underline">
-                        {p.name}
-                      </Link>
-                      {p.description && (
-                        <div className="text-muted-foreground truncate text-xs">{p.description}</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground font-mono text-xs">{p.id}</TableCell>
-                    <TableCell className="text-muted-foreground font-mono text-xs">
-                      {p.file ? (
-                        <Link to={`/workspace?${new URLSearchParams({ path: p.file })}`} className="hover:underline">
-                          {p.project || "workspace"}
-                        </Link>
-                      ) : (
-                        p.project || "workspace"
-                      )}
-                    </TableCell>
-                    <TableCell>{p.task_count}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {p.sub_pipelines.length ? (
-                          p.sub_pipelines.map((s) => (
-                            <Badge key={s} variant="secondary" asChild>
-                              <Link to={`/pipelines/${s}`}>{s}</Link>
-                            </Badge>
-                          ))
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {p.valid ? (
-                        <Badge variant="outline" className="text-status-succeeded">
-                          valid
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
-                          <AlertTriangle /> {p.errors.length} error{p.errors.length > 1 ? "s" : ""}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <RunButton
-                        pipeline={p}
-                        size="sm"
-                        variant="outline"
-                        onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
-                      />
-                    </TableCell>
+            <>
+              <Table containerClassName="max-h-[60vh] overflow-y-auto">
+                <TableHeader className="bg-card sticky top-0 z-10 shadow-[inset_0_-1px_0_var(--border)]">
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Id</TableHead>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Tasks</TableHead>
+                    <TableHead>Sub-pipelines</TableHead>
+                    <TableHead>Trigger</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="w-0" />
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {pager.items.map((p) => (
+                    <TableRow
+                      key={p.id}
+                      className="cursor-pointer"
+                      onClick={(e) => {
+                        // the whole row opens the pipeline, except its links and buttons
+                        if (!(e.target as HTMLElement).closest("a,button")) navigate(`/pipelines/${p.id}`)
+                      }}
+                    >
+                      <TableCell className="max-w-80">
+                        <Link to={`/pipelines/${p.id}`} className="font-medium hover:underline">
+                          {p.name}
+                        </Link>
+                        {p.description && <div className="text-muted-foreground truncate text-xs">{p.description}</div>}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-xs">{p.id}</TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-xs">
+                        {p.file ? (
+                          <Link to={`/workspace?${new URLSearchParams({ path: p.file })}`} className="hover:underline">
+                            {p.project || "workspace"}
+                          </Link>
+                        ) : (
+                          p.project || "workspace"
+                        )}
+                      </TableCell>
+                      <TableCell>{p.task_count}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {p.sub_pipelines.length ? (
+                            p.sub_pipelines.map((s) => (
+                              <Badge key={s} variant="secondary" asChild>
+                                <Link to={`/pipelines/${s}`}>{s}</Link>
+                              </Badge>
+                            ))
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {!p.schedule ? (
+                          <span className="text-muted-foreground">Manual</span>
+                        ) : (
+                          <div title={`${p.schedule.cron} (${p.schedule.timezone})`}>
+                            <div className="flex items-center gap-1">
+                              <AlarmClock className="text-primary size-3.5" />
+                              {describeCron(p.schedule.cron)}
+                              {!p.schedule.enabled && (
+                                <Badge variant="outline" className="ml-1 px-1 py-0 text-[10px]">
+                                  paused
+                                </Badge>
+                              )}
+                            </div>
+                            {p.schedule.enabled && p.schedule.next_run && (
+                              <div className="text-muted-foreground">next {formatDateTime(p.schedule.next_run)}</div>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {p.valid ? (
+                          <Badge variant="outline" className="text-status-succeeded">
+                            valid
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
+                            <AlertTriangle /> {p.errors.length} error
+                            {p.errors.length > 1 ? "s" : ""}
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <RunButton
+                          pipeline={p}
+                          size="sm"
+                          variant="outline"
+                          onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <Pager pagination={pager} label="pipelines" />
+            </>
           )}
         </CardContent>
       </Card>

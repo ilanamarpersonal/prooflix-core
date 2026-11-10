@@ -12,6 +12,7 @@ import { RunsTable } from "@/components/runs-table"
 import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
 import { StatusBadge } from "@/components/status-badge"
 import { TaskTypeIcon } from "@/components/task-type-icon"
+import { TriggerCard } from "@/components/trigger-card"
 import { YamlEditor } from "@/components/yaml-editor"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -100,6 +101,7 @@ export function PipelineDetailPage() {
       <div className="mb-4 grid gap-4">
         {del.error && <ErrorAlert title="Could not delete" error={del.error} />}
         <ValidationErrors errors={pipeline.errors} />
+        {pipeline.valid && <TriggerCard pipeline={pipeline} />}
         {latest && (
           <Card className="py-3">
             <CardContent className="flex flex-wrap items-center gap-3 px-4 text-sm">

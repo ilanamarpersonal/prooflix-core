@@ -95,11 +95,11 @@ def test_tables_are_parquet_files_and_folders_only(client, sample_workspace):
     assert [c["name"] for c in clean["columns"]] == ["order_id", "amount", "tags"]
     summary = tables["tenant1.bronze.summary"]
     assert summary["row_count"] == 1
-    assert [c["type"] for c in summary["columns"]] == ["REAL", "TEXT", "TEXT"]
+    assert [c["type"] for c in summary["columns"]] == ["DOUBLE", "DATE", "TIMESTAMP"]  # DuckDB types
 
 
 def test_dates_and_timestamps_are_iso_text(client):
-    rows = client.post("/api/sql/query", json={"sql": "SELECT day, at FROM tenant1.bronze.summary"}).json()["rows"]
+    rows = client.post("/api/sql/query", json={"sql": 'SELECT day, "at" FROM tenant1.bronze.summary'}).json()["rows"]
     assert rows == [["2026-01-01", "2026-01-01 08:30:00"]]
 
 
@@ -284,8 +284,8 @@ def test_catalog_lists_schemas_and_tables(client, sample_workspace):
     assert cat["my_project"]["data_dir"] == "my-project/data"
     assert [t["name"] for t in cat["my_project"]["tables"]] == ["orders"]
     assert cat["my_project"]["tables"][0]["columns"] == [
-        {"name": "id", "type": "INTEGER"},
-        {"name": "amount", "type": "INTEGER"},
+        {"name": "id", "type": "BIGINT"},
+        {"name": "amount", "type": "BIGINT"},
     ]
 
 
@@ -422,15 +422,39 @@ def test_three_part_names_in_queries(client):
     assert client.post("/api/sql/query", json={"sql": sql}).json()["rows"] == [[1], [2]]
 
 
-def test_rewrite_three_part_names_leaves_strings_and_other_names():
-    from prooflix.api.sql import rewrite_three_part_names as rewrite
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM read_text('/etc/passwd')",
+        "SELECT * FROM read_csv('../outside.csv')",
+        "SELECT * FROM read_parquet('/tmp/*.parquet')",
+    ],
+)
+def test_queries_can_only_read_the_catalogs_tables(client, sql):
+    res = client.post("/api/sql/query", json={"sql": sql})
+    assert res.status_code == 400
+    assert "can only read" in res.json()["detail"] or "Permission" in res.json()["detail"]
 
-    names = ["main", "tenant1.bronze", "my_project"]
-    assert rewrite("SELECT * FROM tenant1.bronze.t", names) == 'SELECT * FROM "tenant1.bronze".t'
-    assert rewrite("SELECT 'tenant1.bronze.t'", names) == "SELECT 'tenant1.bronze.t'"
-    assert rewrite("SELECT * FROM xtenant1.bronze.t, my_project.t", names) == (
-        "SELECT * FROM xtenant1.bronze.t, my_project.t"
-    )
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "COPY (SELECT 1) TO 'data/out.csv'",
+        "INSTALL httpfs",
+        "SET enable_external_access = true",
+        "CREATE VIEW v AS SELECT 1",
+    ],
+)
+def test_only_select_statements_run(client, sample_workspace, sql):
+    res = client.post("/api/sql/query", json={"sql": sql})
+    assert res.status_code == 400
+    assert "read only" in res.json()["detail"]
+    assert not (sample_workspace / "data" / "out.csv").exists()
+
+
+def test_large_results_are_cut_at_the_limit(client):
+    body = client.post("/api/sql/query", json={"sql": "SELECT * FROM range(1000000)", "limit": 5}).json()
+    assert body["rows"] == [[0], [1], [2], [3], [4]] and body["truncated"] is True
 
 
 def test_catalog_folder_files_outside_schema_folders_are_ignored(client, sample_workspace):

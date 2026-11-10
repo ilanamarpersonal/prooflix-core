@@ -20,13 +20,20 @@ Example::
         command: echo "rows=${tasks.ingest.output.row_count}"
     outputs:
       rows: ${tasks.ingest.output.row_count}
+    schedule:                 # optional: run automatically
+      cron: "0 2 * * *"       # minute hour day-of-month month day-of-week
+      timezone: UTC
+      enabled: true           # false pauses the schedule
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .cron import Cron, CronError, zone
 
 PIPELINE_ID_PATTERN = r"^[a-z0-9][a-z0-9_\-]*$"
 # Task keys are identifiers so they can be referenced as ${tasks.<key>.output}.
@@ -73,6 +80,33 @@ class PipelineTask(TaskBase):
 Task = Annotated[Union[PythonTask, ShellTask, PipelineTask], Field(discriminator="type")]
 
 
+class ScheduleSpec(_Model):
+    """When the pipeline runs on its own. Without a schedule it only runs when started."""
+
+    cron: str = Field(description="Cron expression: minute hour day-of-month month day-of-week")
+    timezone: str = Field(default="UTC", description="IANA time zone the cron times are in")
+    enabled: bool = Field(default=True, description="false pauses the schedule")
+
+    @field_validator("cron")
+    @classmethod
+    def _valid_cron(cls, value: str) -> str:
+        try:
+            cron = Cron.parse(value)
+            cron.next_after(datetime.now(timezone.utc))  # e.g. "0 0 31 2 *" never matches
+        except CronError as exc:
+            raise ValueError(str(exc)) from exc
+        return cron.expression
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_zone(cls, value: str) -> str:
+        try:
+            zone(value)
+        except CronError as exc:
+            raise ValueError(str(exc)) from exc
+        return value
+
+
 class PipelineSpec(_Model):
     name: str | None = Field(default=None, description="Display name; defaults to the id")
     description: str | None = None
@@ -84,6 +118,7 @@ class PipelineSpec(_Model):
         default_factory=dict,
         description="Values returned to a calling pipeline, usually ${tasks.<key>.output...}",
     )
+    schedule: ScheduleSpec | None = Field(default=None, description="Run automatically on a cron schedule")
 
     def task(self, key: str) -> PythonTask | ShellTask | PipelineTask:
         for t in self.tasks:

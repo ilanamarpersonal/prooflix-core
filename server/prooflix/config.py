@@ -22,10 +22,12 @@ class Settings:
       PROOFLIX_CORS        comma-separated allowed browser origins
       PROOFLIX_CATALOG     folder holding catalog schemas that are not part of a
                            project (default: a "catalog" folder next to the workspace)
+      PROOFLIX_SCHEDULER   "0" turns off running pipelines on their schedules (default on)
     """
 
     workspace: Path = DEFAULT_WORKSPACE
     max_depth: int = 10
+    scheduler: bool = True  # run pipelines on their cron schedules
     cors_origins: tuple[str, ...] = field(
         default=("http://localhost:5173", "http://127.0.0.1:5173")
     )
@@ -55,6 +57,8 @@ class Settings:
             kwargs["workspace"] = Path(ws).expanduser().resolve()
         if catalog := os.environ.get("PROOFLIX_CATALOG"):
             kwargs["catalog"] = Path(catalog).expanduser().resolve()
+        if (sched := os.environ.get("PROOFLIX_SCHEDULER")) is not None:
+            kwargs["scheduler"] = sched.strip().lower() not in ("0", "false", "no", "off")
         if depth := os.environ.get("PROOFLIX_MAX_DEPTH"):
             kwargs["max_depth"] = int(depth)
         if cors := os.environ.get("PROOFLIX_CORS"):

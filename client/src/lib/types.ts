@@ -33,6 +33,30 @@ export interface PipelineSummary {
   project: string
   /** the pipeline's YAML file, relative to the workspace */
   file: string | null
+  /** null: the pipeline only runs when started */
+  schedule: ScheduleInfo | null
+}
+
+export interface ScheduleInfo {
+  /** minute hour day-of-month month day-of-week */
+  cron: string
+  /** IANA time zone the cron times are in */
+  timezone: string
+  enabled: boolean
+  /** null while paused */
+  next_run: string | null
+  last_run_id: string | null
+  last_run_at: string | null
+  /** a due run skipped because the previous run was still going */
+  last_skipped_at: string | null
+  last_error: string | null
+}
+
+export interface SchedulePreview {
+  valid: boolean
+  error: string | null
+  cron: string | null
+  next_runs: string[]
 }
 
 export interface PipelineDetail extends PipelineSummary {
@@ -79,6 +103,10 @@ export interface Run {
   root_run_id: string | null
   depth: number
   tasks: Record<string, TaskRun>
+  /** what started it: "manual", "schedule" or "pipeline" (a parent run) */
+  trigger?: string
+  /** for scheduled runs: the cron time it was due */
+  scheduled_for?: string | null
 }
 
 export interface RunTree extends Run {

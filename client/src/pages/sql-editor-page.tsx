@@ -73,6 +73,20 @@ function saveEditorHeight(h: number) {
   }
 }
 
+const SCHEMAS_WIDTH_KEY = "prooflix-sql-schemas-width"
+const DEFAULT_SCHEMAS_WIDTH = 240
+const MIN_SCHEMAS_WIDTH = 180
+const MAX_SCHEMAS_WIDTH = 560
+
+function loadSchemasWidth() {
+  try {
+    const w = Number(localStorage.getItem(SCHEMAS_WIDTH_KEY))
+    return w >= MIN_SCHEMAS_WIDTH && w <= MAX_SCHEMAS_WIDTH ? w : DEFAULT_SCHEMAS_WIDTH
+  } catch {
+    return DEFAULT_SCHEMAS_WIDTH
+  }
+}
+
 const MAX_SQL_FILE_BYTES = 1024 * 1024 // a query file larger than 1 MB is almost certainly not a query
 
 /** "Daily totals" -> "Daily totals.sql"; characters file systems reject become "_". */
@@ -91,6 +105,38 @@ function downloadText(name: string, text: string) {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+type SaveResult = { status: "saved" | "downloaded"; name: string } | { status: "cancelled" }
+
+/**
+ * Save text through the browser's "Save as" dialog, so the user picks the folder and
+ * file name (Chrome, Edge and other Chromium browsers). Browsers without that dialog
+ * download the file instead, to the Downloads folder or wherever they ask.
+ */
+async function saveTextAs(name: string, text: string): Promise<SaveResult> {
+  type Picker = (options: object) => Promise<{
+    name: string
+    createWritable: () => Promise<{ write: (data: string) => Promise<void>; close: () => Promise<void> }>
+  }>
+  const picker = (window as unknown as { showSaveFilePicker?: Picker }).showSaveFilePicker
+  if (typeof picker === "function") {
+    try {
+      const handle = await picker({
+        suggestedName: name,
+        types: [{ description: "SQL file", accept: { "application/sql": [".sql"] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(text)
+      await writable.close()
+      return { status: "saved", name: handle.name }
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") return { status: "cancelled" } // closed the dialog
+      // not allowed here (e.g. inside a frame): fall back to a download below
+    }
+  }
+  downloadText(name, text)
+  return { status: "downloaded", name }
 }
 
 function nextTitle(tabs: QueryTab[]) {
@@ -127,6 +173,19 @@ export function SqlEditorPage() {
   // divider splits the column between the editor and the results.
   const panels = useRef<HTMLDivElement>(null)
   const panelsHeight = useFillHeight(panels)
+  // width of the Schemas panel, set with the divider next to it (md+ screens)
+  const [schemasWidth, setSchemasWidth] = useState(loadSchemasWidth)
+  const resizeSchemas = (w: number, save = false) => {
+    const room = (panels.current?.getBoundingClientRect().width ?? 1200) - 360 // keep room for the editor
+    const next = Math.round(Math.min(Math.max(w, MIN_SCHEMAS_WIDTH), Math.min(MAX_SCHEMAS_WIDTH, room)))
+    setSchemasWidth(next)
+    if (save)
+      try {
+        localStorage.setItem(SCHEMAS_WIDTH_KEY, String(next))
+      } catch {
+        /* storage unavailable */
+      }
+  }
   const autoRun = useRef<string | null>(null) // tab id to run once it shows
   const handled = useRef<string | null>(null) // location key of the last handed-over query
 
@@ -184,15 +243,20 @@ export function SqlEditorPage() {
         title="SQL Editor"
         description={
           <>
-            Read-only SQL (SQLite) over the Parquet files in the <code className="font-mono">data/</code> folders of the
+            Read-only SQL (DuckDB) over the Parquet files in the <code className="font-mono">data/</code> folders of the
             workspace and its projects
           </>
         }
       />
       <div
         ref={panels}
-        style={panelsHeight ? { height: panelsHeight } : undefined}
-        className="grid items-start gap-4 md:grid-cols-[15rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:items-stretch"
+        style={
+          {
+            ...(panelsHeight ? { height: panelsHeight } : {}),
+            "--schemas-w": `${schemasWidth}px`,
+          } as React.CSSProperties
+        }
+        className="grid items-start gap-4 md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0"
       >
         <TableList
           tables={tables.data}
@@ -201,6 +265,12 @@ export function SqlEditorPage() {
           onRefresh={() => tables.refetch()}
           refreshing={tables.isFetching}
           onInsert={(text) => editorApi.current?.insert(text)}
+        />
+        <SideDivider
+          width={schemasWidth}
+          onResize={(w) => resizeSchemas(w)}
+          onDone={(w) => resizeSchemas(w, true)}
+          onReset={() => resizeSchemas(DEFAULT_SCHEMAS_WIDTH, true)}
         />
 
         <div data-sql-column className="flex min-h-0 min-w-0 flex-col gap-3">
@@ -230,6 +300,88 @@ export function SqlEditorPage() {
   )
 }
 
+/**
+ * The bar between the Schemas panel and the queries. Drag it (or focus it and use the
+ * arrow keys) to make the panel wider or narrower; double-click to reset.
+ */
+function SideDivider({
+  width,
+  onResize,
+  onDone,
+  onReset,
+}: {
+  width: number
+  onResize: (w: number) => void
+  onDone: (w: number) => void
+  onReset: () => void
+}) {
+  const [dragging, setDragging] = useState(false)
+  const start = useRef<{ x: number; w: number } | null>(null)
+  useEffect(() => {
+    if (!dragging) return
+    const { userSelect, cursor } = document.body.style
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "col-resize"
+    return () => {
+      document.body.style.userSelect = userSelect
+      document.body.style.cursor = cursor
+    }
+  }, [dragging])
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the Schemas panel"
+      aria-valuenow={width}
+      aria-valuemin={MIN_SCHEMAS_WIDTH}
+      aria-valuemax={MAX_SCHEMAS_WIDTH}
+      tabIndex={0}
+      title="Drag to resize the Schemas panel · double-click to reset"
+      className="group hidden w-4 cursor-col-resize touch-none justify-center outline-none md:flex"
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        start.current = { x: e.clientX, w: width }
+        setDragging(true)
+      }}
+      onPointerMove={(e) => {
+        if (start.current) onResize(start.current.w + e.clientX - start.current.x)
+      }}
+      onPointerUp={(e) => {
+        if (!start.current) return
+        onDone(start.current.w + e.clientX - start.current.x)
+        start.current = null
+        setDragging(false)
+      }}
+      onPointerCancel={() => {
+        start.current = null
+        setDragging(false)
+      }}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault()
+          onDone(width + (e.key === "ArrowRight" ? 16 : -16))
+        }
+      }}
+    >
+      <div
+        className={cn(
+          "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary relative h-full w-px transition-colors",
+          dragging && "bg-primary",
+        )}
+      >
+        <span
+          className={cn(
+            "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary absolute top-1/2 left-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors",
+            dragging && "bg-primary",
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
 /** The query tabs above the editor, with the Add query button at the end. */
 function QueryTabsBar({
   tabs,
@@ -248,17 +400,17 @@ function QueryTabsBar({
 }) {
   const [editing, setEditing] = useState<string | null>(null)
   return (
-    <div role="tablist" aria-label="Queries" className="flex items-end gap-1 overflow-x-auto border-b">
+    <div role="tablist" aria-label="Queries" className="flex items-end gap-1 overflow-x-auto border-b-2 pt-1">
       {tabs.map((t) => {
         const isActive = t.id === active
         return (
           <div
             key={t.id}
             className={cn(
-              "group -mb-px flex h-8 shrink-0 items-center rounded-t-md border border-b-0 text-sm",
+              "group -mb-0.5 flex h-9 shrink-0 items-center rounded-t-md border border-b-0 text-sm transition-colors",
               isActive
-                ? "bg-background border-border font-medium"
-                : "text-muted-foreground hover:text-foreground border-transparent",
+                ? "bg-background text-foreground border-border border-t-primary relative z-[1] border-t-2 font-semibold shadow-[0_2px_0_0_var(--background)]"
+                : "bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground",
             )}
           >
             {editing === t.id ? (
@@ -300,7 +452,7 @@ function QueryTabsBar({
               aria-label={`Close ${t.title}`}
               className={cn(
                 "hover:bg-accent mr-1 grid size-5 place-items-center rounded",
-                !isActive && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                !isActive && "opacity-40 group-hover:opacity-100 focus-visible:opacity-100",
               )}
             >
               <X className="size-3.5" />
@@ -339,8 +491,17 @@ function QueryEditor({
   const fileInput = useRef<HTMLInputElement>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  const save = () => {
-    if (sql.trim()) downloadText(sqlFileName(tab.title), sql.endsWith("\n") ? sql : `${sql}\n`)
+  const [saveNote, setSaveNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!saveNote) return
+    const t = setTimeout(() => setSaveNote(null), 4000)
+    return () => clearTimeout(t)
+  }, [saveNote])
+  const save = async () => {
+    if (!sql.trim()) return
+    const result = await saveTextAs(sqlFileName(tab.title), sql.endsWith("\n") ? sql : `${sql}\n`)
+    if (result.status === "saved") setSaveNote(`Saved as ${result.name}`)
+    else if (result.status === "downloaded") setSaveNote(`Downloaded ${result.name}`)
   }
   const load = async (file: File) => {
     setLoadError(null)
@@ -489,7 +650,7 @@ function QueryEditor({
             }
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
               e.preventDefault() // the browser's own "save page" isn't useful here
-              save()
+              void save()
               return
             }
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -524,7 +685,11 @@ function QueryEditor({
             role="listbox"
             aria-label="Suggestions"
             className="bg-popover text-popover-foreground absolute z-20 max-h-60 min-w-56 overflow-auto rounded-md border p-1 font-mono text-xs shadow-md"
-            style={{ left: Math.max(0, completion.left), top: completion.top + 2 }}
+            // kept inside the editor when the cursor is near its right edge (the list is min-w-56 = 224px)
+            style={{
+              left: Math.max(0, Math.min(completion.left, (editor.current?.clientWidth ?? 9999) - 232)),
+              top: completion.top + 2,
+            }}
           >
             {completion.items.map((item, i) => (
               <li
@@ -561,11 +726,11 @@ function QueryEditor({
         </Button>
         <Button
           variant="outline"
-          onClick={save}
+          onClick={() => void save()}
           disabled={!sql.trim()}
-          title={`Download this query as ${sqlFileName(tab.title)} (⌘/Ctrl + S)`}
+          title={`Save this query as a .sql file: choose the folder and name (⌘/Ctrl + S)`}
         >
-          <Download /> Save SQL
+          <Download /> Save SQL…
         </Button>
         <Button
           variant="outline"
@@ -587,6 +752,11 @@ function QueryEditor({
             if (file) void load(file)
           }}
         />
+        {saveNote && (
+          <span role="status" className="text-status-succeeded text-xs font-medium">
+            {saveNote}
+          </span>
+        )}
         <span className="text-muted-foreground text-xs">
           <kbd className="font-sans">⌘</kbd>/<kbd className="font-sans">Ctrl</kbd> + Enter runs the query, or just the
           selected text · type <code className="font-mono">schema.</code> for its tables,{" "}

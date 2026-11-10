@@ -15,9 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import __version__
-from .api import pipelines, runs, sql, workspace as workspace_api
+from .api import pipelines, runs, schedules, sql, workspace as workspace_api
 from .config import Settings
-from .engine import PipelineExecutor
+from .engine import PipelineExecutor, Scheduler
 from .pipelines import Workspace
 from .runs import RunStore
 
@@ -35,10 +35,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if recovered:
         log.warning("Marked %d interrupted run(s) as FAILED", recovered)
     executor = PipelineExecutor(workspace, store, max_depth=settings.max_depth)
+    scheduler = Scheduler(workspace, executor, store)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        if settings.scheduler:
+            scheduler.start()
         yield
+        await scheduler.stop()
         await executor.shutdown()
 
     app = FastAPI(title="Prooflix", version=__version__, lifespan=lifespan)
@@ -46,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.workspace = workspace
     app.state.store = store
     app.state.executor = executor
+    app.state.scheduler = scheduler
 
     app.add_middleware(
         CORSMiddleware,
@@ -54,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(pipelines.router)
+    app.include_router(schedules.router)
     app.include_router(runs.router)
     app.include_router(workspace_api.router)
     app.include_router(sql.router)

@@ -19,6 +19,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ..pipelines.errors import PipelineNotFound, PipelineValidationError
@@ -67,6 +68,8 @@ class PipelineExecutor:
         parameters: dict[str, Any] | None = None,
         *,
         parent: _Parent | None = None,
+        trigger: str = "manual",
+        scheduled_for: datetime | None = None,
     ) -> tuple[Run, PipelineSpec]:
         """Validate the pipeline and parameters and create a PENDING run record."""
         defs = self.workspace.load_all()
@@ -92,6 +95,8 @@ class PipelineExecutor:
             parent_run_id=parent.run_id if parent else None,
             parent_task_key=parent.task_key if parent else None,
             depth=parent.depth if parent else 0,
+            trigger="pipeline" if parent else trigger,
+            scheduled_for=scheduled_for,
         )
         run.root_run_id = parent.root_run_id if parent else run.id
         for task in spec.tasks:
@@ -105,9 +110,16 @@ class PipelineExecutor:
         self.store.save(run)
         return run, spec
 
-    def start(self, pipeline_id: str, parameters: dict[str, Any] | None = None) -> Run:
+    def start(
+        self,
+        pipeline_id: str,
+        parameters: dict[str, Any] | None = None,
+        *,
+        trigger: str = "manual",
+        scheduled_for: datetime | None = None,
+    ) -> Run:
         """Create a run and execute it in the background. Must be called on the event loop."""
-        run, spec = self.prepare(pipeline_id, parameters)
+        run, spec = self.prepare(pipeline_id, parameters, trigger=trigger, scheduled_for=scheduled_for)
         self._launch(run, spec)
         return run
 

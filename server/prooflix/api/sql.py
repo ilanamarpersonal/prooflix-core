@@ -1,4 +1,4 @@
-"""``/api/sql`` routes: run SQL over the workspace's data files.
+"""``/api/sql`` and ``/api/catalog`` routes: query the workspace's data lake with DuckDB.
 
 The catalog reads data lake files only (Parquet):
 
@@ -12,32 +12,38 @@ The catalog reads data lake files only (Parquet):
   catalog sub-folder: two-level names, ``my_project.orders``.
 
 A folder of Parquet files is one table (its files are read together), and a Parquet
-file directly in a schema's folder is a table of its own. The tables are loaded into a
-fresh in-memory SQLite database for each request. SQLite only has ``schema.table``, so
-a three-level schema is attached as a database named ``"tenant1.bronze"`` and queries
-are rewritten from ``tenant1.bronze.customers`` to ``"tenant1.bronze".customers``. The
-database is read only and thrown away afterwards, so queries never change the files.
+file directly in a schema's folder is a table of its own.
+
+Queries run in DuckDB, which reads the Parquet files directly: every table is a view
+over its files, so nothing is loaded up front and tables of any size can be queried.
+Listing tables only reads the files' footers (row counts and columns). Each request
+gets a fresh in-memory DuckDB that can only read the data folders: no other files,
+no writing, no extensions, and only single SELECT statements are run.
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
-import csv
 import datetime as dt
 import decimal
 import io
 import json
 import re
-import sqlite3
+import shutil
+import tempfile
+import threading
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import Response
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..pipelines import Workspace
@@ -45,13 +51,13 @@ from .deps import CatalogPaths, get_catalog_paths
 
 router = APIRouter(prefix="/api/sql", tags=["sql"])
 
-QUERY_TIMEOUT_S = 10.0
+QUERY_TIMEOUT_S = 30.0
 MAX_ROWS = 10_000
 
 
 class SqlColumn(BaseModel):
     name: str
-    type: str
+    type: str  # DuckDB type, e.g. BIGINT, DOUBLE, VARCHAR, DATE, TIMESTAMP WITH TIME ZONE
 
 
 class SqlTable(BaseModel):
@@ -89,26 +95,13 @@ class SqlResult(BaseModel):
     elapsed_ms: float
 
 
-@dataclass
-class _Loaded:
-    schema: str
-    name: str
-    source: str
-    columns: list[str]
-    rows: list[list[Any]]
-    in_workspace: bool = True
-    catalog: str = ""
-
-    @property
-    def qualified(self) -> str:
-        return self.name if self.schema == MAIN else f"{self.schema}.{self.name}"
-
-
 MAIN = "main"
 DATA_SUFFIX = ".parquet"  # the catalog reads data lake (Parquet) files only
+# names DuckDB uses itself; a catalog or schema folder with one of these names gets a "_"
+RESERVED = {MAIN, "temp", "memory", "system", "information_schema", "pg_catalog"}
 
 
-# ------------------------------------------------------------------ loading
+# ------------------------------------------------------------------ names
 def table_name(rel: Path) -> str:
     """``output/2026-11-07/clean_orders`` -> ``output_2026_11_07_clean_orders``.
 
@@ -130,57 +123,22 @@ def table_key(rel_file: Path) -> Path:
     return rel_file if rel_file.parent == Path(".") else rel_file.parent
 
 
-def _cell(value: Any) -> Any:
-    """A Parquet value as a SQLite value: numbers stay numbers, booleans become
-    0/1, dates and timestamps ISO 8601 text, nested values JSON text. Parquet
-    columns are typed, so text stays text."""
-    if isinstance(value, bool):
-        return int(value)
-    if value is None or isinstance(value, (int, float)):
-        return value
-    if isinstance(value, decimal.Decimal):
-        return float(value)
-    if isinstance(value, dt.datetime):
-        return value.isoformat(sep=" ")
-    if isinstance(value, (dt.date, dt.time)):
-        return value.isoformat()
-    if isinstance(value, bytes):
-        return value.hex()
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, default=str)
-    return str(value)
-
-
-def _load_parquet(files: list[Path]) -> tuple[list[str], list[list[Any]]] | None:
-    """Columns and rows of one or more Parquet files read as a single table
-    (columns are the union of the files' columns, in first-seen order).
-    None if any file is not readable Parquet."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    records: list[dict] = []
-    columns: list[str] = []
-    for path in files:
-        try:
-            table = pq.read_table(path)
-        except (pa.ArrowException, OSError):
-            return None
-        for name in table.column_names:
-            if name not in columns:
-                columns.append(name)
-        records.extend(table.to_pylist())
-    if not columns:
-        return None
-    return columns, [[_cell(rec.get(c)) for c in columns] for rec in records]
-
-
 def schema_name(project_folder: str) -> str:
     """``prooflix-test`` -> ``prooflix_test`` (a SQL identifier)."""
     name = re.sub(r"[^0-9a-zA-Z]+", "_", project_folder).strip("_").lower()
     name = name if name and not name[0].isdigit() else f"s_{name}"
-    return f"{name}_" if name in (MAIN, "temp") else name
+    return f"{name}_" if name in RESERVED else name
 
 
+def _quote(ident: str) -> str:
+    return '"' + ident.replace('"', '""') + '"'
+
+
+def _sql_string(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+# ------------------------------------------------------------------ discovery
 @dataclass
 class _Schema:
     name: str  # as written in SQL, "tenant1.bronze" for a schema inside a catalog
@@ -189,6 +147,37 @@ class _Schema:
     data_dir: Path
     recursive: bool = True  # False for main: its sub-folders are catalogs of their own
     catalog: str = ""  # "tenant1" for data/tenant1/<schema>/, "" otherwise
+
+    @property
+    def short(self) -> str:
+        """The schema's own name: "bronze" for "tenant1.bronze"."""
+        return self.name[len(self.catalog) + 1 :] if self.catalog else self.name
+
+
+@dataclass
+class _Table:
+    schema: str
+    name: str
+    source: str
+    files: list[Path]
+    row_count: int
+    in_workspace: bool = True
+    catalog: str = ""
+    columns: list[tuple[str, str]] = field(default_factory=list)  # (name, DuckDB type), filled by describe
+
+    @property
+    def qualified(self) -> str:
+        return self.name if self.schema == MAIN else f"{self.schema}.{self.name}"
+
+    @property
+    def sql_ref(self) -> str:
+        """The view's name, quoted, as DuckDB resolves it."""
+        if self.schema == MAIN:
+            return _quote(self.name)
+        if self.catalog:
+            short = self.schema[len(self.catalog) + 1 :]
+            return f"{_quote(self.catalog)}.{_quote(short)}.{_quote(self.name)}"
+        return f"{_quote(self.schema)}.{_quote(self.name)}"
 
 
 def schemas(paths: CatalogPaths) -> list[_Schema]:
@@ -205,6 +194,9 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
     - one per sub-folder of the catalog folder, for data that is not part of a
       project (imported tables, datasets): ``catalog/banking/customers.parquet``
       is ``banking.customers``
+
+    Catalog names and two-level schema names never clash (a clash gets a "_"), so
+    ``x.y`` always means one thing.
     """
     root = paths.root
     data = root / "data"
@@ -222,18 +214,18 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
 
     if data.is_dir():
         for catalog_folder in folders(data):
-            cat = schema_name(catalog_folder.name)
+            cat = unique(schema_name(catalog_folder.name))
             for schema_folder in folders(catalog_folder):
-                name = unique(f"{cat}.{schema_name(schema_folder.name)}")
-                out.append(_Schema(name, "workspace", "", schema_folder, catalog=cat))
+                out.append(
+                    _Schema(f"{cat}.{schema_name(schema_folder.name)}", "workspace", "", schema_folder, catalog=cat)
+                )
 
     for project in Workspace(root).projects():
         if project != root:
             out.append(_Schema(unique(schema_name(project.name)), "workspace", project.name, project / "data"))
     if paths.catalog_dir.is_dir():
-        for folder in sorted(paths.catalog_dir.iterdir()):
-            if folder.is_dir() and not folder.name.startswith((".", "_")):
-                out.append(_Schema(unique(schema_name(folder.name)), "catalog", "", folder))
+        for folder in folders(paths.catalog_dir):
+            out.append(_Schema(unique(schema_name(folder.name)), "catalog", "", folder))
     return out
 
 
@@ -243,137 +235,154 @@ def _display_path(paths: CatalogPaths, path: Path, in_workspace: bool) -> str:
     return "catalog/" + path.relative_to(paths.catalog_dir).as_posix()
 
 
-def load_tables(paths: CatalogPaths) -> list[_Loaded]:
-    tables: list[_Loaded] = []
+def _parquet_rows(path: Path) -> int | None:
+    """Row count from the file's footer, without reading its data; None if it isn't Parquet."""
+    try:
+        meta = pq.ParquetFile(path).metadata
+    except (pa.ArrowException, OSError):
+        return None
+    return meta.num_rows if meta.num_columns else None
+
+
+def find_tables(paths: CatalogPaths) -> list[_Table]:
+    """Every table: one per folder of Parquet files, plus one per Parquet file directly
+    in a schema's folder. Unreadable files are left out; other files are ignored."""
+    tables: list[_Table] = []
     for sch in schemas(paths):
-        if sch.data_dir.is_dir():
-            _load_dir(paths, sch, tables)
+        if not sch.data_dir.is_dir():
+            continue
+        groups: dict[Path, list[tuple[Path, int]]] = {}
+        found = sch.data_dir.rglob(f"*{DATA_SUFFIX}") if sch.recursive else sch.data_dir.glob(f"*{DATA_SUFFIX}")
+        for path in sorted(found, key=lambda p: p.as_posix()):
+            rel = path.relative_to(sch.data_dir)
+            if not path.is_file() or path.suffix.lower() != DATA_SUFFIX:
+                continue
+            if any(p.startswith((".", "_")) for p in rel.parts):
+                continue
+            rows = _parquet_rows(path)
+            if rows is not None:
+                groups.setdefault(table_key(rel), []).append((path, rows))
+        seen: set[str] = set()
+        in_workspace = sch.location == "workspace"
+        for key, files in groups.items():
+            name = table_name(key)
+            while name in seen:
+                name += "_"
+            seen.add(name)
+            tables.append(
+                _Table(
+                    schema=sch.name,
+                    name=name,
+                    source=_display_path(paths, sch.data_dir / key, in_workspace),
+                    files=[p for p, _ in files],
+                    row_count=sum(r for _, r in files),
+                    in_workspace=in_workspace,
+                    catalog=sch.catalog,
+                )
+            )
     return tables
 
 
-def _load_dir(paths: CatalogPaths, sch: _Schema, tables: list[_Loaded]) -> None:
-    """Add the schema's tables: one per folder of Parquet files, plus one per
-    Parquet file directly in the schema's folder. Other files are ignored."""
-    groups: dict[Path, list[Path]] = {}
-    found = sch.data_dir.rglob(f"*{DATA_SUFFIX}") if sch.recursive else sch.data_dir.glob(f"*{DATA_SUFFIX}")
-    for path in sorted(found, key=lambda p: p.as_posix()):
-        rel = path.relative_to(sch.data_dir)
-        if path.is_file() and path.suffix.lower() == DATA_SUFFIX and not any(
-            p.startswith((".", "_")) for p in rel.parts
-        ):
-            groups.setdefault(table_key(rel), []).append(path)
-    seen: set[str] = set()
-    in_workspace = sch.location == "workspace"
-    for key, files in groups.items():
-        loaded = _load_parquet(files)
-        if loaded is None:
-            continue
-        name = table_name(key)
-        while name in seen:
-            name += "_"
-        seen.add(name)
-        source = sch.data_dir / key
-        tables.append(
-            _Loaded(
-                sch.name,
-                name,
-                _display_path(paths, source, in_workspace),
-                loaded[0],
-                loaded[1],
-                in_workspace,
-                sch.catalog,
-            )
-        )
+# ------------------------------------------------------------------ DuckDB
+def open_database(paths: CatalogPaths, tables: list[_Table] | None = None) -> tuple[duckdb.DuckDBPyConnection, list[_Table]]:
+    """A fresh in-memory DuckDB with one view per table, locked down so it can only
+    read the data folders. Tables whose files can't be read together are left out."""
+    tables = find_tables(paths) if tables is None else tables
+    conn = duckdb.connect(":memory:")
+    # only the folders the tables' files are in
+    allowed = sorted({str(sch.data_dir.resolve()) + "/" for sch in schemas(paths) if sch.data_dir.is_dir()})
+    conn.execute("SET allowed_directories = ?", [allowed])
+    conn.execute("SET enable_external_access = false")  # no other files, network, extensions or writes
+    conn.execute("SET autoinstall_known_extensions = false")
+    conn.execute("SET TimeZone = 'UTC'")
 
-
-def _quote(ident: str) -> str:
-    return '"' + ident.replace('"', '""') + '"'
-
-
-# Parts of a query the three-level rewrite must leave alone: strings, quoted
-# identifiers and comments.
-_UNTOUCHED = re.compile(r"""('(?:[^']|'')*'|"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*.*?(?:\*/|$))""", re.S)
-
-
-def rewrite_three_part_names(sql: str, schema_names: list[str]) -> str:
-    """``tenant1.bronze.customers`` -> ``"tenant1.bronze".customers`` for every
-    three-level schema (a name with a dot), outside strings and comments."""
-    dotted = sorted((n for n in schema_names if "." in n), key=len, reverse=True)
-    if not dotted:
-        return sql
-    patterns = []
-    for name in dotted:
-        cat, sch = name.split(".", 1)
-        patterns.append(
-            (re.compile(rf"(?<![\w$.\"]){re.escape(cat)}\s*\.\s*{re.escape(sch)}\s*\.(?=\s*[\w\"`\[])", re.I), _quote(name) + ".")
-        )
-    parts = _UNTOUCHED.split(sql)
-    for i in range(0, len(parts), 2):  # even indexes are code, odd ones untouched
-        for pattern, replacement in patterns:
-            parts[i] = pattern.sub(replacement, parts[i])
-    return "".join(parts)
-
-
-def _deny_attach(action: int, *_args: Any) -> int:
-    # ATTACH could create database files on disk; nothing else needs blocking
-    # because the database itself is in memory and set to query_only.
-    return sqlite3.SQLITE_DENY if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH) else sqlite3.SQLITE_OK
-
-
-def open_database(paths: CatalogPaths) -> tuple[sqlite3.Connection, list[_Loaded]]:
-    tables = load_tables(paths)
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    # One in-memory database per project schema, attached before ATTACH is denied.
-    for schema in sorted({t.schema for t in tables} - {MAIN}):
-        conn.execute(f"ATTACH DATABASE ':memory:' AS {_quote(schema)}")
+    created_schemas: set[tuple[str, str]] = set()
+    usable: list[_Table] = []
     for t in tables:
-        target = f"{_quote(t.schema)}.{_quote(t.name)}"
-        cols = ", ".join(_quote(c or f"column_{i + 1}") for i, c in enumerate(t.columns))
-        conn.execute(f"CREATE TABLE {target} ({cols})")
-        if t.rows:
-            marks = ", ".join("?" * len(t.columns))
-            conn.executemany(
-                f"INSERT INTO {target} VALUES ({marks})",
-                [row[: len(t.columns)] for row in t.rows],
+        db = t.catalog or "memory"
+        schema = t.schema[len(t.catalog) + 1 :] if t.catalog else t.schema
+        if t.catalog and (db, "") not in created_schemas:
+            conn.execute(f"ATTACH ':memory:' AS {_quote(db)}")
+            created_schemas.add((db, ""))
+        if schema != MAIN and (db, schema) not in created_schemas:
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote(db)}.{_quote(schema)}")
+            created_schemas.add((db, schema))
+        files = "[" + ", ".join(_sql_string(str(p.resolve())) for p in t.files) + "]"
+        try:
+            conn.execute(
+                f"CREATE VIEW {t.sql_ref} AS SELECT * FROM read_parquet({files}, union_by_name = true)"
             )
-    conn.commit()
-    conn.execute("PRAGMA query_only = ON")
-    conn.set_authorizer(_deny_attach)
-    return conn, tables
+            t.columns = [(row[0], row[1]) for row in conn.execute(f"DESCRIBE {t.sql_ref}").fetchall()]
+        except duckdb.Error:
+            continue  # files with columns that can't be combined
+        usable.append(t)
+    conn.execute("SET lock_configuration = true")  # queries can't loosen any of the above
+    return conn, usable
+
+
+def _cell(value: Any) -> Any:
+    """A query result value as JSON: numbers stay numbers, booleans become 0/1, dates
+    and timestamps ISO 8601 text, nested values JSON text."""
+    if isinstance(value, bool):
+        return int(value)
+    if value is None or isinstance(value, (int, float, str)):
+        return value
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, dt.datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, (dt.date, dt.time)):
+        return value.isoformat()
+    if isinstance(value, dt.timedelta):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str)
+    return str(value)
+
+
+def _only_select(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
+    """The single SELECT statement in sql (without a trailing ";"), or a 400."""
+    try:
+        statements = conn.extract_statements(sql)
+    except duckdb.Error as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if len(statements) != 1:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Run one statement at a time")
+    if statements[0].type != duckdb.StatementType.SELECT:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "The SQL editor is read only: only queries that read data are allowed"
+        )
+    return statements[0].query.strip().rstrip(";")
 
 
 # ------------------------------------------------------------------ routes
-def _describe(tables: list[_Loaded]) -> list[SqlTable]:
-    out = []
-    for t in tables:
-        sample = t.rows[:200]
-        columns = []
-        for i, c in enumerate(t.columns):
-            kinds = {type(r[i]).__name__ for r in sample if i < len(r) and r[i] is not None}
-            kind = (
-                "INTEGER" if kinds == {"int"}
-                else "REAL" if kinds and kinds <= {"int", "float"}
-                else "TEXT"
-            )
-            columns.append(SqlColumn(name=c or f"column_{i + 1}", type=kind))
-        out.append(
-            SqlTable(
-                name=t.name,
-                schema_name=t.schema,
-                catalog=t.catalog,
-                qualified=t.qualified,
-                source=t.source,
-                in_workspace=t.in_workspace,
-                row_count=len(t.rows),
-                columns=columns,
-            )
+def _describe(tables: list[_Table]) -> list[SqlTable]:
+    return [
+        SqlTable(
+            name=t.name,
+            schema_name=t.schema,
+            catalog=t.catalog,
+            qualified=t.qualified,
+            source=t.source,
+            in_workspace=t.in_workspace,
+            row_count=t.row_count,
+            columns=[SqlColumn(name=n, type=k) for n, k in t.columns],
         )
-    return out
+        for t in tables
+    ]
+
+
+def _described_tables(paths: CatalogPaths) -> list[_Table]:
+    conn, tables = open_database(paths)
+    conn.close()
+    return tables
 
 
 @router.get("/tables", response_model=list[SqlTable], response_model_by_alias=True)
 def list_tables(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[SqlTable]:
-    return _describe(load_tables(paths))
+    return _describe(_described_tables(paths))
 
 
 catalog_router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -382,7 +391,7 @@ catalog_router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 @catalog_router.get("", response_model=list[CatalogSchema], response_model_by_alias=True)
 def catalog(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[CatalogSchema]:
     """Schemas and their tables. Only schemas that have at least one table are listed."""
-    described = _describe(load_tables(paths))
+    described = _describe(_described_tables(paths))
     out = []
     for sch in schemas(paths):
         tables = [t for t in described if t.schema_name == sch.name]
@@ -403,120 +412,115 @@ def catalog(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[CatalogSch
 
 @router.post("/query", response_model=SqlResult)
 def run_query(body: SqlQueryIn, paths: CatalogPaths = Depends(get_catalog_paths)) -> SqlResult:
-    conn, tables = open_database(paths)
-    sql = rewrite_three_part_names(body.sql, sorted({t.schema for t in tables}))
+    conn, _ = open_database(paths)
+    sql = _only_select(conn, body.sql)
+    # stop the query if it runs too long
+    timer = threading.Timer(QUERY_TIMEOUT_S, conn.interrupt)
     started = time.perf_counter()
-    deadline = started + QUERY_TIMEOUT_S
-    conn.set_progress_handler(lambda: 1 if time.perf_counter() > deadline else 0, 10_000)
+    timer.start()
     try:
-        cur = conn.execute(sql)
-        columns = [d[0] for d in cur.description or []]
-        fetched = cur.fetchmany(body.limit + 1) if columns else []
-    except sqlite3.Error as exc:
-        message = str(exc)
-        if message == "interrupted":
-            message = f"Query took longer than {QUERY_TIMEOUT_S:g} seconds and was stopped"
-        elif "readonly" in message or "not authorized" in message:
-            message = "The SQL editor is read only: only queries that read data are allowed"
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, message) from exc
-    except sqlite3.Warning as exc:  # e.g. more than one statement
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        # only the first limit+1 rows are produced, however large the result would be
+        result = conn.sql(f"SELECT * FROM ({sql}) AS q LIMIT {body.limit + 1}").to_arrow_table()
+    except duckdb.InterruptException as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Query took longer than {QUERY_TIMEOUT_S:g} seconds and was stopped"
+        ) from exc
+    except duckdb.PermissionException as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The SQL editor can only read the catalog's tables") from exc
+    except duckdb.Error as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc).split("\n\n")[0]) from exc
     finally:
+        timer.cancel()
         elapsed = (time.perf_counter() - started) * 1000
         conn.close()
-    rows = [list(r) for r in fetched[: body.limit]]
+    columns = result.column_names
+    # column by column through Arrow (no extra Python packages for time zones), which
+    # also keeps duplicate column names such as SELECT a, a
+    kept = result.slice(0, body.limit)
+    values = [kept.column(i).to_pylist() for i in range(kept.num_columns)]
+    rows = [[_cell(v) for v in row] for row in zip(*values)] if values else []
     return SqlResult(
         columns=columns,
         rows=rows,
         row_count=len(rows),
-        truncated=len(fetched) > body.limit,
+        truncated=result.num_rows > body.limit,
         elapsed_ms=round(elapsed, 1),
     )
 
 
 # ------------------------------------------------------------------ export / import
-def _csv_bytes(columns: list[str], rows: list[list[Any]]) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(columns)
-    writer.writerows(rows)
-    return buf.getvalue().encode("utf-8")
-
-
-def _download(data: bytes, filename: str, media_type: str) -> Response:
-    return Response(
-        data,
-        media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-def _parquet_bytes(columns: list[str], rows: list[list[Any]]) -> bytes:
-    """One Parquet file. A column whose values are all integers (or all numbers)
-    gets an integer (or float) type; anything else is stored as text."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    arrays = []
-    for i, _name in enumerate(columns):
-        values = [row[i] if i < len(row) else None for row in rows]
-        present = [v for v in values if v is not None]
-        if present and all(isinstance(v, int) and not isinstance(v, bool) for v in present):
-            arrays.append(pa.array(values, type=pa.int64()))
-        elif present and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in present):
-            arrays.append(pa.array([None if v is None else float(v) for v in values], type=pa.float64()))
-        else:
-            arrays.append(pa.array([None if v is None else str(v) for v in values], type=pa.string()))
-    names = [c or f"column_{i + 1}" for i, c in enumerate(columns)]
-    buf = io.BytesIO()
-    pq.write_table(pa.Table.from_arrays(arrays, names=names), buf)
-    return buf.getvalue()
-
-
 ExportFormat = Literal["csv", "parquet"]
+
+
+def _copy_out(conn: duckdb.DuckDBPyConnection, table: _Table, target: Path, fmt: ExportFormat) -> None:
+    options = "FORMAT csv, HEADER true" if fmt == "csv" else "FORMAT parquet"
+    conn.execute(f"COPY (SELECT * FROM {table.sql_ref}) TO {_sql_string(str(target))} ({options})")
 
 
 @catalog_router.get("/export")
 def export(
+    background: BackgroundTasks,
     table: str | None = Query(None, description="schema.table: export only that table"),
     schema: str | None = Query(None, description="export every table of the schema"),
     format: ExportFormat = Query("csv", description="csv, or parquet (always delivered in a ZIP)"),
     paths: CatalogPaths = Depends(get_catalog_paths),
-) -> Response:
+) -> FileResponse:
     """Download a table, a schema or, with neither, the whole catalog.
 
     ``format=csv``: a table is a single ``.csv`` file; a schema or the catalog
     is a ZIP of CSV files. ``format=parquet``: always a ZIP of ``.parquet``
-    files (one for a table).
+    files (one for a table). DuckDB writes the files straight from the Parquet
+    sources, so large tables are never held in memory.
     """
-    ext = format
-    encode = _csv_bytes if format == "csv" else _parquet_bytes
-    tables = load_tables(paths)
+    tables = find_tables(paths)
     if table:
-        found = next((t for t in tables if f"{t.schema}.{t.name}" == table), None)
-        if found is None:
+        picked = [t for t in tables if f"{t.schema}.{t.name}" == table]
+        if not picked:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Table '{table}' not found")
-        picked, base = [found], f"{found.schema}.{found.name}"
-        if format == "csv":
-            return _download(_csv_bytes(found.columns, found.rows), f"{base}.csv", "text/csv")
+        base = table
     else:
         picked = [t for t in tables if schema is None or t.schema == schema]
         if schema is not None and not picked:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Schema '{schema}' has no tables")
         base = schema or "catalog"
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    work = Path(tempfile.mkdtemp(prefix="prooflix-export-"))
+    background.add_task(shutil.rmtree, work, True)
+    # This connection writes into the temporary folder, so it is the internal, unlocked
+    # kind; no user SQL ever runs on it.
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute("SET TimeZone = 'UTC'")
+        checked, picked = open_database(paths, picked)  # keep only tables DuckDB can read
+        checked.close()
         for t in picked:
-            if table:
-                name = f"{t.schema}.{t.name}.{ext}"
-            elif schema:
-                name = f"{t.name}.{ext}"
-            else:
-                name = f"{t.schema}/{t.name}.{ext}"
-            zf.writestr(name, encode(t.columns, t.rows))
-    suffix = "" if format == "csv" else "-parquet"
-    return _download(buf.getvalue(), f"{base}{suffix}.zip", "application/zip")
+            files = "[" + ", ".join(_sql_string(str(p.resolve())) for p in t.files) + "]"
+            if t.catalog:
+                conn.execute(f"ATTACH IF NOT EXISTS ':memory:' AS {_quote(t.catalog)}")
+            db, sch = (t.catalog, t.schema[len(t.catalog) + 1 :]) if t.catalog else ("memory", t.schema)
+            if sch != MAIN:
+                conn.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote(db)}.{_quote(sch)}")
+            conn.execute(f"CREATE OR REPLACE VIEW {t.sql_ref} AS SELECT * FROM read_parquet({files}, union_by_name = true)")
+        if table and format == "csv":
+            target = work / f"{base}.csv"
+            _copy_out(conn, picked[0], target, "csv")
+            return FileResponse(target, media_type="text/csv", filename=target.name)
+        zipped = work / (f"{base}.zip" if format == "csv" else f"{base}-parquet.zip")
+        with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED) as zf:
+            for t in picked:
+                if table:
+                    name = f"{t.schema}.{t.name}.{format}"
+                elif schema:
+                    name = f"{t.name}.{format}"
+                else:
+                    name = f"{t.schema}/{t.name}.{format}"
+                part = work / f"part-{len(zf.namelist())}.{format}"
+                _copy_out(conn, t, part, format)
+                zf.write(part, name)
+                part.unlink()
+        return FileResponse(zipped, media_type="application/zip", filename=zipped.name)
+    finally:
+        conn.close()
 
 
 class CatalogImportFile(BaseModel):
@@ -586,19 +590,18 @@ def import_tables(
     if total > MAX_CATALOG_IMPORT_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Import is larger than 50 MB")
 
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        for name, data in decoded.items():
-            probe = Path(tmp) / name
-            probe.write_bytes(data)
-            if _load_parquet([probe]) is None:
-                errors.append(f"'{name}' could not be read as a Parquet table")
+    for name, data in decoded.items():
+        try:
+            meta = pq.ParquetFile(io.BytesIO(data)).metadata
+            if not meta.num_columns:
+                raise ValueError
+        except (pa.ArrowException, OSError, ValueError):
+            errors.append(f"'{name}' could not be read as a Parquet table")
     if errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"errors": errors})
 
     names = {name: table_name(Path(name)) for name in decoded}
-    current = {t.name for t in load_tables(paths) if t.schema == schema}
+    current = {t.name for t in find_tables(paths) if t.schema == schema}
     conflicts = sorted(t for t in names.values() if t in current)
     if conflicts and not body.overwrite:
         raise HTTPException(

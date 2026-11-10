@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import Request
 
-from ..engine import PipelineExecutor
+from ..engine import PipelineExecutor, Scheduler
 from ..pipelines import Workspace
 from ..runs import RunStore
 
@@ -21,6 +21,10 @@ def get_store(request: Request) -> RunStore:
 
 def get_executor(request: Request) -> PipelineExecutor:
     return request.app.state.executor
+
+
+def get_scheduler(request: Request) -> Scheduler:
+    return request.app.state.scheduler
 
 
 class CatalogPaths:

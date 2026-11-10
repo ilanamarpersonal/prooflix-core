@@ -403,7 +403,7 @@ function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSele
               {schema.tables.map((t) => (
                 <TableRow key={t.name} className="cursor-pointer" onClick={() => onSelectTable(t)}>
                   <TableCell className="pl-4 font-mono text-xs font-medium">{t.name}</TableCell>
-                  <TableCell className="tabular-nums">{t.row_count}</TableCell>
+                  <TableCell className="tabular-nums">{t.row_count.toLocaleString()}</TableCell>
                   <TableCell className="tabular-nums">{t.columns.length}</TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs">{t.source}</TableCell>
                 </TableRow>
@@ -433,7 +433,7 @@ function TableDetail({ table }: { table: SqlTable }) {
           <Table2 className="text-primary size-4" />
           <span className="font-mono font-medium">{table.qualified}</span>
           <span className="text-muted-foreground text-sm">
-            {table.row_count} row{table.row_count === 1 ? "" : "s"} · {table.columns.length} column
+            {table.row_count.toLocaleString()} row{table.row_count === 1 ? "" : "s"} · {table.columns.length} column
             {table.columns.length === 1 ? "" : "s"} · from{" "}
             {table.in_workspace ? (
               <Link

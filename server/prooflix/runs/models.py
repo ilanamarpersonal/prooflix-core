@@ -77,6 +77,9 @@ class Run(BaseModel):
     root_run_id: str | None = None
     depth: int = 0
     tasks: dict[str, TaskRun] = Field(default_factory=dict)
+    # what started the run: "manual" (UI, API or CLI), "schedule", or "pipeline" (a parent run)
+    trigger: str = "manual"
+    scheduled_for: datetime | None = None  # the cron time a scheduled run was due
 
     @property
     def is_root(self) -> bool:
