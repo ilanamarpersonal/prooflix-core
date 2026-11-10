@@ -1,15 +1,22 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
 import {
+  Braces,
   ChevronRight,
   Database,
   ExternalLink,
+  File,
+  FileArchive,
+  FileCode,
   FileText,
   Folder,
   FolderOpen,
   FolderInput,
   RefreshCw,
+  Table2,
   Trash2,
+  Workflow,
+  type LucideIcon,
 } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
@@ -22,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useRemoveWorkspaceItem, useWorkspaceFile, useWorkspaceTree } from "@/lib/api"
 import { sqlTableFor } from "@/lib/sql-names"
 import type { RemoveResult, WorkspaceNode } from "@/lib/types"
+import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
 
 export function WorkspacePage() {
@@ -31,6 +39,9 @@ export function WorkspacePage() {
   const [importing, setImporting] = useState(false)
   const [removed, setRemoved] = useState<RemoveResult | null>(null)
   const remover = useRemoveWorkspaceItem()
+  // On md+ screens the tree and the viewer fill the window and scroll inside.
+  const panels = useRef<HTMLDivElement>(null)
+  const panelsHeight = useFillHeight(panels)
   const selectedNode = useMemo(
     () => (selected && tree.data ? findNode(tree.data, selected) : null),
     [selected, tree.data],
@@ -41,7 +52,11 @@ export function WorkspacePage() {
       node.type === "dir"
         ? `the folder "${node.path}" and everything in it (${countFiles(node)} file${countFiles(node) === 1 ? "" : "s"})`
         : `the file "${node.path}"`
-    if (!confirm(`Remove ${what} from the workspace?\n\nIt is moved to workspace/.prooflix/trash, so it can be recovered there.`))
+    if (
+      !confirm(
+        `Remove ${what} from the workspace?\n\nIt is moved to workspace/.prooflix/trash, so it can be recovered there.`,
+      )
+    )
       return
     remover.mutate(node.path, {
       onSuccess: (r) => {
@@ -79,8 +94,7 @@ export function WorkspacePage() {
           onClose={() => setImporting(false)}
           onImported={(r) => {
             // Show what was imported: a pipeline if there is one, else the first file.
-            const first =
-              r.written.find((p) => /(^|\/)pipelines\/[^/]+\.ya?ml$/.test(p)) ?? r.written[0]
+            const first = r.written.find((p) => /(^|\/)pipelines\/[^/]+\.ya?ml$/.test(p)) ?? r.written[0]
             if (first) setParams({ path: first })
           }}
         />
@@ -102,19 +116,17 @@ export function WorkspacePage() {
           </AlertDescription>
         </Alert>
       )}
-      <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
-        <Card className="max-h-[70vh] overflow-auto py-2">
+      <div
+        ref={panels}
+        style={panelsHeight ? { height: panelsHeight } : undefined}
+        className="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
+      >
+        <Card className="max-h-[70vh] gap-0 overflow-auto p-1.5 md:max-h-none" role="tree" aria-label="Workspace files">
           {tree.isLoading ? (
-            <Skeleton className="mx-2 h-64" />
+            <Skeleton className="m-1 h-64" />
           ) : (
             tree.data?.children?.map((n) => (
-              <TreeNode
-                key={n.path}
-                node={n}
-                depth={0}
-                selected={selected}
-                onSelect={(path) => setParams({ path })}
-              />
+              <TreeNode key={n.path} node={n} depth={0} selected={selected} onSelect={(path) => setParams({ path })} />
             ))
           )}
         </Card>
@@ -130,6 +142,21 @@ export function WorkspacePage() {
       </div>
     </>
   )
+}
+
+const INDENT = 16 // px per level
+const ROW_PAD = 4 // px before the first level's arrow
+
+/** An icon for a file, from its extension (and pipeline YAML files from their folder). */
+function fileIcon(path: string): LucideIcon {
+  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase()
+  if ((ext === "yaml" || ext === "yml") && /(^|\/)pipelines\//.test(path)) return Workflow
+  if (ext === "yaml" || ext === "yml" || ext === "py" || ext === "ts" || ext === "sql" || ext === "sh") return FileCode
+  if (ext === "parquet") return Table2
+  if (ext === "avro" || ext === "zip" || ext === "gz") return FileArchive
+  if (ext === "json") return Braces
+  if (ext === "md" || ext === "txt" || ext === "csv") return FileText
+  return File
 }
 
 function TreeNode({
@@ -149,63 +176,79 @@ function TreeNode({
   useEffect(() => {
     if (containsSelected) setOpen(true)
   }, [containsSelected])
-  const pad = { paddingLeft: `${depth * 14 + 8}px` }
+  const left = depth * INDENT + ROW_PAD
+  const isSelected = selected === node.path
+  const row = cn(
+    "hover:bg-accent flex w-full items-center gap-1.5 rounded-md pr-2 text-sm",
+    isSelected && "bg-accent text-foreground font-medium",
+  )
+  const focus = "focus-visible:ring-ring rounded-sm outline-none focus-visible:ring-2"
 
   if (node.type === "file") {
+    const Icon = fileIcon(node.path)
     return (
       <button
         type="button"
+        role="treeitem"
+        aria-selected={isSelected}
         onClick={() => onSelect(node.path)}
-        style={pad}
-        className={cn(
-          "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm",
-          selected === node.path && "bg-accent font-medium",
-        )}
+        style={{ paddingLeft: left }}
+        className={cn(row, focus, "h-7 text-left")}
+        title={node.path}
       >
-        <span className="size-3.5 shrink-0" />
-        <FileText className="text-muted-foreground size-4 shrink-0" />
+        <span className="size-4 shrink-0" />
+        <Icon className="text-muted-foreground size-4 shrink-0" />
         <span className="truncate">{node.name}</span>
       </button>
     )
   }
+
   const Icon = open ? FolderOpen : Folder
+  const children = node.children ?? []
   return (
-    <div>
-      <div
-        style={pad}
-        className={cn(
-          "hover:bg-accent flex w-full items-center gap-1.5 pr-2 text-sm",
-          selected === node.path && "bg-accent font-medium",
-        )}
-      >
+    <div role="treeitem" aria-expanded={open} aria-selected={isSelected}>
+      <div style={{ paddingLeft: left }} className={cn(row, "h-7")}>
         <button
           type="button"
           onClick={() => setOpen(!open)}
-          aria-expanded={open}
           aria-label={open ? `Collapse ${node.name}` : `Expand ${node.name}`}
-          className="grid size-3.5 shrink-0 place-items-center py-1"
+          className={cn("text-muted-foreground hover:text-foreground grid size-4 shrink-0 place-items-center", focus)}
         >
           <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
         </button>
         <button
           type="button"
           onClick={() => {
-            if (selected === node.path) setOpen(!open)
+            if (isSelected) setOpen(!open)
             else {
               onSelect(node.path)
               setOpen(true)
             }
           }}
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
+          title={node.path}
+          className={cn("flex h-full min-w-0 flex-1 items-center gap-1.5 text-left", focus)}
         >
           <Icon className="text-primary size-4 shrink-0" />
           <span className="truncate">{node.name}</span>
+          {!open && children.length > 0 && (
+            <span className="text-muted-foreground ml-auto pl-2 text-xs tabular-nums">{children.length}</span>
+          )}
         </button>
       </div>
-      {open &&
-        node.children?.map((c) => (
-          <TreeNode key={c.path} node={c} depth={depth + 1} selected={selected} onSelect={onSelect} />
-        ))}
+      {open && children.length > 0 && (
+        <div role="group" className="relative">
+          {/* guide line from this folder's arrow down along its children */}
+          <span aria-hidden className="bg-border absolute top-0 bottom-1.5 w-px" style={{ left: left + 8 }} />
+          {children.map((c) => (
+            <TreeNode key={c.path} node={c} depth={depth + 1} selected={selected} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
+      {open && children.length === 0 && (
+        <p className="text-muted-foreground h-6 text-xs italic" style={{ paddingLeft: left + INDENT + 22 }}>
+          empty
+        </p>
+      )}
     </div>
   )
 }
@@ -237,7 +280,7 @@ function FolderViewer({
   const files = countFiles(node)
   const isProject = node.children?.some((c) => c.type === "dir" && c.name === "pipelines")
   return (
-    <Card className="min-w-0 gap-0 overflow-hidden py-0">
+    <Card className="min-w-0 gap-0 self-start overflow-hidden py-0">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
         <FolderOpen className="text-primary size-4" />
         <code className="min-w-0 flex-1 truncate font-mono text-sm">{node.path}/</code>
@@ -263,22 +306,14 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function FileViewer({
-  path,
-  onRemove,
-  removing,
-}: {
-  path: string | null
-  onRemove?: () => void
-  removing?: boolean
-}) {
+function FileViewer({ path, onRemove, removing }: { path: string | null; onRemove?: () => void; removing?: boolean }) {
   const file = useWorkspaceFile(path)
   const navigate = useNavigate()
   const lines = useMemo(() => file.data?.content?.split("\n") ?? [], [file.data?.content])
 
   if (!path) {
     return (
-      <Card className="text-muted-foreground grid min-h-64 place-items-center text-sm">
+      <Card className="text-muted-foreground grid min-h-64 place-items-center text-sm md:min-h-0">
         Select a file or folder.
       </Card>
     )
@@ -288,8 +323,8 @@ function FileViewer({
   const table = sqlTableFor(path)
 
   return (
-    <Card className="min-w-0 gap-0 overflow-hidden py-0">
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
+    <Card className="min-h-0 min-w-0 gap-0 overflow-hidden py-0">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
         <code className="min-w-0 flex-1 truncate font-mono text-sm">{path}</code>
         {file.data && <span className="text-muted-foreground text-xs">{formatSize(file.data.size)}</span>}
         {pipelineId && (
@@ -323,7 +358,7 @@ function FileViewer({
       ) : file.data?.binary ? (
         <div className="text-muted-foreground p-6 text-sm">This is a binary file and can't be shown.</div>
       ) : (
-        <div className="max-h-[70vh] overflow-auto">
+        <div className="max-h-[70vh] min-h-0 overflow-auto md:max-h-none md:flex-1">
           <table className="font-mono text-[13px] leading-relaxed">
             <tbody>
               {lines.map((line, i) => (
@@ -337,9 +372,7 @@ function FileViewer({
             </tbody>
           </table>
           {file.data?.truncated && (
-            <div className="text-muted-foreground border-t px-4 py-2 text-xs">
-              Showing the first 1 MB of this file.
-            </div>
+            <div className="text-muted-foreground border-t px-4 py-2 text-xs">Showing the first 1 MB of this file.</div>
           )}
         </div>
       )}
