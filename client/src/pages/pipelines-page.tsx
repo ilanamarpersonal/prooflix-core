@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { Link, useNavigate } from "react-router"
-import { AlarmClock, AlertTriangle, FolderInput, History, Plus, Workflow } from "lucide-react"
+import { AlarmClock, AlertTriangle, FolderInput, History, Plus, Search, Workflow, X } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ResizeDivider } from "@/components/resize-divider"
 import { RunsTable } from "@/components/runs-table"
 import { usePipelines, useRuns } from "@/lib/api"
+import { searchRuns } from "@/lib/run-search"
 import { describeCron } from "@/lib/schedule"
 import { usePagination } from "@/lib/use-pagination"
 import { useFillHeight } from "@/lib/use-fill-height"
@@ -42,6 +43,9 @@ export function PipelinesPage() {
   // All runs of the pipelines in the workspace, newest first.
   const ids = new Set(data?.map((p) => p.id))
   const pipelineRuns = data ? runs.data?.filter((r) => ids.has(r.pipeline)) : undefined
+  const [runQuery, setRunQuery] = useState("")
+  const shownRuns = searchRuns(pipelineRuns, runQuery)
+  const searching = !!runQuery.trim()
 
   // On md+ screens the two lists fill the window; the divider between them sets how
   // tall the pipelines list is and the runs get the rest. Each scrolls inside.
@@ -228,19 +232,63 @@ export function PipelinesPage() {
         )}
         {hasPipelines && (
           <section className={cn(split ? "flex min-h-0 flex-1 flex-col" : "mt-8")}>
-            <div className="mb-3 flex shrink-0 items-baseline gap-2">
+            <div className="mb-3 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2">
               <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
                 <History className="size-5" /> All runs
               </h2>
               <span className="text-muted-foreground text-sm">
-                {pipelineRuns ? `${pipelineRuns.length} run${pipelineRuns.length === 1 ? "" : "s"} · ` : ""}
+                {pipelineRuns
+                  ? searching
+                    ? `${shownRuns?.length ?? 0} of ${pipelineRuns.length} runs · `
+                    : `${pipelineRuns.length} run${pipelineRuns.length === 1 ? "" : "s"} · `
+                  : ""}
                 newest first; sub-pipeline runs open inside their parent run
               </span>
+              <div className="relative ml-auto w-full sm:w-80">
+                <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+                <input
+                  type="search"
+                  value={runQuery}
+                  onChange={(e) => setRunQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Escape" && setRunQuery("")}
+                  placeholder="Search runs: id, pipeline, status, trigger, date"
+                  aria-label="Search runs"
+                  title={'Words narrow the search ("e2e failed"); commas find several ("e8d93, 178a9")'}
+                  className="border-input bg-background focus-visible:ring-ring/50 h-9 w-full rounded-md border pr-8 pl-8 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] [&::-webkit-search-cancel-button]:hidden"
+                />
+                {searching && (
+                  <button
+                    type="button"
+                    onClick={() => setRunQuery("")}
+                    aria-label="Clear the search"
+                    className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2"
+                  >
+                    <X className="size-4" />
+                  </button>
+                )}
+              </div>
             </div>
             {runs.error && <ErrorAlert error={runs.error} />}
             <Card className={cn("py-2", split && "min-h-0 flex-1")}>
               <CardContent className={cn("px-2", split && "min-h-0 flex-1")}>
-                <RunsTable runs={pipelineRuns} loading={runs.isLoading} fill={split} />
+                <RunsTable
+                  key={runQuery.trim() ? "search" : "all"} // a search starts on the first page
+                  runs={shownRuns}
+                  loading={runs.isLoading}
+                  fill={split}
+                  emptyText={
+                    searching ? (
+                      <>
+                        No runs match <span className="text-foreground font-medium">“{runQuery.trim()}”</span>.{" "}
+                        <button type="button" className="underline" onClick={() => setRunQuery("")}>
+                          Show all runs
+                        </button>
+                      </>
+                    ) : (
+                      "No runs yet."
+                    )
+                  }
+                />
               </CardContent>
             </Card>
           </section>

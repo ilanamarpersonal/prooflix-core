@@ -15,6 +15,7 @@ export function RunsTable({
   showPipeline = true,
   pageSize = 25,
   fill = false,
+  emptyText = "No runs yet.",
 }: {
   runs?: Run[]
   loading?: boolean
@@ -22,11 +23,13 @@ export function RunsTable({
   pageSize?: number
   /** on md+ screens, stretch to the parent's height and scroll inside it */
   fill?: boolean
+  /** shown when there are no runs (e.g. "No runs match" while searching) */
+  emptyText?: React.ReactNode
 }) {
   const pager = usePagination(runs, pageSize)
   if (loading) return <Skeleton className="h-40 w-full" />
   if (!runs?.length) {
-    return <p className="text-muted-foreground py-8 text-center text-sm">No runs yet.</p>
+    return <div className="text-muted-foreground py-8 text-center text-sm">{emptyText}</div>
   }
   return (
     <div className={cn(fill && "flex min-h-0 flex-col md:h-full")}>
