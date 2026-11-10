@@ -1,15 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
-import {
-  ChevronDown,
-  ChevronRight,
-  Database,
-  Download,
-  Layers,
-  RefreshCw,
-  Table2,
-  Upload,
-} from "lucide-react"
+import { ChevronDown, ChevronRight, Database, Download, Layers, Library, RefreshCw, Table2, Upload } from "lucide-react"
 
 import { CatalogImportPanel } from "@/components/catalog-import-panel"
 import { DataGrid } from "@/components/data-grid"
@@ -22,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { catalogExportUrl, useCatalog, useSqlQuery } from "@/lib/api"
 import type { CatalogSchema, SqlTable } from "@/lib/types"
+import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
 
 const PREVIEW_ROWS = 1000
@@ -43,6 +35,9 @@ export function CatalogPage() {
   const selectedSchema = catalog.data?.find((s) => s.name === (selected?.schema ?? schemaParam)) ?? null
   const tableCount = catalog.data?.reduce((n, s) => n + s.tables.length, 0) ?? 0
   const [importing, setImporting] = useState(false)
+  // On md+ screens the tree and the detail fill the window and scroll inside.
+  const panels = useRef<HTMLDivElement>(null)
+  const panelsHeight = useFillHeight(panels)
 
   // Export what is selected: a table, a schema, or everything.
   const exportTarget = selected
@@ -102,8 +97,12 @@ export function CatalogPage() {
         />
       )}
       {catalog.error && <ErrorAlert error={catalog.error} />}
-      <div className="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)]">
-        <Card className="max-h-[75vh] gap-0 overflow-auto py-2">
+      <div
+        ref={panels}
+        style={panelsHeight ? { height: panelsHeight } : undefined}
+        className="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
+      >
+        <Card className="max-h-[60vh] gap-0 overflow-auto py-2 md:max-h-none">
           {catalog.isLoading ? (
             <Skeleton className="mx-2 h-64" />
           ) : !catalog.data?.length ? (
@@ -114,33 +113,44 @@ export function CatalogPage() {
                 <Link to="/workspace" className="underline">
                   Workspace
                 </Link>{" "}
-                tab with Parquet files in its <code className="font-mono">data/</code> folder. The project
-                becomes a schema and the files its tables.
+                tab with Parquet files in its <code className="font-mono">data/</code> folder. The project becomes a
+                schema and the files its tables.
               </p>
             </div>
           ) : (
-            catalog.data.map((s) => (
-              <SchemaNode
-                key={s.name}
-                schema={s}
-                selectedKey={selectedKey}
-                schemaSelected={!selected && schemaParam === s.name}
-                onSelectTable={(t) => setParams({ table: `${s.name}.${t.name}` })}
-                onSelectSchema={() => setParams({ schema: s.name })}
-              />
-            ))
+            groupByCatalog(catalog.data).map((group) => {
+              const node = (s: CatalogSchema) => (
+                <SchemaNode
+                  key={s.name}
+                  schema={s}
+                  nested={!!group.catalog}
+                  selectedKey={selectedKey}
+                  schemaSelected={!selected && schemaParam === s.name}
+                  onSelectTable={(t) => setParams({ table: `${s.name}.${t.name}` })}
+                  onSelectSchema={() => setParams({ schema: s.name })}
+                />
+              )
+              return group.catalog ? (
+                <CatalogNode
+                  key={`catalog:${group.catalog}`}
+                  name={group.catalog}
+                  containsSelected={!!(selectedKey ?? schemaParam)?.startsWith(`${group.catalog}.`)}
+                >
+                  {group.schemas.map(node)}
+                </CatalogNode>
+              ) : (
+                group.schemas.map(node)
+              )
+            })
           )}
         </Card>
 
         {selected ? (
           <TableDetail table={selected} />
         ) : selectedSchema ? (
-          <SchemaDetail
-            schema={selectedSchema}
-            onSelectTable={(t) => setParams({ table: `${t.schema}.${t.name}` })}
-          />
+          <SchemaDetail schema={selectedSchema} onSelectTable={(t) => setParams({ table: `${t.schema}.${t.name}` })} />
         ) : (
-          <Card className="text-muted-foreground grid min-h-64 place-items-center p-6 text-center text-sm">
+          <Card className="text-muted-foreground grid min-h-64 place-items-center p-6 text-center text-sm md:min-h-0">
             Select a schema or a table.
           </Card>
         )}
@@ -167,8 +177,7 @@ function ExportMenu({
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent | KeyboardEvent) => {
-      if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node))
-        setOpen(false)
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener("mousedown", close)
     document.addEventListener("keydown", close)
@@ -221,20 +230,69 @@ function ExportMenu({
   )
 }
 
+/** Schemas in server order, with the schemas of each catalog gathered under it. */
+function groupByCatalog(schemas: CatalogSchema[]): { catalog: string; schemas: CatalogSchema[] }[] {
+  const groups: { catalog: string; schemas: CatalogSchema[] }[] = []
+  for (const s of schemas) {
+    const last = groups[groups.length - 1]
+    if (s.catalog && last?.catalog === s.catalog) last.schemas.push(s)
+    else groups.push({ catalog: s.catalog, schemas: [s] })
+  }
+  return groups
+}
+
+/** A catalog (a tenant folder in data/) and its schemas, such as bronze. */
+function CatalogNode({
+  name,
+  containsSelected,
+  children,
+}: {
+  name: string
+  containsSelected: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(true)
+  useEffect(() => {
+    if (containsSelected) setOpen(true)
+  }, [containsSelected])
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={open ? `Collapse catalog ${name}` : `Expand catalog ${name}`}
+        className="hover:bg-accent flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-sm"
+      >
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <Library className="text-primary size-4 shrink-0" />
+        <span className="truncate font-mono text-xs font-medium">{name}</span>
+        <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">catalog</span>
+      </button>
+      {open && children}
+    </div>
+  )
+}
+
 function SchemaNode({
   schema,
+  nested = false,
   selectedKey,
   schemaSelected,
   onSelectTable,
   onSelectSchema,
 }: {
   schema: CatalogSchema
+  /** inside a catalog: indented and labelled with the schema's own name ("bronze") */
+  nested?: boolean
   selectedKey: string | null
   schemaSelected: boolean
   onSelectTable: (t: SqlTable) => void
   onSelectSchema: () => void
 }) {
   const containsSelected = !!selectedKey?.startsWith(`${schema.name}.`)
+  // "bronze" under catalog tenant1, the full name ("my_project") elsewhere
+  const label = nested && schema.catalog ? schema.name.slice(schema.catalog.length + 1) : schema.name
   const [open, setOpen] = useState(true)
   useEffect(() => {
     if (containsSelected) setOpen(true)
@@ -245,6 +303,7 @@ function SchemaNode({
       <div
         className={cn(
           "hover:bg-accent flex items-center gap-1.5 px-2 text-sm",
+          nested && "pl-6",
           schemaSelected && "bg-accent font-medium",
         )}
       >
@@ -263,14 +322,16 @@ function SchemaNode({
           className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left"
         >
           <Layers className="text-primary size-4 shrink-0" />
-          <span className="truncate font-mono text-xs">{schema.name}</span>
+          <span className="truncate font-mono text-xs">{label}</span>
           <span className="text-muted-foreground ml-auto text-xs">{schema.tables.length}</span>
         </button>
       </div>
       {open && (
         <div>
           {schema.tables.length === 0 ? (
-            <p className="text-muted-foreground py-1 pr-2 pl-10 text-xs italic">no tables</p>
+            <p className={cn("text-muted-foreground py-1 pr-2 text-xs italic", nested ? "pl-14" : "pl-10")}>
+              no tables
+            </p>
           ) : (
             schema.tables.map((t) => (
               <button
@@ -278,7 +339,8 @@ function SchemaNode({
                 type="button"
                 onClick={() => onSelectTable(t)}
                 className={cn(
-                  "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-2 pl-9 text-left text-sm",
+                  "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm",
+                  nested ? "pl-13" : "pl-9",
                   selectedKey === `${schema.name}.${t.name}` && "bg-accent font-medium",
                 )}
                 title={t.source}
@@ -294,16 +356,10 @@ function SchemaNode({
   )
 }
 
-function SchemaDetail({
-  schema,
-  onSelectTable,
-}: {
-  schema: CatalogSchema
-  onSelectTable: (t: SqlTable) => void
-}) {
+function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSelectTable: (t: SqlTable) => void }) {
   return (
-    <Card className="min-w-0 gap-0 overflow-hidden py-0">
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+    <Card className="min-h-0 min-w-0 gap-0 self-start overflow-hidden py-0 md:max-h-full">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-3">
         <Layers className="text-primary size-4" />
         <span className="font-mono font-medium">{schema.name}</span>
         <Badge variant="secondary">schema</Badge>
@@ -330,30 +386,31 @@ function SchemaDetail({
       {schema.tables.length === 0 ? (
         <div className="text-muted-foreground p-4 text-sm">
           No tables yet. Add Parquet files to{" "}
-          <code className="font-mono">{schema.data_dir ?? `${schema.project}/data`}/</code> and they show up
-          here.
+          <code className="font-mono">{schema.data_dir ?? `${schema.project}/data`}/</code> and they show up here.
         </div>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-4">Table</TableHead>
-              <TableHead>Rows</TableHead>
-              <TableHead>Columns</TableHead>
-              <TableHead>Source file</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {schema.tables.map((t) => (
-              <TableRow key={t.name} className="cursor-pointer" onClick={() => onSelectTable(t)}>
-                <TableCell className="pl-4 font-mono text-xs font-medium">{t.name}</TableCell>
-                <TableCell className="tabular-nums">{t.row_count}</TableCell>
-                <TableCell className="tabular-nums">{t.columns.length}</TableCell>
-                <TableCell className="text-muted-foreground font-mono text-xs">{t.source}</TableCell>
+        <div className="min-h-0 overflow-y-auto">
+          <Table>
+            <TableHeader className="bg-card sticky top-0 z-[1]">
+              <TableRow>
+                <TableHead className="pl-4">Table</TableHead>
+                <TableHead>Rows</TableHead>
+                <TableHead>Columns</TableHead>
+                <TableHead>Source file</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {schema.tables.map((t) => (
+                <TableRow key={t.name} className="cursor-pointer" onClick={() => onSelectTable(t)}>
+                  <TableCell className="pl-4 font-mono text-xs font-medium">{t.name}</TableCell>
+                  <TableCell className="tabular-nums">{t.row_count}</TableCell>
+                  <TableCell className="tabular-nums">{t.columns.length}</TableCell>
+                  <TableCell className="text-muted-foreground font-mono text-xs">{t.source}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </Card>
   )
@@ -370,9 +427,9 @@ function TableDetail({ table }: { table: SqlTable }) {
   }, [previewSql, mutate])
 
   return (
-    <div className="grid min-w-0 content-start gap-4">
-      <Card className="min-w-0 gap-0 overflow-hidden py-0">
-        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+    <div className="flex min-h-0 min-w-0 flex-col gap-4">
+      <Card className="min-w-0 shrink-0 gap-0 overflow-hidden py-0 md:max-h-[40%] md:shrink">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-3">
           <Table2 className="text-primary size-4" />
           <span className="font-mono font-medium">{table.qualified}</span>
           <span className="text-muted-foreground text-sm">
@@ -394,32 +451,36 @@ function TableDetail({ table }: { table: SqlTable }) {
             variant="outline"
             className="ml-auto"
             onClick={() =>
-              navigate("/sql", { state: { sql: `SELECT *\nFROM ${table.qualified}\nLIMIT 100;` } })
+              navigate("/sql", {
+                state: { sql: `SELECT *\nFROM ${table.qualified}\nLIMIT 100;` },
+              })
             }
           >
             <Database /> Query in SQL Editor
           </Button>
         </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-4">Column</TableHead>
-              <TableHead>Type</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {table.columns.map((c) => (
-              <TableRow key={c.name}>
-                <TableCell className="pl-4 font-mono text-xs">{c.name}</TableCell>
-                <TableCell className="text-muted-foreground text-xs uppercase">{c.type}</TableCell>
+        <div className="min-h-0 overflow-y-auto">
+          <Table>
+            <TableHeader className="bg-card sticky top-0 z-[1]">
+              <TableRow>
+                <TableHead className="pl-4">Column</TableHead>
+                <TableHead>Type</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {table.columns.map((c) => (
+                <TableRow key={c.name}>
+                  <TableCell className="pl-4 font-mono text-xs">{c.name}</TableCell>
+                  <TableCell className="text-muted-foreground text-xs uppercase">{c.type}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </Card>
 
-      <div className="grid min-w-0 gap-2">
-        <h3 className="text-muted-foreground text-sm">Sample data</h3>
+      <div className="flex min-h-0 min-w-0 flex-col gap-2 md:flex-1">
+        <h3 className="text-muted-foreground shrink-0 text-sm">Sample data</h3>
         {preview.error ? (
           <div className="p-4">
             <ErrorAlert title="Could not load sample data" error={preview.error} />
@@ -430,7 +491,8 @@ function TableDetail({ table }: { table: SqlTable }) {
           <DataGrid
             columns={preview.data.columns}
             rows={preview.data.rows}
-            maxHeight="max-h-[50vh]"
+            maxHeight="max-h-[50vh] md:max-h-none md:min-h-0 md:flex-1"
+            className="md:min-h-0 md:flex-1"
             footerNote={preview.data.truncated ? `First ${PREVIEW_ROWS.toLocaleString()} rows` : undefined}
           />
         )}

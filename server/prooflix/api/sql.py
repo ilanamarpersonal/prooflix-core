@@ -1,11 +1,22 @@
 """``/api/sql`` routes: run SQL over the workspace's data files.
 
-The catalog reads data lake files only: the Parquet files under ``workspace/data/``
-(schema ``main``), each project's ``data/`` folder (a schema named after the project)
-and each catalog sub-folder. A folder of Parquet files is one table (its files are
-read together), and a Parquet file directly in a schema's folder is a table of its
-own. The tables are loaded into a fresh in-memory SQLite database for each request.
-The database is read only and thrown away afterwards, so queries never change the files.
+The catalog reads data lake files only (Parquet):
+
+- ``workspace/data/<catalog>/<schema>/``: three-level names. Each folder in ``data/``
+  is a catalog (usually a tenant ID such as ``tenant1``) and each folder in it a schema
+  (a layer such as ``bronze``), so ``data/tenant1/bronze/customers/`` is the table
+  ``tenant1.bronze.customers``. Folders without Parquet files (``source/``,
+  ``checkpoint/``) add nothing.
+- Parquet files directly in ``data/``: schema ``main`` (no prefix in SQL).
+- each project's ``data/`` folder (a schema named after the project) and each
+  catalog sub-folder: two-level names, ``my_project.orders``.
+
+A folder of Parquet files is one table (its files are read together), and a Parquet
+file directly in a schema's folder is a table of its own. The tables are loaded into a
+fresh in-memory SQLite database for each request. SQLite only has ``schema.table``, so
+a three-level schema is attached as a database named ``"tenant1.bronze"`` and queries
+are rewritten from ``tenant1.bronze.customers`` to ``"tenant1.bronze".customers``. The
+database is read only and thrown away afterwards, so queries never change the files.
 """
 
 from __future__ import annotations
@@ -45,8 +56,11 @@ class SqlColumn(BaseModel):
 
 class SqlTable(BaseModel):
     name: str  # table name inside its schema
-    schema_name: str = Field(serialization_alias="schema")  # "main" or a project's schema
-    qualified: str  # how to write it in SQL: "orders" in main, "my_project.orders" otherwise
+    # "main", a project's schema, or "<catalog>.<schema>" such as "tenant1.bronze"
+    schema_name: str = Field(serialization_alias="schema")
+    catalog: str = ""  # "tenant1" for three-level names, "" otherwise
+    # how to write it in SQL: "orders" in main, "my_project.orders", "tenant1.bronze.orders"
+    qualified: str
     source: str  # file path, relative to the workspace or (for catalog schemas) starting with "catalog/"
     in_workspace: bool  # the file is part of the workspace (a project's data), not the catalog folder
     row_count: int
@@ -54,7 +68,8 @@ class SqlTable(BaseModel):
 
 
 class CatalogSchema(BaseModel):
-    name: str
+    name: str  # as written in SQL: "my_project" or "tenant1.bronze"
+    catalog: str = ""  # "tenant1" for a schema inside a catalog folder, "" otherwise
     location: Literal["workspace", "catalog"]  # a project's data, or the catalog folder
     project: str  # project folder relative to the workspace; "" for main and catalog schemas
     data_dir: str | None  # where its tables come from ("catalog/<name>" for catalog schemas)
@@ -82,6 +97,7 @@ class _Loaded:
     columns: list[str]
     rows: list[list[Any]]
     in_workspace: bool = True
+    catalog: str = ""
 
     @property
     def qualified(self) -> str:
@@ -167,16 +183,22 @@ def schema_name(project_folder: str) -> str:
 
 @dataclass
 class _Schema:
-    name: str
+    name: str  # as written in SQL, "tenant1.bronze" for a schema inside a catalog
     location: Literal["workspace", "catalog"]
-    project: str  # project folder ("" for main and catalog schemas)
+    project: str  # project folder ("" for main, tenant and catalog schemas)
     data_dir: Path
+    recursive: bool = True  # False for main: its sub-folders are catalogs of their own
+    catalog: str = ""  # "tenant1" for data/tenant1/<schema>/, "" otherwise
 
 
 def schemas(paths: CatalogPaths) -> list[_Schema]:
     """Schemas and the folders their tables come from.
 
-    - ``main``: the workspace's own ``data/`` folder (tables need no prefix in SQL)
+    - ``main``: Parquet files directly in the workspace's ``data/`` folder (tables
+      need no prefix in SQL)
+    - one per folder inside each folder of the workspace's ``data/`` folder: the outer
+      folder is the catalog (a tenant ID), the inner one the schema (a layer), so
+      ``data/tenant1/bronze/customers/`` is ``tenant1.bronze.customers``
     - one per project (a workspace folder with ``pipelines/``): its ``data/``
       folder, named after the project, so ``my-project/data/orders.parquet`` is
       ``my_project.orders``
@@ -185,7 +207,8 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
       is ``banking.customers``
     """
     root = paths.root
-    out = [_Schema(MAIN, "workspace", "", root / "data")]
+    data = root / "data"
+    out = [_Schema(MAIN, "workspace", "", data, recursive=False)]
     taken = {MAIN}
 
     def unique(name: str) -> str:
@@ -193,6 +216,16 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
             name += "_"
         taken.add(name)
         return name
+
+    def folders(parent: Path) -> list[Path]:
+        return [f for f in sorted(parent.iterdir()) if f.is_dir() and not f.name.startswith((".", "_"))]
+
+    if data.is_dir():
+        for catalog_folder in folders(data):
+            cat = schema_name(catalog_folder.name)
+            for schema_folder in folders(catalog_folder):
+                name = unique(f"{cat}.{schema_name(schema_folder.name)}")
+                out.append(_Schema(name, "workspace", "", schema_folder, catalog=cat))
 
     for project in Workspace(root).projects():
         if project != root:
@@ -222,7 +255,8 @@ def _load_dir(paths: CatalogPaths, sch: _Schema, tables: list[_Loaded]) -> None:
     """Add the schema's tables: one per folder of Parquet files, plus one per
     Parquet file directly in the schema's folder. Other files are ignored."""
     groups: dict[Path, list[Path]] = {}
-    for path in sorted(sch.data_dir.rglob(f"*{DATA_SUFFIX}"), key=lambda p: p.as_posix()):
+    found = sch.data_dir.rglob(f"*{DATA_SUFFIX}") if sch.recursive else sch.data_dir.glob(f"*{DATA_SUFFIX}")
+    for path in sorted(found, key=lambda p: p.as_posix()):
         rel = path.relative_to(sch.data_dir)
         if path.is_file() and path.suffix.lower() == DATA_SUFFIX and not any(
             p.startswith((".", "_")) for p in rel.parts
@@ -240,12 +274,44 @@ def _load_dir(paths: CatalogPaths, sch: _Schema, tables: list[_Loaded]) -> None:
         seen.add(name)
         source = sch.data_dir / key
         tables.append(
-            _Loaded(sch.name, name, _display_path(paths, source, in_workspace), loaded[0], loaded[1], in_workspace)
+            _Loaded(
+                sch.name,
+                name,
+                _display_path(paths, source, in_workspace),
+                loaded[0],
+                loaded[1],
+                in_workspace,
+                sch.catalog,
+            )
         )
 
 
 def _quote(ident: str) -> str:
     return '"' + ident.replace('"', '""') + '"'
+
+
+# Parts of a query the three-level rewrite must leave alone: strings, quoted
+# identifiers and comments.
+_UNTOUCHED = re.compile(r"""('(?:[^']|'')*'|"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*.*?(?:\*/|$))""", re.S)
+
+
+def rewrite_three_part_names(sql: str, schema_names: list[str]) -> str:
+    """``tenant1.bronze.customers`` -> ``"tenant1.bronze".customers`` for every
+    three-level schema (a name with a dot), outside strings and comments."""
+    dotted = sorted((n for n in schema_names if "." in n), key=len, reverse=True)
+    if not dotted:
+        return sql
+    patterns = []
+    for name in dotted:
+        cat, sch = name.split(".", 1)
+        patterns.append(
+            (re.compile(rf"(?<![\w$.\"]){re.escape(cat)}\s*\.\s*{re.escape(sch)}\s*\.(?=\s*[\w\"`\[])", re.I), _quote(name) + ".")
+        )
+    parts = _UNTOUCHED.split(sql)
+    for i in range(0, len(parts), 2):  # even indexes are code, odd ones untouched
+        for pattern, replacement in patterns:
+            parts[i] = pattern.sub(replacement, parts[i])
+    return "".join(parts)
 
 
 def _deny_attach(action: int, *_args: Any) -> int:
@@ -294,6 +360,7 @@ def _describe(tables: list[_Loaded]) -> list[SqlTable]:
             SqlTable(
                 name=t.name,
                 schema_name=t.schema,
+                catalog=t.catalog,
                 qualified=t.qualified,
                 source=t.source,
                 in_workspace=t.in_workspace,
@@ -324,6 +391,7 @@ def catalog(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[CatalogSch
         out.append(
             CatalogSchema(
                 name=sch.name,
+                catalog=sch.catalog,
                 location=sch.location,
                 project=sch.project,
                 data_dir=_display_path(paths, sch.data_dir, sch.location == "workspace"),
@@ -335,12 +403,13 @@ def catalog(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[CatalogSch
 
 @router.post("/query", response_model=SqlResult)
 def run_query(body: SqlQueryIn, paths: CatalogPaths = Depends(get_catalog_paths)) -> SqlResult:
-    conn, _ = open_database(paths)
+    conn, tables = open_database(paths)
+    sql = rewrite_three_part_names(body.sql, sorted({t.schema for t in tables}))
     started = time.perf_counter()
     deadline = started + QUERY_TIMEOUT_S
     conn.set_progress_handler(lambda: 1 if time.perf_counter() > deadline else 0, 10_000)
     try:
-        cur = conn.execute(body.sql)
+        cur = conn.execute(sql)
         columns = [d[0] for d in cur.description or []]
         fetched = cur.fetchmany(body.limit + 1) if columns else []
     except sqlite3.Error as exc:

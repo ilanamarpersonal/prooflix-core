@@ -122,9 +122,11 @@ export interface RemoveResult {
 export interface SqlTable {
   /** table name inside its schema */
   name: string
-  /** "main" (the workspace's own data) or a project's schema */
+  /** "main" (the workspace's own data), a project's schema, or "<catalog>.<schema>" such as "tenant1.bronze" */
   schema: string
-  /** how to write it in SQL: "orders" in main, "my_project.orders" otherwise */
+  /** "tenant1" for three-level names (data/<catalog>/<schema>/), "" otherwise */
+  catalog: string
+  /** how to write it in SQL: "orders" in main, "my_project.orders", "tenant1.bronze.orders" */
   qualified: string
   /** file path: relative to the workspace, or "catalog/…" for the catalog folder */
   source: string
@@ -135,7 +137,10 @@ export interface SqlTable {
 }
 
 export interface CatalogSchema {
+  /** as written in SQL: "my_project" or "tenant1.bronze" */
   name: string
+  /** "tenant1" for a schema inside a catalog folder, "" otherwise */
+  catalog: string
   /** a project's data in the workspace, or the catalog folder */
   location: "workspace" | "catalog"
   /** project folder relative to the workspace; "" for the workspace's own data */

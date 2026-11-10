@@ -30,12 +30,19 @@ def client(sample_workspace, tmp_path):
     data = sample_workspace / "data"
     # the catalog reads Parquet only: data/orders.parquet is the table "orders"
     pq.write_table(pacsv.read_csv(data / "orders.csv"), data / "orders.parquet")
-    # a folder of Parquet files is one table: output/2026-01-01/clean_orders
-    out = data / "output" / "2026-01-01" / "clean_orders"
+    # each folder in data/ is a schema named after it (a tenant ID), and a folder
+    # of Parquet files is one table: data/<catalog>/<schema>/<table>/ is
+    # tenant1.bronze.clean_orders (source/ and checkpoint/
+    # hold no Parquet, so they add no tables)
+    out = data / "tenant1" / "bronze" / "clean_orders"
+    (data / "tenant1" / "source").mkdir(parents=True)
+    (data / "tenant1" / "source" / "orders.avro").write_bytes(b"Obj\x01")
+    (data / "tenant1" / "checkpoint").mkdir()
+    (data / "tenant1" / "checkpoint" / "last_checkpoint.txt").write_text("2026-01-01T00:00:00+00:00")
     write_parquet(out / "part-0.parquet", [{"order_id": 1, "amount": 10.5, "tags": ["a"]}])
     write_parquet(out / "part-1.parquet", [{"order_id": 2, "amount": 4.0, "tags": None}])
     write_parquet(
-        data / "output" / "2026-01-01" / "summary" / "summary.parquet",
+        data / "tenant1" / "bronze" / "summary" / "summary.parquet",
         [{"total": 14.5, "day": dt.date(2026, 1, 1), "at": dt.datetime(2026, 1, 1, 8, 30)}],
     )
     (sample_workspace / ".prooflix").mkdir(exist_ok=True)
@@ -77,21 +84,22 @@ def test_table_name_and_key():
 
 def test_tables_are_parquet_files_and_folders_only(client, sample_workspace):
     (sample_workspace / "data" / "notes.json").write_text('[{"a": 1}]')  # not a data lake file
-    tables = {t["name"]: t for t in client.get("/api/sql/tables").json()}
-    assert set(tables) == {"orders", "output_2026_01_01_clean_orders", "output_2026_01_01_summary"}
+    tables = {t["qualified"]: t for t in client.get("/api/sql/tables").json()}
+    assert set(tables) == {"orders", "tenant1.bronze.clean_orders", "tenant1.bronze.summary"}
     assert tables["orders"]["source"] == "data/orders.parquet"
     assert tables["orders"]["row_count"] > 0
-    clean = tables["output_2026_01_01_clean_orders"]
-    assert clean["source"] == "data/output/2026-01-01/clean_orders"
+    clean = tables["tenant1.bronze.clean_orders"]
+    assert (clean["catalog"], clean["schema"], clean["name"]) == ("tenant1", "tenant1.bronze", "clean_orders")
+    assert clean["source"] == "data/tenant1/bronze/clean_orders"
     assert clean["row_count"] == 2  # both part files
     assert [c["name"] for c in clean["columns"]] == ["order_id", "amount", "tags"]
-    summary = tables["output_2026_01_01_summary"]
+    summary = tables["tenant1.bronze.summary"]
     assert summary["row_count"] == 1
     assert [c["type"] for c in summary["columns"]] == ["REAL", "TEXT", "TEXT"]
 
 
 def test_dates_and_timestamps_are_iso_text(client):
-    rows = client.post("/api/sql/query", json={"sql": "SELECT day, at FROM output_2026_01_01_summary"}).json()["rows"]
+    rows = client.post("/api/sql/query", json={"sql": "SELECT day, at FROM tenant1.bronze.summary"}).json()["rows"]
     assert rows == [["2026-01-01", "2026-01-01 08:30:00"]]
 
 
@@ -99,14 +107,15 @@ def test_hidden_and_underscore_parquet_files_are_skipped(client, sample_workspac
     write_parquet(sample_workspace / "data" / "_tmp" / "x.parquet", [{"a": 1}])
     write_parquet(sample_workspace / "data" / ".cache" / "y.parquet", [{"a": 1}])
     (sample_workspace / "data" / "broken.parquet").write_text("not parquet")
-    names = {t["name"] for t in client.get("/api/sql/tables").json()}
+    names = {t["qualified"] for t in client.get("/api/sql/tables").json()}
     assert not names & {"t_tmp", "tmp", "cache", "broken"}
+    assert not {n.split(".")[0] for n in names} & {"_tmp", "tmp", "cache", "s_tmp"}
 
 
 def test_query_returns_rows_with_numbers(client):
     res = client.post(
         "/api/sql/query",
-        json={"sql": "SELECT order_id, amount FROM output_2026_01_01_clean_orders ORDER BY order_id"},
+        json={"sql": "SELECT order_id, amount FROM tenant1.bronze.clean_orders ORDER BY order_id"},
     )
     assert res.status_code == 200, res.text
     body = res.json()
@@ -266,7 +275,11 @@ def test_project_tables_live_in_their_own_schema(client, sample_workspace):
 def test_catalog_lists_schemas_and_tables(client, sample_workspace):
     _add_project_with_data(sample_workspace)
     cat = {s["name"]: s for s in client.get("/api/catalog").json()}
-    assert list(cat) == ["main", "my_project"]  # empty-project has no tables, so it's not listed
+    # data/tenant1/bronze is schema bronze of catalog tenant1; empty-project has no tables
+    assert list(cat) == ["main", "tenant1.bronze", "my_project"]
+    bronze = cat["tenant1.bronze"]
+    assert (bronze["catalog"], bronze["data_dir"], bronze["location"]) == ("tenant1", "data/tenant1/bronze", "workspace")
+    assert cat["my_project"]["catalog"] == ""
     assert cat["my_project"]["project"] == "my-project"
     assert cat["my_project"]["data_dir"] == "my-project/data"
     assert [t["name"] for t in cat["my_project"]["tables"]] == ["orders"]
@@ -393,3 +406,33 @@ def test_export_schema_as_parquet_zip(client):
     names = _zipfile.ZipFile(_io.BytesIO(res.content)).namelist()
     assert "orders.parquet" in names and all(n.endswith(".parquet") for n in names)
     assert client.get("/api/catalog/export", params={"format": "xlsx"}).status_code == 422
+
+
+# ---------------------------------------------------------------- three-level names
+def test_three_part_names_in_queries(client):
+    sql = """
+        SELECT c.order_id, s.total, 'tenant1.bronze.x' AS text  -- tenant1.bronze.nope
+        FROM Tenant1 . Bronze .clean_orders c, tenant1.bronze.summary s
+        ORDER BY c.order_id
+    """
+    body = client.post("/api/sql/query", json={"sql": sql}).json()
+    assert body["rows"] == [[1, 14.5, "tenant1.bronze.x"], [2, 14.5, "tenant1.bronze.x"]], body
+    # catalog.schema.table.column works too
+    sql = "SELECT tenant1.bronze.clean_orders.order_id FROM tenant1.bronze.clean_orders ORDER BY 1"
+    assert client.post("/api/sql/query", json={"sql": sql}).json()["rows"] == [[1], [2]]
+
+
+def test_rewrite_three_part_names_leaves_strings_and_other_names():
+    from prooflix.api.sql import rewrite_three_part_names as rewrite
+
+    names = ["main", "tenant1.bronze", "my_project"]
+    assert rewrite("SELECT * FROM tenant1.bronze.t", names) == 'SELECT * FROM "tenant1.bronze".t'
+    assert rewrite("SELECT 'tenant1.bronze.t'", names) == "SELECT 'tenant1.bronze.t'"
+    assert rewrite("SELECT * FROM xtenant1.bronze.t, my_project.t", names) == (
+        "SELECT * FROM xtenant1.bronze.t, my_project.t"
+    )
+
+
+def test_catalog_folder_files_outside_schema_folders_are_ignored(client, sample_workspace):
+    write_parquet(sample_workspace / "data" / "tenant1" / "loose.parquet", [{"a": 1}])
+    assert "loose" not in {t["name"] for t in client.get("/api/sql/tables").json()}

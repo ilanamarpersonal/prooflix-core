@@ -21,10 +21,13 @@ const startsWith = (name: string, prefix: string) => name.toLowerCase().startsWi
 
 /**
  * What to suggest at the cursor.
- *   banking.|          -> the tables of schema "banking"
- *   banking.cu|        -> its tables starting with "cu"
- *   banking.customers.|-> the columns of banking.customers
- *   ba| (forced)       -> schemas and main tables starting with "ba"
+ *   banking.|                 -> the tables of schema "banking"
+ *   banking.cu|               -> its tables starting with "cu"
+ *   banking.customers.|       -> the columns of banking.customers
+ *   tenant1.|                 -> the schemas of catalog "tenant1" (bronze, ...)
+ *   tenant1.bronze.|          -> the tables of schema "tenant1.bronze"
+ *   tenant1.bronze.accounts.| -> its columns
+ *   ba| (forced)              -> catalogs, schemas and main tables starting with "ba"
  * Returns null when there is nothing to suggest.
  */
 export function completeAt(
@@ -41,14 +44,22 @@ export function completeAt(
   const word = m[2] ?? ""
   const from = cursor - word.length
   const schemas = [...new Set(tables.map((t) => t.schema))]
+  const catalogs = [...new Set(tables.map((t) => t.catalog).filter(Boolean))]
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
   let items: Suggestion[] = []
   if (qualifier) {
-    const parts = qualifier.split(".")
-    if (parts.length === 1 && schemas.some((s) => s.toLowerCase() === parts[0].toLowerCase())) {
-      // schema.  -> its tables
+    if (catalogs.some((c) => same(c, qualifier))) {
+      // catalog.  -> its schemas, written without the catalog ("bronze")
+      items = schemas
+        .filter((s) => same(s.split(".")[0], qualifier) && s.includes("."))
+        .map((s) => s.slice(s.indexOf(".") + 1))
+        .filter((s) => startsWith(s, word))
+        .map((s) => ({ insert: s, label: s, kind: "schema" as const, detail: "schema" }))
+    } else if (schemas.some((s) => same(s, qualifier))) {
+      // schema.  or  catalog.schema.  -> its tables
       items = tables
-        .filter((t) => t.schema.toLowerCase() === parts[0].toLowerCase() && startsWith(t.name, word))
+        .filter((t) => same(t.schema, qualifier) && startsWith(t.name, word))
         .map((t) => ({
           insert: t.name,
           label: t.name,
@@ -56,7 +67,7 @@ export function completeAt(
           detail: `${t.row_count.toLocaleString()} rows`,
         }))
     } else {
-      // schema.table.  or  main_table.  -> its columns
+      // [catalog.]schema.table.  or  main_table.  -> its columns
       const table = tables.find((t) => t.qualified.toLowerCase() === qualifier.toLowerCase())
       items = (table?.columns ?? [])
         .filter((c) => startsWith(c.name, word))
@@ -69,8 +80,11 @@ export function completeAt(
     }
   } else if (force || word.length >= 2) {
     items = [
+      ...catalogs
+        .filter((c) => startsWith(c, word))
+        .map((c) => ({ insert: c, label: c, kind: "schema" as const, detail: "catalog" })),
       ...schemas
-        .filter((s) => s !== "main" && startsWith(s, word))
+        .filter((s) => s !== "main" && !s.includes(".") && startsWith(s, word))
         .map((s) => ({ insert: s, label: s, kind: "schema" as const, detail: "schema" })),
       ...tables
         .filter((t) => t.schema === "main" && startsWith(t.name, word))
@@ -87,10 +101,7 @@ export function completeAt(
  * Pixel position of the caret inside a textarea, relative to the textarea's
  * top-left corner (a mirror element copies its text and styles).
  */
-export function caretPosition(
-  el: HTMLTextAreaElement,
-  index: number,
-): { left: number; top: number; height: number } {
+export function caretPosition(el: HTMLTextAreaElement, index: number): { left: number; top: number; height: number } {
   const style = getComputedStyle(el)
   const mirror = document.createElement("div")
   for (const prop of [

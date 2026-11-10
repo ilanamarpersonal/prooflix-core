@@ -33,6 +33,7 @@ export function DataGrid({
   defaultPageSize = 25,
   maxHeight = "max-h-[60vh]",
   footerNote,
+  className,
 }: {
   columns: string[]
   rows: unknown[][]
@@ -40,6 +41,8 @@ export function DataGrid({
   maxHeight?: string
   /** shown at the bottom left, e.g. "first 10,000 rows only" */
   footerNote?: React.ReactNode
+  /** extra classes for the outer card, e.g. to let it fill a flex column */
+  className?: string
 }) {
   const [pageSize, setPageSize] = useState(() => loadPageSize(defaultPageSize))
   const [page, setPage] = useState(0)
@@ -82,7 +85,7 @@ export function DataGrid({
   }
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
+    <Card className={cn("gap-0 overflow-hidden py-0", className)}>
       <div className={cn("overflow-auto", maxHeight)}>
         <table className="w-full caption-bottom font-mono text-xs">
           <thead className="bg-muted sticky top-0 z-[1]">

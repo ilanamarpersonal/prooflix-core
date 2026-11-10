@@ -1,17 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
-import {
-  ChevronRight,
-  Layers,
-  Loader2,
-  Maximize2,
-  Minimize2,
-  Play,
-  Plus,
-  RefreshCw,
-  Table2,
-  X,
-} from "lucide-react"
+import { ChevronRight, Layers, Loader2, Maximize2, Minimize2, Play, Plus, RefreshCw, Table2, X } from "lucide-react"
 
 import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
@@ -23,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useSqlQuery, useSqlTables } from "@/lib/api"
 import { caretPosition, completeAt, type Completion, type Suggestion } from "@/lib/sql-completion"
 import type { SqlResult, SqlTable } from "@/lib/types"
+import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
 
 const TABS_KEY = "prooflix-sql-tabs"
@@ -48,13 +38,24 @@ const newId = () => Math.random().toString(36).slice(2, 10)
 
 const EDITOR_HEIGHT_KEY = "prooflix-sql-editor-height"
 const DEFAULT_EDITOR_HEIGHT = 176
+const MIN_EDITOR_HEIGHT = 96
+const MIN_RESULTS_HEIGHT = 160 // the divider never squeezes the results below this
+const KEY_STEP = 24 // px per arrow key on the divider
 
 function loadEditorHeight() {
   try {
     const h = Number(localStorage.getItem(EDITOR_HEIGHT_KEY))
-    return h >= 96 && h <= 2000 ? h : DEFAULT_EDITOR_HEIGHT
+    return h >= MIN_EDITOR_HEIGHT && h <= 2000 ? h : DEFAULT_EDITOR_HEIGHT
   } catch {
     return DEFAULT_EDITOR_HEIGHT
+  }
+}
+
+function saveEditorHeight(h: number) {
+  try {
+    localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(h)))
+  } catch {
+    /* storage unavailable */
   }
 }
 
@@ -88,6 +89,10 @@ export function SqlEditorPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const editorApi = useRef<{ insert: (text: string) => void } | null>(null)
+  // On md+ screens the schemas and the editor column fill the window; the
+  // divider splits the column between the editor and the results.
+  const panels = useRef<HTMLDivElement>(null)
+  const panelsHeight = useFillHeight(panels)
   const autoRun = useRef<string | null>(null) // tab id to run once it shows
   const handled = useRef<string | null>(null) // location key of the last handed-over query
 
@@ -145,12 +150,16 @@ export function SqlEditorPage() {
         title="SQL Editor"
         description={
           <>
-            Read-only SQL (SQLite) over the Parquet files in the <code className="font-mono">data/</code>{" "}
-            folders of the workspace and its projects
+            Read-only SQL (SQLite) over the Parquet files in the <code className="font-mono">data/</code> folders of the
+            workspace and its projects
           </>
         }
       />
-      <div className="grid items-start gap-4 md:grid-cols-[15rem_minmax(0,1fr)]">
+      <div
+        ref={panels}
+        style={panelsHeight ? { height: panelsHeight } : undefined}
+        className="grid items-start gap-4 md:grid-cols-[15rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:items-stretch"
+      >
         <TableList
           tables={tables.data}
           loading={tables.isLoading}
@@ -160,7 +169,7 @@ export function SqlEditorPage() {
           onInsert={(text) => editorApi.current?.insert(text)}
         />
 
-        <div className="grid min-w-0 content-start gap-3">
+        <div data-sql-column className="flex min-h-0 min-w-0 flex-col gap-3">
           <QueryTabsBar
             tabs={state.tabs}
             active={active.id}
@@ -295,28 +304,24 @@ function QueryEditor({
   const [height, setHeight] = useState(loadEditorHeight)
   const [expanded, setExpanded] = useState(false)
 
-  // Remember the height the editor is dragged to (bottom-right handle).
-  useEffect(() => {
-    const el = editor.current
-    if (!el || expanded) return
-    const observer = new ResizeObserver(() => {
-      const h = Math.round(el.getBoundingClientRect().height)
-      if (h > 0 && Math.abs(h - height) > 2) {
-        setHeight(h)
-        try {
-          localStorage.setItem(EDITOR_HEIGHT_KEY, String(h))
-        } catch {
-          /* storage unavailable */
-        }
-      }
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [expanded, height])
+  const resultsArea = useRef<HTMLDivElement>(null)
 
-  const [completion, setCompletion] = useState<
-    (Completion & { index: number; left: number; top: number }) | null
-  >(null)
+  /** Tallest the editor may get: on md+ screens, where the column fills the
+   * window, whatever the editor grows by comes out of the results, which keep
+   * at least MIN_RESULTS_HEIGHT. */
+  const maxEditorHeight = () => {
+    const results = resultsArea.current
+    if (!results || window.innerWidth < 768) return 2000
+    return Math.max(MIN_EDITOR_HEIGHT, height + results.getBoundingClientRect().height - MIN_RESULTS_HEIGHT)
+  }
+  const resize = (h: number, save = false) => {
+    const next = Math.round(Math.min(Math.max(h, MIN_EDITOR_HEIGHT), maxEditorHeight()))
+    setHeight(next)
+    if (save) saveEditorHeight(next)
+    return next
+  }
+
+  const [completion, setCompletion] = useState<(Completion & { index: number; left: number; top: number }) | null>(null)
 
   const suggest = (text: string, cursor: number, force = false) => {
     const el = editor.current
@@ -373,7 +378,7 @@ function QueryEditor({
 
   return (
     <>
-      <div className="relative">
+      <div className="relative shrink-0">
         <Textarea
           ref={editor}
           value={sql}
@@ -393,10 +398,7 @@ function QueryEditor({
           aria-expanded={!!completion}
           placeholder="Write a query, for example SELECT * FROM banking.customers"
           style={{ height: expanded ? "calc(100svh - 17rem)" : height }}
-          className={cn(
-            "min-h-24 pr-10 font-mono text-sm leading-relaxed field-sizing-fixed md:text-[13px]",
-            expanded ? "resize-none" : "resize-y",
-          )}
+          className="min-h-24 resize-none pr-10 font-mono text-sm leading-relaxed field-sizing-fixed md:text-[13px]"
           onKeyDown={(e) => {
             if (completion) {
               const count = completion.items.length
@@ -485,21 +487,19 @@ function QueryEditor({
                   <span className="text-muted-foreground w-3.5 shrink-0 text-center">·</span>
                 )}
                 <span className="truncate">{item.label}</span>
-                {item.detail && (
-                  <span className="text-muted-foreground ml-auto pl-3 font-sans">{item.detail}</span>
-                )}
+                {item.detail && <span className="text-muted-foreground ml-auto pl-3 font-sans">{item.detail}</span>}
               </li>
             ))}
           </ul>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <Button onClick={() => run()} disabled={query.isPending || !sql.trim()}>
           {query.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run
         </Button>
         <span className="text-muted-foreground text-xs">
-          <kbd className="font-sans">⌘</kbd>/<kbd className="font-sans">Ctrl</kbd> + Enter runs the query, or
-          just the selected text · type <code className="font-mono">schema.</code> for its tables,{" "}
+          <kbd className="font-sans">⌘</kbd>/<kbd className="font-sans">Ctrl</kbd> + Enter runs the query, or just the
+          selected text · type <code className="font-mono">schema.</code> for its tables,{" "}
           <kbd className="font-sans">Ctrl</kbd> + Space for suggestions
         </span>
         {result && !query.isPending && (
@@ -509,9 +509,118 @@ function QueryEditor({
           </span>
         )}
       </div>
-      {query.error && <ErrorAlert title="Query failed" error={query.error} />}
-      {result && <ResultTable result={result} />}
+      {!expanded && (
+        <Divider
+          height={height}
+          onDrag={(h) => resize(h)}
+          onDone={(h) => resize(h, true)}
+          onReset={() => resize(DEFAULT_EDITOR_HEIGHT, true)}
+          max={maxEditorHeight}
+        />
+      )}
+      {query.error && (
+        <div className="shrink-0">
+          <ErrorAlert title="Query failed" error={query.error} />
+        </div>
+      )}
+      <div ref={resultsArea} className="flex min-h-0 flex-col md:flex-1">
+        {result ? (
+          <ResultTable result={result} />
+        ) : (
+          <Card className="text-muted-foreground grid min-h-32 place-items-center p-6 text-sm md:flex-1">
+            Run a query to see its results here.
+          </Card>
+        )}
+      </div>
     </>
+  )
+}
+
+/**
+ * The bar between the SQL editor and the results. Drag it (or focus it and use
+ * the arrow keys) to make the editor taller or shorter; the results take the
+ * rest of the space. Double-click to go back to the default height.
+ */
+function Divider({
+  height,
+  onDrag,
+  onDone,
+  onReset,
+  max,
+}: {
+  height: number
+  onDrag: (h: number) => number
+  onDone: (h: number) => void
+  onReset: () => void
+  max: () => number
+}) {
+  const [dragging, setDragging] = useState(false)
+  const start = useRef<{ y: number; h: number } | null>(null)
+
+  // While dragging, keep the page from selecting text and show the resize cursor everywhere.
+  useEffect(() => {
+    if (!dragging) return
+    const { userSelect, cursor } = document.body.style
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "row-resize"
+    return () => {
+      document.body.style.userSelect = userSelect
+      document.body.style.cursor = cursor
+    }
+  }, [dragging])
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize the editor and the results"
+      aria-valuenow={height}
+      aria-valuemin={MIN_EDITOR_HEIGHT}
+      aria-valuemax={max()}
+      tabIndex={0}
+      title="Drag to resize the editor and the results · double-click to reset"
+      className="group -my-1.5 flex h-4 shrink-0 cursor-row-resize touch-none items-center outline-none"
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        start.current = { y: e.clientY, h: height }
+        setDragging(true)
+      }}
+      onPointerMove={(e) => {
+        if (start.current) onDrag(start.current.h + e.clientY - start.current.y)
+      }}
+      onPointerUp={(e) => {
+        if (!start.current) return
+        onDone(start.current.h + e.clientY - start.current.y)
+        start.current = null
+        setDragging(false)
+      }}
+      onPointerCancel={() => {
+        start.current = null
+        setDragging(false)
+      }}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          e.preventDefault()
+          onDone(height + (e.key === "ArrowDown" ? KEY_STEP : -KEY_STEP))
+        }
+      }}
+    >
+      <div
+        className={cn(
+          "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary relative h-px w-full transition-colors",
+          dragging && "bg-primary",
+        )}
+      >
+        <span
+          className={cn(
+            "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary absolute top-1/2 left-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors",
+            dragging && "bg-primary",
+          )}
+        />
+      </div>
+    </div>
   )
 }
 
@@ -535,16 +644,10 @@ function TableList({
   for (const t of tables ?? []) bySchema.set(t.schema, [...(bySchema.get(t.schema) ?? []), t])
 
   return (
-    <Card className="gap-0 overflow-hidden py-0 md:sticky md:top-[7.5rem] md:h-[calc(100svh-9rem)]">
+    <Card className="max-h-[60vh] gap-0 overflow-hidden py-0 md:h-full md:max-h-none">
       <div className="flex shrink-0 items-center justify-between border-b px-3 py-2">
         <span className="text-sm font-medium">Schemas</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          onClick={onRefresh}
-          aria-label="Refresh tables"
-        >
+        <Button variant="ghost" size="icon" className="size-7" onClick={onRefresh} aria-label="Refresh tables">
           <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
         </Button>
       </div>
@@ -557,9 +660,7 @@ function TableList({
         ) : loading ? (
           <Skeleton className="m-2 h-40" />
         ) : !bySchema.size ? (
-          <p className="text-muted-foreground p-3 text-sm">
-            No tables yet. Import Parquet files in the Catalog tab.
-          </p>
+          <p className="text-muted-foreground p-3 text-sm">No tables yet. Import Parquet files in the Catalog tab.</p>
         ) : (
           <div className="py-1">
             {[...bySchema].map(([schema, list]) => (
@@ -652,9 +753,9 @@ function ResultTable({ result }: { result: SqlResult }) {
     <DataGrid
       columns={result.columns}
       rows={result.rows}
-      footerNote={
-        result.truncated ? `Showing the first ${result.row_count.toLocaleString()} rows` : undefined
-      }
+      maxHeight="max-h-[60vh] md:max-h-none md:min-h-0 md:flex-1"
+      className="md:min-h-0 md:flex-1"
+      footerNote={result.truncated ? `Showing the first ${result.row_count.toLocaleString()} rows` : undefined}
     />
   )
 }
