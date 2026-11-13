@@ -35,6 +35,16 @@ npm install
 npm run dev
 ```
 
+## Workspaces
+
+A workspace is a folder with `pipelines/` and `src/`. On the **Workspace** tab,
+**New workspace** creates one inside a folder you choose on the server, and
+**Switch workspace** chooses which one is active: pipelines, runs and schedules
+come from the active workspace, shown in bold in the list on the left. The
+default workspace is `workspace/` in this repository (`PROOFLIX_WORKSPACE`);
+the list and the active choice are saved in `~/.prooflix/workspaces.json`
+(`PROOFLIX_HOME`).
+
 ## Add pipelines
 
 The workspace starts empty. In the web client open **Workspace → Import code**

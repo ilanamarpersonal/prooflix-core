@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
 import {
+  ArrowLeftRight,
   Braces,
+  Check,
   ChevronRight,
   Database,
   ExternalLink,
@@ -12,6 +14,7 @@ import {
   Folder,
   FolderOpen,
   FolderInput,
+  FolderPlus,
   RefreshCw,
   Table2,
   Trash2,
@@ -21,14 +24,16 @@ import {
 
 import { ErrorAlert } from "@/components/error-alert"
 import { ImportCodePanel } from "@/components/import-code-panel"
+import { NewWorkspacePanel } from "@/components/new-workspace-panel"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useRemoveWorkspaceItem, useWorkspaceFile, useWorkspaceTree } from "@/lib/api"
+import { SwitchWorkspacePanel } from "@/components/switch-workspace-panel"
+import { useRemoveWorkspaceItem, useWorkspaceFile, useWorkspaces, useWorkspaceTree } from "@/lib/api"
 import { sqlTableFor } from "@/lib/sql-names"
-import type { RemoveResult, WorkspaceNode } from "@/lib/types"
+import type { RemoveResult, WorkspaceList, WorkspaceNode } from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
 
@@ -36,7 +41,9 @@ export function WorkspacePage() {
   const [params, setParams] = useSearchParams()
   const selected = params.get("path")
   const tree = useWorkspaceTree()
-  const [importing, setImporting] = useState(false)
+  const workspaces = useWorkspaces()
+  // one panel at a time under the header
+  const [panel, setPanel] = useState<"import" | "new" | "switch" | null>(null)
   const [removed, setRemoved] = useState<RemoveResult | null>(null)
   const remover = useRemoveWorkspaceItem()
   // On md+ screens the tree and the viewer fill the window and scroll inside.
@@ -72,9 +79,12 @@ export function WorkspacePage() {
       <PageHeader
         title="Workspace"
         description={
-          tree.data ? (
+          workspaces.data ? (
             <>
-              Files in <code className="font-mono">{tree.data.name}/</code>
+              Active workspace{" "}
+              <code className="text-foreground font-mono font-semibold" title={workspaces.data.active}>
+                {workspaces.data.workspaces.find((w) => w.active)?.name}
+              </code>
             </>
           ) : undefined
         }
@@ -83,15 +93,32 @@ export function WorkspacePage() {
             <Button variant="outline" onClick={() => tree.refetch()} disabled={tree.isFetching}>
               <RefreshCw className={cn(tree.isFetching && "animate-spin")} /> Refresh
             </Button>
-            <Button onClick={() => setImporting(true)} disabled={importing}>
+            <Button variant="outline" onClick={() => setPanel("new")} disabled={panel === "new"}>
+              <FolderPlus /> New workspace
+            </Button>
+            <Button variant="outline" onClick={() => setPanel("switch")} disabled={panel === "switch"}>
+              <ArrowLeftRight /> Switch workspace
+            </Button>
+            <Button onClick={() => setPanel("import")} disabled={panel === "import"}>
               <FolderInput /> Import code
             </Button>
           </>
         }
       />
-      {importing && (
+      {panel === "new" && <NewWorkspacePanel onClose={() => setPanel(null)} />}
+      {panel === "switch" && (
+        <SwitchWorkspacePanel
+          onClose={() => setPanel(null)}
+          onSwitched={() => {
+            setPanel(null)
+            setRemoved(null)
+            setParams({})
+          }}
+        />
+      )}
+      {panel === "import" && (
         <ImportCodePanel
-          onClose={() => setImporting(false)}
+          onClose={() => setPanel(null)}
           onImported={(r) => {
             // Show what was imported: a pipeline if there is one, else the first file.
             const first = r.written.find((p) => /(^|\/)pipelines\/[^/]+\.ya?ml$/.test(p)) ?? r.written[0]
@@ -121,15 +148,18 @@ export function WorkspacePage() {
         style={panelsHeight ? { height: panelsHeight } : undefined}
         className="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
       >
-        <Card className="max-h-[70vh] gap-0 overflow-auto p-1.5 md:max-h-none" role="tree" aria-label="Workspace files">
-          {tree.isLoading ? (
-            <Skeleton className="m-1 h-64" />
-          ) : (
-            tree.data && (
-              // the workspace folder itself is the root of the tree
-              <TreeNode node={tree.data} depth={0} selected={selected} onSelect={(path) => setParams({ path })} />
-            )
-          )}
+        <Card className="max-h-[70vh] gap-0 overflow-auto p-1.5 md:max-h-none">
+          {workspaces.data && <WorkspaceListSection list={workspaces.data} />}
+          <div role="tree" aria-label="Workspace files">
+            {tree.isLoading ? (
+              <Skeleton className="m-1 h-64" />
+            ) : (
+              tree.data && (
+                // the workspace folder itself is the root of the tree
+                <TreeNode node={tree.data} depth={0} selected={selected} onSelect={(path) => setParams({ path })} />
+              )
+            )}
+          </div>
         </Card>
         {selectedNode?.type === "dir" ? (
           <FolderViewer node={selectedNode} onRemove={remove} removing={remover.isPending} />
@@ -142,6 +172,32 @@ export function WorkspacePage() {
         )}
       </div>
     </>
+  )
+}
+
+/** Every known workspace, the active one in bold; switching is done with the Switch workspace button. */
+function WorkspaceListSection({ list }: { list: WorkspaceList }) {
+  return (
+    <div className="mb-1.5 border-b pb-1.5">
+      <p className="text-muted-foreground px-2 pt-1 pb-0.5 text-xs font-medium tracking-wide uppercase">Workspaces</p>
+      <ul aria-label="Workspaces">
+        {list.workspaces.map((w) => (
+          <li
+            key={w.path}
+            aria-current={w.active ? "true" : undefined}
+            title={w.exists ? w.path : `${w.path} (missing)`}
+            className={cn(
+              "flex h-7 items-center gap-1.5 rounded-md px-2 text-sm",
+              w.active ? "text-foreground font-bold" : "text-muted-foreground",
+              !w.exists && "italic line-through",
+            )}
+          >
+            {w.active ? <Check className="text-primary size-4 shrink-0" /> : <span className="size-4 shrink-0" />}
+            <span className="truncate">{w.name}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

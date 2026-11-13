@@ -137,6 +137,29 @@ export interface ImportResult {
   pipelines: string[]
 }
 
+/** A workspace the server knows about (server/prooflix/api/workspaces.py). */
+export interface WorkspaceEntry {
+  name: string
+  /** absolute path on the server */
+  path: string
+  active: boolean
+  /** the server's default workspace (PROOFLIX_WORKSPACE), always listed */
+  default: boolean
+  exists: boolean
+}
+
+export interface WorkspaceList {
+  active: string
+  workspaces: WorkspaceEntry[]
+}
+
+export interface DirListing {
+  path: string
+  /** null at the filesystem root */
+  parent: string | null
+  dirs: { name: string; path: string }[]
+}
+
 export interface RemoveResult {
   path: string
   type: "dir" | "file"

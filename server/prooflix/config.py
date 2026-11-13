@@ -23,6 +23,11 @@ class Settings:
       PROOFLIX_CATALOG     folder holding catalog schemas that are not part of a
                            project (default: a "catalog" folder next to the workspace)
       PROOFLIX_SCHEDULER   "0" turns off running pipelines on their schedules (default on)
+      PROOFLIX_HOME        folder for server-wide state: the list of workspaces and
+                           which one is active (default ~/.prooflix)
+
+    ``workspace`` is the default workspace. The one the server uses is the
+    active workspace chosen in the web client, when it still exists.
     """
 
     workspace: Path = DEFAULT_WORKSPACE
@@ -33,6 +38,11 @@ class Settings:
     )
     client_dist: Path = DEFAULT_CLIENT_DIST
     catalog: Path | None = None  # None: <workspace>/../catalog
+    home: Path | None = None  # None: the workspace list is kept in memory only
+
+    @property
+    def workspaces_file(self) -> Path | None:
+        return self.home / "workspaces.json" if self.home is not None else None
 
     @property
     def catalog_dir(self) -> Path:
@@ -52,7 +62,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        kwargs: dict = {}
+        kwargs: dict = {"home": Path(os.environ.get("PROOFLIX_HOME") or "~/.prooflix").expanduser().resolve()}
         if ws := os.environ.get("PROOFLIX_WORKSPACE"):
             kwargs["workspace"] = Path(ws).expanduser().resolve()
         if catalog := os.environ.get("PROOFLIX_CATALOG"):

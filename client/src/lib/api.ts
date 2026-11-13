@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
   TERMINAL_STATUSES,
@@ -13,8 +13,11 @@ import {
   type CatalogSchema,
   type ImportResult,
   type RemoveResult,
+  type DirListing,
   type ValidationResult,
+  type WorkspaceEntry,
   type WorkspaceFile,
+  type WorkspaceList,
   type WorkspaceNode,
 } from "./types"
 
@@ -99,6 +102,14 @@ export const api = {
     }),
   removeWorkspaceItem: (path: string) =>
     request<RemoveResult>(`/workspace/item?${new URLSearchParams({ path })}`, { method: "DELETE" }),
+  workspaces: () => request<WorkspaceList>("/workspaces"),
+  createWorkspace: (parent: string, name: string) =>
+    request<WorkspaceEntry>("/workspaces", { method: "POST", body: JSON.stringify({ parent, name }) }),
+  activateWorkspace: (path: string) =>
+    request<WorkspaceList>("/workspaces/active", { method: "PUT", body: JSON.stringify({ path }) }),
+  forgetWorkspace: (path: string) =>
+    request<WorkspaceList>(`/workspaces?${new URLSearchParams({ path })}`, { method: "DELETE" }),
+  listDirs: (path?: string) => request<DirListing>(`/fs/dirs${path ? `?${new URLSearchParams({ path })}` : ""}`),
   catalog: () => request<CatalogSchema[]>("/catalog"),
   catalogImport: (schema: string, files: { name: string; content_base64: string }[], overwrite = false) =>
     request<CatalogImportResult>("/catalog/import", {
@@ -196,6 +207,43 @@ export const useWorkspaceFile = (path: string | null) =>
     queryFn: () => api.workspaceFile(path!),
     enabled: !!path,
   })
+
+export const useWorkspaces = () => useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces })
+
+export const useDirs = (path: string | undefined) =>
+  useQuery({ queryKey: ["fs", "dirs", path ?? ""], queryFn: () => api.listDirs(path), placeholderData: keepPreviousData })
+
+export function useCreateWorkspace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ parent, name }: { parent: string; name: string }) => api.createWorkspace(parent, name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workspaces"] })
+      qc.invalidateQueries({ queryKey: ["fs"] })
+    },
+  })
+}
+
+/** Switch the server to another workspace: every page's data changes with it. */
+export function useActivateWorkspace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string) => api.activateWorkspace(path),
+    onSuccess: (data) => {
+      qc.setQueryData(["workspaces"], data)
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "workspaces" })
+      qc.invalidateQueries()
+    },
+  })
+}
+
+export function useForgetWorkspace() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string) => api.forgetWorkspace(path),
+    onSuccess: (data) => qc.setQueryData(["workspaces"], data),
+  })
+}
 
 // under ["sql"] so imports and removals refresh it too
 export const useCatalog = () => useQuery({ queryKey: ["sql", "catalog"], queryFn: api.catalog })

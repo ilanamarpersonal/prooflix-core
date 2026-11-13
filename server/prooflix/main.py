@@ -7,8 +7,10 @@ Run in development with::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,10 +18,10 @@ from fastapi.responses import FileResponse
 
 from . import __version__
 from .api import pipelines, runs, schedules, sql, workspace as workspace_api
+from .api import workspaces as workspaces_api
 from .config import Settings
-from .engine import PipelineExecutor, Scheduler
-from .pipelines import Workspace
-from .runs import RunStore
+from .runtime import build_services, install
+from .workspaces import WorkspaceRegistry
 
 log = logging.getLogger(__name__)
 
@@ -29,28 +31,23 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
-    workspace = Workspace(settings.workspace)
-    store = RunStore(settings.runs_dir)
-    recovered = store.recover_interrupted()
-    if recovered:
-        log.warning("Marked %d interrupted run(s) as FAILED", recovered)
-    executor = PipelineExecutor(workspace, store, max_depth=settings.max_depth)
-    scheduler = Scheduler(workspace, executor, store)
+    # settings.workspace is the default; the server uses the active workspace
+    registry = WorkspaceRegistry(settings.workspace, settings.workspaces_file)
+    settings = replace(settings, workspace=registry.active)
 
     @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        if settings.scheduler:
-            scheduler.start()
+    async def lifespan(app: FastAPI):
+        if app.state.settings.scheduler:
+            app.state.scheduler.start()
         yield
-        await scheduler.stop()
-        await executor.shutdown()
+        # the services in app.state may have been replaced by a workspace switch
+        await app.state.scheduler.stop()
+        await app.state.executor.shutdown()
 
     app = FastAPI(title="Prooflix", version=__version__, lifespan=lifespan)
-    app.state.settings = settings
-    app.state.workspace = workspace
-    app.state.store = store
-    app.state.executor = executor
-    app.state.scheduler = scheduler
+    app.state.registry = registry
+    app.state.switch_lock = asyncio.Lock()
+    install(app, build_services(settings))
 
     app.add_middleware(
         CORSMiddleware,
@@ -62,12 +59,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(schedules.router)
     app.include_router(runs.router)
     app.include_router(workspace_api.router)
+    app.include_router(workspaces_api.router)
+    app.include_router(workspaces_api.fs_router)
     app.include_router(sql.router)
     app.include_router(sql.catalog_router)
 
     @app.get("/api/health", tags=["meta"])
     async def health() -> dict:
-        return {"status": "ok", "version": __version__, "workspace": str(workspace.root)}
+        return {"status": "ok", "version": __version__, "workspace": str(app.state.workspace.root)}
 
     _mount_client(app, settings)
     return app

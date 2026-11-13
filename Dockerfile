@@ -36,7 +36,8 @@ COPY --from=client /app/client/dist /app/client/dist
 # which the Helm chart mounts as a persistent volume.
 ENV PATH="/app/server/.venv/bin:$PATH" \
     PROOFLIX_WORKSPACE=/data/workspace \
-    PROOFLIX_CATALOG=/data/catalog
+    PROOFLIX_CATALOG=/data/catalog \
+    PROOFLIX_HOME=/data/.prooflix
 
 RUN useradd --uid 10001 --create-home prooflix \
     && mkdir -p /data/workspace /data/catalog \

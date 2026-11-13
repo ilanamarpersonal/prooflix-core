@@ -145,6 +145,9 @@ class PipelineExecutor:
         handle = self._active.get(run_id)
         return handle is not None and not handle.done()
 
+    def active_count(self) -> int:
+        return sum(1 for h in self._active.values() if not h.done())
+
     async def shutdown(self) -> None:
         handles = [h for h in self._active.values() if not h.done()]
         for h in handles:

@@ -46,6 +46,9 @@ spec:
               value: /data/workspace
             - name: PROOFLIX_CATALOG
               value: /data/catalog
+            # the workspace list and the active workspace, kept on the volume
+            - name: PROOFLIX_HOME
+              value: /data/.prooflix
             - name: PROOFLIX_SCHEDULER
               value: {{ ternary "1" "0" .Values.prooflix.scheduler | quote }}
             - name: PROOFLIX_MAX_DEPTH
