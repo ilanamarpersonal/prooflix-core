@@ -15,7 +15,7 @@ flowchart LR
         ST["RunStore<br/>memory + JSON files"]
     end
 
-    subgraph Workspace["workspace/ (on disk)"]
+    subgraph Workspace["workspaces/&lt;active&gt;/ (on disk)"]
         PY["pipelines/*.yaml"]
         SRC["src/ (Python task code)"]
         RUNS[".prooflix/runs/*.json"]
@@ -71,10 +71,11 @@ prooflix-core/
 │       ├── components/      app components (graph, editor, status badge, ...)
 │       ├── pages/           one file per route
 │       └── lib/             API client, types, utilities
-└── workspace/               sample workspace
-    ├── pipelines/           *.yaml pipeline definitions
-    ├── src/jobs/            Python task code used by the samples
-    └── data/                sample input (outputs go to data/output/, git-ignored)
+└── workspaces/              one folder per workspace (git-ignored user content)
+    └── <workspace>/
+        ├── pipelines/       *.yaml pipeline definitions
+        ├── src/             Python task code
+        └── .prooflix/runs/  run history
 ```
 
 ## Request flow: starting a run from the UI

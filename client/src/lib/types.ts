@@ -143,13 +143,17 @@ export interface WorkspaceEntry {
   /** absolute path on the server */
   path: string
   active: boolean
-  /** the server's default workspace (PROOFLIX_WORKSPACE), always listed */
+  /** active until another is chosen: the first workspace in the workspaces folder */
   default: boolean
+  /** in the workspaces folder, so listed for as long as its folder is there */
+  in_root: boolean
   exists: boolean
 }
 
 export interface WorkspaceList {
   active: string
+  /** the folder holding the workspaces */
+  root: string | null
   workspaces: WorkspaceEntry[]
 }
 

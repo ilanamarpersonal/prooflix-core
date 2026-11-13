@@ -64,7 +64,7 @@ flowchart TB
 |---|---|
 | `config.py` | `Settings` from environment variables: workspace path, max nesting depth, CORS origins, client build folder |
 | `main.py` | Builds the FastAPI app, wires the active workspace's services into `app.state`, serves `client/dist` when it exists |
-| `workspaces.py` | `WorkspaceRegistry`: the known workspaces and the active one, saved to `<PROOFLIX_HOME>/workspaces.json` |
+| `workspaces.py` | `WorkspaceRegistry`: finds the workspaces in the workspaces folder, tracks added ones and the active one, saved to `<PROOFLIX_HOME>/workspaces.json` |
 | `runtime.py` | Builds `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace, and swaps them in `app.state` when the active workspace changes |
 | `cli.py` | `prooflix serve`, `prooflix validate`, `prooflix run <id> -p key=value` |
 | `pipelines/models.py` | Pydantic models of the YAML format. Task types are a discriminated union on `type`. |
@@ -74,7 +74,7 @@ flowchart TB
 | `engine/executor.py` | Creates runs, schedules task DAGs, runs sub-pipelines as child runs, handles retries, timeouts and cancellation |
 | `engine/runners.py` | Executes `python` (import + call) and `shell` (subprocess) tasks |
 | `runs/models.py` | `Run`, `TaskRun`, `RunStatus` |
-| `runs/store.py` | Thread-safe in-memory run index mirrored to `workspace/.prooflix/runs/<id>.json` |
+| `runs/store.py` | Thread-safe in-memory run index mirrored to `<workspace>/.prooflix/runs/<id>.json` |
 
 ## Data model
 
@@ -187,28 +187,37 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | POST | `/api/workspaces` | `{parent, name}` | `201` entry. Creates `<parent>/<name>/` with `pipelines/` and `src/`; does not make it active. `409` if it exists. |
 | PUT | `/api/workspaces/active` | `{path}` | The list, with `path` active. `409` while runs are going. |
 | DELETE | `/api/workspaces?path=` | | The list without `path` (its folder is kept). `400` for the active or default workspace. |
-| GET | `/api/fs/dirs?path=` | | `{path, parent, dirs}`: sub-folders on the server, for the folder picker. Default: the folder holding the active workspace. |
+| GET | `/api/fs/dirs?path=` | | `{path, parent, dirs}`: sub-folders on the server, for the folder picker. Default: the workspaces folder. |
 
 ### Workspaces
 
-`PROOFLIX_WORKSPACE` is the default workspace and is always listed. Others are
-added when they are created or opened from the Workspace page. Exactly one is
-active: pipelines, runs (in its own `.prooflix/runs`) and schedules come from
-it. Switching stops the scheduler, builds fresh services for the new folder and
+Workspaces live in the workspaces folder (`PROOFLIX_WORKSPACES`, default
+`<repo>/workspaces`): every sub-folder with `pipelines/` is a workspace, listed
+by name. Workspaces created or opened elsewhere are added to the list.
+
+Exactly one workspace is active: pipelines, runs (in its own
+`.prooflix/runs`) and schedules come from it. Until another is chosen it is the
+default: `PROOFLIX_WORKSPACE` if set, otherwise the first workspace in the
+folder; an empty folder gets a `default` workspace. The server saves the active
+workspace at startup and on every switch, so a workspace created later that
+sorts first doesn't take over; if the saved folder has gone it falls back to the
+default.
+
+Switching stops the scheduler, builds fresh services for the new folder and
 starts the scheduler again, without a restart; it is refused while runs are
-going. The choice is saved, so the server starts in the same workspace next
-time, falling back to the default if that folder has gone. The catalog follows
-the active workspace (`<workspace>/../catalog`) unless `PROOFLIX_CATALOG` is set.
-The CLI (`prooflix run`, `validate`) uses `PROOFLIX_WORKSPACE` or `--workspace`.
+going. The catalog folder is shared by all workspaces (`catalog/` next to the
+workspaces folder, or `PROOFLIX_CATALOG`). The CLI (`prooflix run`, `validate`)
+uses the active workspace, or `--workspace`.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PROOFLIX_WORKSPACE` | `<repo>/workspace` | Workspace root |
+| `PROOFLIX_WORKSPACES` | `<repo>/workspaces` | Folder of workspaces |
+| `PROOFLIX_WORKSPACE` | first workspace in the folder | Default workspace |
 | `PROOFLIX_MAX_DEPTH` | `10` | Maximum sub-pipeline nesting depth |
 | `PROOFLIX_CORS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed browser origins |
-| `PROOFLIX_CATALOG` | `<workspace>/../catalog` | Catalog folder for datasets outside projects |
+| `PROOFLIX_CATALOG` | `<workspaces>/../catalog` | Catalog folder for datasets outside projects |
 | `PROOFLIX_SCHEDULER` | `1` | `0` stops pipelines running on their schedules |
 | `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state: the workspace list and the active workspace |
 

@@ -13,26 +13,27 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..runtime import WorkspaceBusy, switch_workspace
-from ..workspaces import WorkspaceRegistry
+from ..workspaces import WorkspaceRegistry, create_workspace_dirs
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 fs_router = APIRouter(prefix="/api/fs", tags=["workspaces"])
 
 # A folder name: starts with a letter or digit, no path separators
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,99}$")
-WORKSPACE_DIRS = ("pipelines", "src")
 
 
 class WorkspaceEntry(BaseModel):
     name: str
     path: str  # absolute path on the server
     active: bool
-    default: bool  # the PROOFLIX_WORKSPACE workspace, always listed
+    default: bool  # active until another is chosen: the first workspace (or PROOFLIX_WORKSPACE)
+    in_root: bool  # in the workspaces folder (listed while the folder is there)
     exists: bool
 
 
 class WorkspaceList(BaseModel):
     active: str
+    root: str | None  # the workspaces folder
     workspaces: list[WorkspaceEntry]
 
 
@@ -69,14 +70,17 @@ def _absolute(raw: str) -> Path:
 
 def _listing(registry: WorkspaceRegistry) -> WorkspaceList:
     active = registry.active
+    default = registry.default
     return WorkspaceList(
         active=str(active),
+        root=str(registry.root) if registry.root else None,
         workspaces=[
             WorkspaceEntry(
                 name=p.name,
                 path=str(p),
                 active=p == active,
-                default=p == registry.default,
+                default=p == default,
+                in_root=registry.in_root(p),
                 exists=p.is_dir(),
             )
             for p in registry.paths()
@@ -108,8 +112,8 @@ def create_workspace(body: CreateWorkspaceIn, request: Request) -> WorkspaceEntr
     if target.exists():
         raise HTTPException(status.HTTP_409_CONFLICT, f"'{target}' already exists")
     try:
-        for sub in WORKSPACE_DIRS:
-            (target / sub).mkdir(parents=True)
+        target.mkdir()
+        create_workspace_dirs(target)
     except OSError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Could not create '{target}': {exc.strerror}") from exc
     registry = _registry(request)
@@ -143,8 +147,9 @@ def forget_workspace(request: Request, path: str = Query(..., min_length=1)) -> 
 
 @fs_router.get("/dirs", response_model=DirListing)
 def list_dirs(request: Request, path: str | None = Query(None)) -> DirListing:
-    """Sub-folders of ``path`` (default: the folder holding the active workspace)."""
-    folder = _absolute(path) if path else _registry(request).active.parent
+    """Sub-folders of ``path`` (default: the workspaces folder)."""
+    registry = _registry(request)
+    folder = _absolute(path) if path else (registry.root or registry.active.parent)
     if not folder.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Folder '{folder}' does not exist")
     try:

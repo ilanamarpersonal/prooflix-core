@@ -32,8 +32,8 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     # settings.workspace is the default; the server uses the active workspace
-    registry = WorkspaceRegistry(settings.workspace, settings.workspaces_file)
-    settings = replace(settings, workspace=registry.active)
+    registry = WorkspaceRegistry(settings.workspaces_root, settings.workspaces_file, default=settings.workspace)
+    settings = replace(settings, workspace=registry.keep_active())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

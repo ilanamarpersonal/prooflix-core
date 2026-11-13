@@ -8,7 +8,7 @@ files in a workspace, executed by a Python server, and managed from a React
 ```text
 server/      Python server (FastAPI) and CLI         → docs/server.md
 client/      React + shadcn/ui web client            → docs/client.md
-workspace/   imported projects (each with pipelines/ and src/) → docs/pipelines.md
+workspaces/  the workspaces, one folder each (pipelines/, src/, projects) → docs/pipelines.md
 catalog/     imported datasets, one folder per schema (Parquet tables)
 docs/        design documents with diagrams           → docs/README.md
 ```
@@ -37,20 +37,24 @@ npm run dev
 
 ## Workspaces
 
-A workspace is a folder with `pipelines/` and `src/`. On the **Workspace** tab,
-**New workspace** creates one inside a folder you choose on the server, and
-**Switch workspace** chooses which one is active: pipelines, runs and schedules
-come from the active workspace, shown in bold in the list on the left. The
-default workspace is `workspace/` in this repository (`PROOFLIX_WORKSPACE`);
-the list and the active choice are saved in `~/.prooflix/workspaces.json`
-(`PROOFLIX_HOME`).
+A workspace is a folder with `pipelines/` and `src/`. Workspaces live in
+`workspaces/` in this repository (`PROOFLIX_WORKSPACES`): each sub-folder with a
+`pipelines/` folder is one, listed by name. The first one is active until you
+choose another; when the folder is empty a `default` workspace is created, so
+one is always active.
+
+On the **Workspace** tab, **New workspace** creates a workspace (in
+`workspaces/` unless you pick another folder), and **Switch workspace** chooses
+which one is active: pipelines, runs and schedules come from the active
+workspace, shown in bold in the list on the left. The active choice is saved in
+`~/.prooflix/workspaces.json` (`PROOFLIX_HOME`).
 
 ## Add pipelines
 
-The workspace starts empty. In the web client open **Workspace → Import code**
-and choose a project folder that has `pipelines/*.yaml` and its Python code in
-`src/` (for example `prooflix-assets-bundle`). Each imported project lives in
-its own folder under `workspace/`, and its pipelines appear in the
+A new workspace starts empty. Write pipelines in it, or open
+**Workspace → Import code** and choose a project folder that has
+`pipelines/*.yaml` and its Python code in `src/`. Each imported project lives in
+its own folder in the active workspace, and its pipelines appear in the
 **Pipelines** tab, where **Run** starts them and clicking a task shows what it
 printed.
 
@@ -58,7 +62,7 @@ printed.
 
 The **Catalog** tab lists schemas and their tables, which you can query in the
 **SQL Editor** as `schema.table`. A schema is either a project's `data/` folder
-in the workspace, or a folder in `catalog/` (next to the workspace, set with
+in the workspace, or a folder in `catalog/` (next to `workspaces/`, set with
 `PROOFLIX_CATALOG`) for datasets that are not part of a project. **Import**
 adds CSV or JSON files as tables; **Export** downloads a table as CSV, or as a
 ZIP with a Parquet file, and a schema or the whole catalog as a ZIP.
@@ -78,13 +82,13 @@ The sample pipelines used by the tests (`daily_orders` and friends) are in
 ## A pipeline that calls sub-pipelines
 
 ```yaml
-# workspace/pipelines/daily_orders.yaml
+# <workspace>/pipelines/daily_orders.yaml
 parameters:
   run_date: "2026-01-01"
 tasks:
   - key: ingest
     type: pipeline
-    pipeline: ingest_orders          # workspace/pipelines/ingest_orders.yaml
+    pipeline: ingest_orders          # <workspace>/pipelines/ingest_orders.yaml
     parameters:
       run_date: ${params.run_date}
   - key: transform

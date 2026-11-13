@@ -61,7 +61,7 @@ export function WorkspacePage() {
         : `the file "${node.path}"`
     if (
       !confirm(
-        `Remove ${what} from the workspace?\n\nIt is moved to workspace/.prooflix/trash, so it can be recovered there.`,
+        `Remove ${what} from the workspace?\n\nIt is moved to the workspace's .prooflix/trash folder, so it can be recovered there.`,
       )
     )
       return
@@ -136,7 +136,7 @@ export function WorkspacePage() {
             {removed.type === "dir" && ` (${removed.files} file${removed.files === 1 ? "" : "s"})`}
           </AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-x-2">
-            A copy is in <code className="font-mono">workspace/{removed.trash}</code>.
+            A copy is in <code className="font-mono">{removed.trash}</code> in the workspace.
             <button type="button" className="underline" onClick={() => setRemoved(null)}>
               Dismiss
             </button>

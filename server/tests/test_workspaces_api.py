@@ -35,6 +35,7 @@ def test_default_workspace_is_listed_and_active(client, sample_workspace):
         "path": str(sample_workspace.resolve()),
         "active": True,
         "default": True,
+        "in_root": False,
         "exists": True,
     }
 
@@ -51,6 +52,7 @@ def test_create_makes_folder_with_pipelines_and_src_but_does_not_activate(client
         "path": str(created.resolve()),
         "active": False,
         "default": False,
+        "in_root": False,
         "exists": True,
     }
     body = client.get("/api/workspaces").json()
@@ -191,3 +193,101 @@ def test_dirs_defaults_to_folder_holding_active_workspace(client, sample_workspa
 def test_dirs_rejects_missing_and_relative_paths(client, tmp_path):
     assert client.get("/api/fs/dirs", params={"path": str(tmp_path / "nope")}).status_code == 404
     assert client.get("/api/fs/dirs", params={"path": "relative"}).status_code == 400
+
+
+# ------------------------------------------------------ the workspaces folder
+def root_client(root: Path, tmp_path: Path, home: Path | None = None) -> TestClient:
+    settings = Settings(
+        workspaces_root=root, client_dist=tmp_path / "no-client", home=home or tmp_path / "home", scheduler=False
+    )
+    return TestClient(create_app(settings))
+
+
+def make_ws(path: Path) -> Path:
+    (path / "pipelines").mkdir(parents=True)
+    (path / "src").mkdir()
+    return path
+
+
+def test_first_workspace_in_folder_is_default_and_active(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "beta")
+    make_ws(root / "Alpha")
+    (root / "not-a-workspace").mkdir()  # no pipelines/
+    make_ws(root / ".hidden")
+    with root_client(root, tmp_path) as c:
+        body = c.get("/api/workspaces").json()
+        assert body["root"] == str(root.resolve())
+        assert body["active"] == str((root / "Alpha").resolve())
+        assert [(w["name"], w["active"], w["default"], w["in_root"]) for w in body["workspaces"]] == [
+            ("Alpha", True, True, True),
+            ("beta", False, False, True),
+        ]
+        assert c.get("/api/health").json()["workspace"] == str((root / "Alpha").resolve())
+
+
+def test_empty_folder_gets_a_default_workspace(tmp_path):
+    root = tmp_path / "workspaces"
+    with root_client(root, tmp_path) as c:
+        body = c.get("/api/workspaces").json()
+    assert body["active"] == str((root / "default").resolve())
+    assert (root / "default" / "pipelines").is_dir() and (root / "default" / "src").is_dir()
+
+
+def test_workspace_created_in_folder_is_listed_by_name(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    with root_client(root, tmp_path) as c:
+        assert c.get("/api/fs/dirs").json()["path"] == str(root.resolve())  # picker starts here
+        r = c.post("/api/workspaces", json={"parent": str(root), "name": "aaa"})
+        assert r.json()["in_root"] is True
+        body = c.get("/api/workspaces").json()
+        assert [w["name"] for w in body["workspaces"]] == ["aaa", "main"]  # by name
+        # "aaa" is now first, but the active workspace doesn't change by itself
+        assert body["active"] == str((root / "main").resolve())
+        # in-folder workspaces can't be forgotten: they'd be found again
+        c.post("/api/workspaces", json={"parent": str(root), "name": "zzz"})
+        r = c.delete("/api/workspaces", params={"path": str(root / "zzz")})
+        assert r.status_code == 400 and "workspaces folder" in r.json()["detail"]
+    # the active workspace is saved; in-folder workspaces aren't (they're found by name)
+    saved = json.loads((tmp_path / "home" / "workspaces.json").read_text())
+    assert saved == {"active": str((root / "main").resolve()), "workspaces": []}
+
+
+def test_active_stays_after_restart_when_a_new_first_workspace_appears(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    with root_client(root, tmp_path) as c:
+        c.post("/api/workspaces", json={"parent": str(root), "name": "aaa"})
+    with root_client(root, tmp_path) as c:
+        body = c.get("/api/workspaces").json()
+    assert body["active"] == str((root / "main").resolve())
+    assert [w["name"] for w in body["workspaces"]][0] == "aaa"
+
+
+def test_chosen_workspace_survives_restart_in_folder(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "a")
+    make_ws(root / "b")
+    with root_client(root, tmp_path) as c:
+        c.put("/api/workspaces/active", json={"path": str(root / "b")})
+    with root_client(root, tmp_path) as c:
+        assert c.get("/api/workspaces").json()["active"] == str((root / "b").resolve())
+
+
+def test_explicit_default_wins_over_first_in_folder(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "a")
+    pinned = make_ws(tmp_path / "pinned")
+    settings = Settings(
+        workspaces_root=root, workspace=pinned, client_dist=tmp_path / "x", home=tmp_path / "home", scheduler=False
+    )
+    with TestClient(create_app(settings)) as c:
+        body = c.get("/api/workspaces").json()
+    assert body["active"] == str(pinned.resolve())
+    assert [w["name"] for w in body["workspaces"]] == ["pinned", "a"]
+
+
+def test_catalog_sits_next_to_the_workspaces_folder(tmp_path):
+    settings = Settings(workspaces_root=tmp_path / "workspaces", workspace=tmp_path / "workspaces" / "a")
+    assert settings.catalog_dir == tmp_path / "catalog"

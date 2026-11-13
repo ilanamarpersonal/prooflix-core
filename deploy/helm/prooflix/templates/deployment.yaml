@@ -42,8 +42,8 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
-            - name: PROOFLIX_WORKSPACE
-              value: /data/workspace
+            - name: PROOFLIX_WORKSPACES
+              value: /data/workspaces
             - name: PROOFLIX_CATALOG
               value: /data/catalog
             # the workspace list and the active workspace, kept on the volume

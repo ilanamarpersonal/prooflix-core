@@ -9,7 +9,10 @@ import os
 import sys
 from pathlib import Path
 
-from .config import DEFAULT_WORKSPACE, Settings
+from dataclasses import replace
+
+from .config import DEFAULT_WORKSPACES, Settings
+from .workspaces import WorkspaceRegistry
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
         "--workspace",
         type=Path,
         default=None,
-        help=f"workspace directory (default: $PROOFLIX_WORKSPACE or {DEFAULT_WORKSPACE})",
+        help=f"workspace directory (default: the active workspace, from {DEFAULT_WORKSPACES} or $PROOFLIX_WORKSPACES)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -40,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.workspace:
         os.environ["PROOFLIX_WORKSPACE"] = str(args.workspace.expanduser().resolve())
     settings = Settings.from_env()
+    if not args.workspace:  # use the workspace that is active in the web client
+        registry = WorkspaceRegistry(settings.workspaces_root, settings.workspaces_file, default=settings.workspace)
+        settings = replace(settings, workspace=registry.active)
 
     if args.command == "serve":
         return _serve(args)

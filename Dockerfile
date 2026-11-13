@@ -32,17 +32,17 @@ RUN uv sync --frozen --no-dev
 
 COPY --from=client /app/client/dist /app/client/dist
 
-# Workspace (imported projects + run history) and catalog live under /data,
-# which the Helm chart mounts as a persistent volume.
+# Workspaces (each a folder of pipelines, code and run history) and the catalog
+# live under /data, which the Helm chart mounts as a persistent volume.
 ENV PATH="/app/server/.venv/bin:$PATH" \
-    PROOFLIX_WORKSPACE=/data/workspace \
+    PROOFLIX_WORKSPACES=/data/workspaces \
     PROOFLIX_CATALOG=/data/catalog \
     PROOFLIX_HOME=/data/.prooflix
 
 RUN useradd --uid 10001 --create-home prooflix \
-    && mkdir -p /data/workspace /data/catalog \
+    && mkdir -p /data/workspaces /data/catalog \
     && chown -R prooflix:prooflix /data
 USER 10001
 
 EXPOSE 8000
-CMD ["sh", "-c", "mkdir -p \"$PROOFLIX_WORKSPACE\" \"$PROOFLIX_CATALOG\" && exec prooflix serve --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "mkdir -p \"$PROOFLIX_WORKSPACES\" \"$PROOFLIX_CATALOG\" && exec prooflix serve --host 0.0.0.0 --port 8000"]

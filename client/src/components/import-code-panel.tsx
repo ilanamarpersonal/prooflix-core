@@ -69,7 +69,7 @@ function formatSize(bytes: number) {
 /**
  * Upload a folder (or files) of pipelines and code into the workspace.
  * By default a chosen folder keeps its name, so each imported project gets its
- * own folder in the workspace (workspace/<project>/pipelines and src) and its
+ * own folder in the active workspace (<project>/pipelines and src) and its
  * pipelines can run straight away. Unticking "Keep the folder name" copies the
  * folder's contents into the destination folder instead.
  */

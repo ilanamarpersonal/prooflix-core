@@ -7,16 +7,20 @@ file name without `.yaml` is the pipeline **id**.
 
 ## Projects
 
-The workspace holds **projects**: each top-level folder with a `pipelines/`
-folder (usually brought in with **Workspace → Import code**), plus the
-workspace root itself if it has one. A project keeps the Python code its
+Workspaces live in `workspaces/` (one folder each); the server runs pipelines
+from the active one. A workspace holds **projects**: the workspace folder itself
+(it has `pipelines/` and `src/`), plus each top-level folder in it with a
+`pipelines/` folder (usually brought in with **Workspace → Import code**). A project keeps the Python code its
 pipelines call in its own `src/`, and its data in `data/`.
 
 ```text
-workspace/
-  my-project/
-    pipelines/pipeline1.yaml   -> id "pipeline1"
-    src/hello_jobs/hello.py    -> entrypoint hello_jobs.hello:run
+workspaces/
+  my-workspace/
+    pipelines/daily.yaml         -> id "daily"
+    src/jobs/orders.py           -> entrypoint jobs.orders:extract
+    my-project/                  imported project
+      pipelines/pipeline1.yaml   -> id "pipeline1"
+      src/hello_jobs/hello.py    -> entrypoint hello_jobs.hello:run
 ```
 
 * Pipeline ids must be unique across projects; a duplicate is a validation error.
@@ -75,13 +79,13 @@ outputs:                           # returned to a calling pipeline
 ```yaml
 - key: extract
   type: python
-  entrypoint: jobs.orders:extract     # module:function inside workspace/src
+  entrypoint: jobs.orders:extract     # module:function inside the project's src/
   parameters:                         # passed as keyword arguments
     source_file: data/orders.csv
 ```
 
 ```python
-# workspace/src/jobs/orders.py
+# <workspace>/src/jobs/orders.py
 def extract(source_file: str, ctx) -> dict:
     ctx.log("reading")                       # appears in the task log
     path = ctx.workspace / source_file       # workspace root as a Path

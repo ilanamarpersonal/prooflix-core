@@ -40,7 +40,7 @@ export function NewPipelinePage() {
           </Link>
         }
         title="New pipeline"
-        description="Saved as workspace/pipelines/<id>.yaml. Other pipelines call it by this id."
+        description="Saved as pipelines/<id>.yaml in the active workspace. Other pipelines call it by this id."
       />
       <div className="mb-4 grid max-w-sm gap-1.5">
         <Label htmlFor="pipeline-id">Pipeline id</Label>

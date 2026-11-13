@@ -54,7 +54,7 @@ export function SwitchWorkspacePanel({ onClose, onSwitched }: { onClose: () => v
               </div>
               {!w.active && (
                 <div className="ml-auto flex gap-2 pl-6">
-                  {!w.default && (
+                  {!w.default && !w.in_root && (
                     <Button
                       variant="ghost"
                       size="sm"
