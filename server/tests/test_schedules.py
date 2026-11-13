@@ -32,10 +32,22 @@ def utc(*a):
         ("0 0 1 * mon", utc(2026, 11, 10, 0, 0), "UTC", utc(2026, 11, 16, 0, 0)),  # day 1 OR Monday
         ("0 0 * * 7", utc(2026, 11, 10, 0, 0), "UTC", utc(2026, 11, 15, 0, 0)),  # 7 is Sunday
         ("30 2 * * *", utc(2026, 11, 10, 0, 0), "Asia/Jerusalem", utc(2026, 11, 10, 0, 30)),  # 02:30 at UTC+2
+        # six fields: seconds first
+        ("*/15 * * * * *", utc(2026, 11, 10, 19, 37, 7), "UTC", utc(2026, 11, 10, 19, 37, 15)),
+        ("*/15 * * * * *", utc(2026, 11, 10, 19, 37, 45), "UTC", utc(2026, 11, 10, 19, 38, 0)),  # strictly after
+        ("*/10 * * * * *", utc(2026, 11, 10, 19, 59, 55), "UTC", utc(2026, 11, 10, 20, 0, 0)),
+        ("30 0 9 * * *", utc(2026, 11, 10, 9, 0, 31), "UTC", utc(2026, 11, 11, 9, 0, 30)),
+        ("0 */5 * * * *", utc(2026, 11, 10, 19, 37, 7), "UTC", utc(2026, 11, 10, 19, 40, 0)),
     ],
 )
 def test_cron_next_after(expr, after, tz, expected):
     assert Cron.parse(expr).next_after(after, tz) == expected
+
+
+def test_six_field_cron_runs_every_15_seconds():
+    runs = Cron.parse("*/15 * * * * *").next_runs(utc(2026, 11, 10, 12, 0, 50), count=5)
+    assert [(t.minute, t.second) for t in runs] == [(1, 0), (1, 15), (1, 30), (1, 45), (2, 0)]
+    assert Cron.parse("*/15 * * * * *").has_seconds and not Cron.parse("* * * * *").has_seconds
 
 
 def test_cron_skips_a_time_that_daylight_saving_skips():
@@ -48,6 +60,9 @@ def test_cron_skips_a_time_that_daylight_saving_skips():
     "expr, message",
     [
         ("* * *", "5 fields"),
+        ("* * * * * * *", "or 6 with seconds first"),
+        ("60 * * * * *", "second 60 is out of range"),
+        ("*/0 * * * * *", "step for the second"),
         ("61 * * * *", "out of range"),
         ("* * * * foo", "not a valid day of week"),
         ("5-1 * * * *", "backwards"),
@@ -156,6 +171,26 @@ def test_scheduler_runs_due_pipelines_without_catching_up(ws_factory):
     asyncio.run(scenario())
 
 
+def test_scheduler_runs_a_seconds_schedule(ws_factory):
+    ws = _workspace(ws_factory, cron="*/15 * * * * *")
+    clock = Clock(utc(2026, 11, 10, 10, 0, 1))
+
+    async def scenario():
+        scheduler, executor, store = _scheduler(ws, clock)
+        assert scheduler.tick() == []  # first sight
+        assert scheduler.next_run("job", "*/15 * * * * *", "UTC", True) == utc(2026, 11, 10, 10, 0, 15)
+        clock.now = utc(2026, 11, 10, 10, 0, 15, 300000)
+        [first] = scheduler.tick()
+        await _drain(executor)
+        clock.now = utc(2026, 11, 10, 10, 0, 30, 100000)
+        [second] = scheduler.tick()
+        await _drain(executor)
+        assert store.get(first).scheduled_for == utc(2026, 11, 10, 10, 0, 15)
+        assert store.get(second).scheduled_for == utc(2026, 11, 10, 10, 0, 30)
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_skips_while_the_previous_run_is_still_going(ws_factory):
     ws_factory.add("job", "tasks:\n  - key: a\n    type: shell\n    command: 'sleep 1'\nschedule:\n  cron: '* * * * *'\n")
     ws = Workspace(ws_factory.root)
@@ -245,6 +280,13 @@ def test_invalid_schedules_are_refused(client, sample_workspace):
 def test_schedule_preview(client):
     ok = client.post("/api/schedules/preview", json={"cron": "0  9 * * mon-fri", "timezone": "UTC"}).json()
     assert ok["valid"] and ok["cron"] == "0 9 * * mon-fri" and len(ok["next_runs"]) == 5
+    secs = client.post("/api/schedules/preview", json={"cron": "*/15 * * * * *", "timezone": "UTC"}).json()
+    assert secs["valid"] and len(secs["next_runs"]) == 5
+    gaps = {
+        (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds()
+        for a, b in zip(secs["next_runs"], secs["next_runs"][1:])
+    }
+    assert gaps == {15.0}
     bad = client.post("/api/schedules/preview", json={"cron": "every hour"}).json()
     assert not bad["valid"] and "5 fields" in bad["error"]
 

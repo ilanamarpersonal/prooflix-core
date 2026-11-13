@@ -96,7 +96,7 @@ export function NewWorkspacePanel({ onClose }: { onClose: () => void }) {
           {creator.error && <ErrorAlert title="Could not create the workspace" error={creator.error} />}
           <div>
             <Button type="submit" disabled={!target || creator.isPending}>
-              {creator.isPending ? <Loader2 className="animate-spin" /> : <FolderPlus />} Create workspace
+              <span className="contents">{creator.isPending ? <Loader2 className="animate-spin" /> : <FolderPlus />}</span> Create workspace
             </Button>
           </div>
 

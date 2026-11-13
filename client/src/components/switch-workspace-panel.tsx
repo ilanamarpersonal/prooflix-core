@@ -66,7 +66,7 @@ export function SwitchWorkspacePanel({ onClose, onSwitched }: { onClose: () => v
                     </Button>
                   )}
                   <Button size="sm" onClick={() => activate(w.path)} disabled={busy || !w.exists}>
-                    {busy && activator.variables === w.path ? <Loader2 className="animate-spin" /> : <Check />} Make
+                    <span className="contents">{busy && activator.variables === w.path ? <Loader2 className="animate-spin" /> : <Check />}</span> Make
                     active
                   </Button>
                 </div>
@@ -84,7 +84,7 @@ export function SwitchWorkspacePanel({ onClose, onSwitched }: { onClose: () => v
             <FolderPicker value={other} onChange={setOther} />
             <div className="flex gap-2">
               <Button onClick={() => activate(other)} disabled={busy || !other}>
-                {busy && activator.variables === other ? <Loader2 className="animate-spin" /> : <Check />} Make this
+                <span className="contents">{busy && activator.variables === other ? <Loader2 className="animate-spin" /> : <Check />}</span> Make this
                 folder active
               </Button>
               <Button variant="ghost" onClick={() => setShowOther(false)}>

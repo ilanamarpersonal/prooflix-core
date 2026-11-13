@@ -191,7 +191,7 @@ export function CatalogImportPanel({
         {conflicts.length === 0 && files.length > 0 && (
           <div>
             <Button onClick={() => submit(false)} disabled={busy || !schema}>
-              {busy ? <Loader2 className="animate-spin" /> : <Upload />} Import {files.length} table
+              <span className="contents">{busy ? <Loader2 className="animate-spin" /> : <Upload />}</span> Import {files.length} table
               {files.length === 1 ? "" : "s"}
             </Button>
           </div>

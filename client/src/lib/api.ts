@@ -9,6 +9,7 @@ import {
   type SchedulePreview,
   type SqlResult,
   type SqlTable,
+  type TaskCode,
   type CatalogImportResult,
   type CatalogSchema,
   type ImportResult,
@@ -72,6 +73,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ source }),
     }),
+  taskCode: (id: string, task: string) =>
+    request<TaskCode>(`/pipelines/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/code`),
   deletePipeline: (id: string) => request<void>(`/pipelines/${id}`, { method: "DELETE" }),
   setSchedule: (id: string, schedule: { cron: string; timezone: string; enabled: boolean }) =>
     request<PipelineDetail>(`/pipelines/${id}/schedule`, { method: "PUT", body: JSON.stringify(schedule) }),
@@ -129,6 +132,14 @@ export const usePipelines = () => useQuery({ queryKey: ["pipelines"], queryFn: a
 
 export const usePipeline = (id: string) =>
   useQuery({ queryKey: ["pipelines", id], queryFn: () => api.getPipeline(id), enabled: !!id })
+
+// under ["pipelines"] so saving a pipeline refreshes it
+export const useTaskCode = (id: string, task: string | null) =>
+  useQuery({
+    queryKey: ["pipelines", id, "task-code", task],
+    queryFn: () => api.taskCode(id, task!),
+    enabled: !!task,
+  })
 
 export const useRuns = (params: { pipeline?: string; rootOnly?: boolean; limit?: number } = {}) =>
   useQuery({

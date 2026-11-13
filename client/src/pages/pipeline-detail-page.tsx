@@ -12,6 +12,8 @@ import { RunsTable } from "@/components/runs-table"
 import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
 import { StatusBadge } from "@/components/status-badge"
 import { TaskTypeIcon } from "@/components/task-type-icon"
+import { RunningBadge, isRunActive } from "@/components/running-badge"
+import { TaskCodeView } from "@/components/task-code-view"
 import { TriggerCard } from "@/components/trigger-card"
 import { YamlEditor } from "@/components/yaml-editor"
 import { Badge } from "@/components/ui/badge"
@@ -20,7 +22,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, useDeletePipeline, usePipeline, useRuns } from "@/lib/api"
-import { formatDateTime } from "@/lib/utils"
+import { cn, formatDateTime } from "@/lib/utils"
 
 export function PipelineDetailPage() {
   const { pipelineId = "" } = useParams()
@@ -39,6 +41,10 @@ export function PipelineDetailPage() {
 
   // newest run started from this pipeline (not as a sub-run of another one)
   const latest = runs.data?.find((r) => r.pipeline === pipeline.id && r.depth === 0) ?? runs.data?.[0]
+  // runs of this pipeline still going, also as a sub-pipeline of another (newest first)
+  const activeRuns = runs.data?.filter((r) => r.pipeline === pipeline.id && isRunActive(r)) ?? []
+  const running = activeRuns[0]
+  const shown = running ?? latest // the run the card shows
   const tasks = (pipeline.spec?.tasks as Record<string, unknown>[] | undefined) ?? []
   const selectedTask = tasks.find((t) => t.key === selected)
 
@@ -74,7 +80,12 @@ export function PipelineDetailPage() {
             Pipelines
           </Link>
         }
-        title={pipeline.name}
+        title={
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{pipeline.name}</span>
+            <RunningBadge runs={activeRuns} className="text-sm" />
+          </span>
+        }
         description={pipeline.description}
         actions={
           <>
@@ -102,17 +113,21 @@ export function PipelineDetailPage() {
         {del.error && <ErrorAlert title="Could not delete" error={del.error} />}
         <ValidationErrors errors={pipeline.errors} />
         {pipeline.valid && <TriggerCard pipeline={pipeline} />}
-        {latest && (
-          <Card className="py-3">
+        {shown && (
+          <Card className={cn("py-3", running && "border-status-running/50 bg-status-running/5")}>
             <CardContent className="flex flex-wrap items-center gap-3 px-4 text-sm">
-              <span className="font-medium">Latest run</span>
-              <StatusBadge status={latest.status} />
+              <span className="font-medium">
+                {running ? (activeRuns.length > 1 ? `Running now (${activeRuns.length} runs)` : "Running now") : "Latest run"}
+              </span>
+              <StatusBadge status={shown.status} />
               <span className="text-muted-foreground">
-                <span className="font-mono">{latest.id}</span> ·{" "}
-                {formatDateTime(latest.started_at ?? latest.created_at)}
+                <span className="font-mono">{shown.id}</span> ·{" "}
+                {running ? "started " : ""}
+                {formatDateTime(shown.started_at ?? shown.created_at)}
+                {running && running.depth > 0 && " · as a sub-pipeline"}
               </span>
               <Button variant="outline" size="sm" className="ml-auto" asChild>
-                <Link to={`/runs/${latest.id}`}>
+                <Link to={`/runs/${shown.id}`}>
                   Open tasks and printout <ArrowUpRight />
                 </Link>
               </Button>
@@ -167,7 +182,8 @@ export function PipelineDetailPage() {
                     />
                   </CardAction>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="grid gap-4">
+                  <TaskCodeView pipelineId={pipeline.id} taskKey={String(selectedTask.key)} />
                   <KeyValues
                     values={Object.fromEntries(
                       Object.entries(selectedTask).filter(

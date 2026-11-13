@@ -137,6 +137,19 @@ export interface ImportResult {
   pipelines: string[]
 }
 
+/** The code a task runs (server/prooflix/api/pipelines.py). */
+export interface TaskCode {
+  task: string
+  type: "python" | "shell" | "pipeline"
+  language: "python" | "shell" | "yaml"
+  /** relative to the workspace root; null for a shell command */
+  path: string | null
+  content: string
+  /** 1-based line where the Python function is defined */
+  line: number | null
+  truncated: boolean
+}
+
 /** A workspace the server knows about (server/prooflix/api/workspaces.py). */
 export interface WorkspaceEntry {
   name: string

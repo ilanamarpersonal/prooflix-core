@@ -7,12 +7,15 @@ so reading them on the same thread avoids partial reads.
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel
 
 from ..engine import PipelineExecutor, Scheduler
 from ..pipelines import PipelineNotFound, PipelineValidationError, Workspace
-from ..pipelines.models import PIPELINE_ID_PATTERN
+from ..pipelines.models import PIPELINE_ID_PATTERN, PipelineTask, ShellTask
 from ..pipelines.schedule_yaml import set_schedule
 from ..runs import Run
 from .deps import get_executor, get_scheduler, get_workspace
@@ -148,3 +151,76 @@ async def start_run(
     except PipelineValidationError as exc:
         raise _invalid(exc.errors) from exc
     return run.model_copy(deep=True)
+
+
+# ---------------------------------------------------------------- task code
+MAX_CODE_BYTES = 1_000_000
+
+
+class TaskCode(BaseModel):
+    """The code a task runs: a Python file, a shell command, or a sub-pipeline's YAML."""
+
+    task: str
+    type: Literal["python", "shell", "pipeline"]
+    language: Literal["python", "shell", "yaml"]
+    path: str | None  # relative to the workspace root; None for a shell command
+    content: str
+    line: int | None = None  # 1-based line where the Python function is defined
+    truncated: bool = False
+
+
+def _python_file(src: Path, module: str) -> Path | None:
+    rel = Path(*module.split("."))
+    for candidate in (src / rel.with_suffix(".py"), src / rel / "__init__.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@router.get("/{pipeline_id}/tasks/{task_key}/code", response_model=TaskCode)
+def task_code(pipeline_id: PipelineId, task_key: str, ws: Workspace = Depends(get_workspace)) -> TaskCode:
+    """The code behind one task of a pipeline, for showing next to the graph."""
+    try:
+        definition = ws.load(pipeline_id)
+    except PipelineNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Pipeline '{pipeline_id}' not found") from exc
+    if definition.spec is None:
+        raise _invalid(definition.errors)
+    task = next((t for t in definition.spec.tasks if t.key == task_key), None)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Task '{task_key}' not found in '{pipeline_id}'")
+    root = ws.root
+
+    if isinstance(task, ShellTask):
+        return TaskCode(task=task_key, type="shell", language="shell", path=None, content=task.command)
+
+    if isinstance(task, PipelineTask):
+        child = ws.path_for(task.pipeline)
+        if child is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Pipeline '{task.pipeline}' not found")
+        return TaskCode(
+            task=task_key,
+            type="pipeline",
+            language="yaml",
+            path=child.relative_to(root).as_posix(),
+            content=child.read_text(encoding="utf-8", errors="replace"),
+        )
+
+    module, _, func = task.entrypoint.partition(":")
+    src = ws.src_dir_for(pipeline_id)
+    file = _python_file(src, module)
+    if file is None:
+        where = src.relative_to(root).as_posix() if src.is_relative_to(root) else str(src)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Module '{module}' not found in {where}/")
+    raw = file.read_bytes()
+    content = raw[:MAX_CODE_BYTES].decode("utf-8", errors="replace")
+    match = re.search(rf"^[ \t]*(?:async[ \t]+)?def[ \t]+{re.escape(func)}\b", content, re.MULTILINE)
+    return TaskCode(
+        task=task_key,
+        type="python",
+        language="python",
+        path=file.relative_to(root).as_posix(),
+        content=content,
+        line=content.count("\n", 0, match.start()) + 1 if match else None,
+        truncated=len(raw) > MAX_CODE_BYTES,
+    )

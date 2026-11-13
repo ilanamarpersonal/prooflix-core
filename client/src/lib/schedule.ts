@@ -2,12 +2,16 @@
  * Trigger options for a pipeline, and how they map to the cron expression stored
  * in the pipeline's YAML (`schedule.cron`). A cron that matches one of the options
  * opens in that option; any other cron opens as "Custom".
+ *
+ * Crons have five fields (minute hour day-of-month month day-of-week), or six with
+ * a leading seconds field for schedules finer than a minute ("*\/15 * * * * *").
  */
 
-export type TriggerKind = "manual" | "minutes" | "hourly" | "daily" | "weekly" | "monthly" | "cron"
+export type TriggerKind = "manual" | "seconds" | "minutes" | "hourly" | "daily" | "weekly" | "monthly" | "cron"
 
 export interface TriggerForm {
   kind: TriggerKind
+  everySeconds: number // seconds, for "seconds"
   every: number // minutes, for "minutes"
   minute: number // minute past the hour, for "hourly"
   time: string // "HH:MM", for daily / weekly / monthly
@@ -18,6 +22,7 @@ export interface TriggerForm {
 
 export const TRIGGER_KINDS: { kind: TriggerKind; label: string }[] = [
   { kind: "manual", label: "Manual only" },
+  { kind: "seconds", label: "Every few seconds" },
   { kind: "minutes", label: "Every few minutes" },
   { kind: "hourly", label: "Every hour" },
   { kind: "daily", label: "Every day" },
@@ -26,11 +31,13 @@ export const TRIGGER_KINDS: { kind: TriggerKind; label: string }[] = [
   { kind: "cron", label: "Custom (cron)" },
 ]
 
+export const SECOND_STEPS = [1, 2, 5, 10, 15, 20, 30]
 export const MINUTE_STEPS = [1, 2, 5, 10, 15, 20, 30]
 export const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 export const DEFAULT_FORM: TriggerForm = {
   kind: "manual",
+  everySeconds: 15,
   every: 15,
   minute: 0,
   time: "02:00",
@@ -51,6 +58,8 @@ export function toCron(f: TriggerForm): string | null {
   switch (f.kind) {
     case "manual":
       return null
+    case "seconds":
+      return f.everySeconds === 1 ? "* * * * * *" : `*/${f.everySeconds} * * * * *`
     case "minutes":
       return f.every === 1 ? "* * * * *" : `*/${f.every} * * * *`
     case "hourly":
@@ -73,6 +82,16 @@ export function fromCron(cron: string | null | undefined): TriggerForm {
   if (!cron) return { ...DEFAULT_FORM }
   const base = { ...DEFAULT_FORM, cron }
   const f = cron.trim().split(/\s+/)
+  if (f.length === 6) {
+    // seconds first: "every n seconds" when the other fields are all "*"
+    const [se, ...rest] = f
+    if (rest.every((x) => x === "*")) {
+      if (se === "*") return { ...base, kind: "seconds", everySeconds: 1 }
+      const step = /^\*\/(\d+)$/.exec(se)
+      if (step && SECOND_STEPS.includes(+step[1])) return { ...base, kind: "seconds", everySeconds: +step[1] }
+    }
+    return { ...base, kind: "cron" }
+  }
   if (f.length !== 5) return { ...base, kind: "cron" }
   const [mi, ho, dom, mon, dow] = f
   if (mon !== "*") return { ...base, kind: "cron" }
@@ -100,10 +119,12 @@ export function fromCron(cron: string | null | undefined): TriggerForm {
 const ordinal = (n: number) =>
   `${n}${n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th"}`
 
-/** "Every 15 minutes", "Daily at 02:00", "Weekdays at 09:00", "Cron 0 9 1-7 * 1"… */
+/** "Every 15 seconds", "Every 15 minutes", "Daily at 02:00", "Weekdays at 09:00", "Cron 0 9 1-7 * 1"… */
 export function describeCron(cron: string): string {
   const f = fromCron(cron)
   switch (f.kind) {
+    case "seconds":
+      return f.everySeconds === 1 ? "Every second" : `Every ${f.everySeconds} seconds`
     case "minutes":
       return f.every === 1 ? "Every minute" : `Every ${f.every} minutes`
     case "hourly":

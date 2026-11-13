@@ -46,7 +46,7 @@ export function RunButton({
             : undefined
       }
     >
-      {start.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run
+      <span className="contents">{start.isPending ? <Loader2 className="animate-spin" /> : <Play />}</span> Run
     </Button>
   )
 }

@@ -211,3 +211,32 @@ stateDiagram-v2
 * A failure skips everything downstream of it, but independent branches still
   finish (like Databricks' default "all succeeded" rule).
 * A run is `SUCCEEDED` only if every task succeeded and the `outputs` resolved.
+
+## Schedules
+
+A pipeline runs on a schedule when its YAML has a `schedule:` block (the
+Trigger card on the pipeline's page writes it for you):
+
+```yaml
+schedule:
+  cron: "*/15 * * * * *"   # every 15 seconds
+  timezone: UTC            # optional, default UTC
+  enabled: true            # false pauses it
+```
+
+`cron` takes the standard five fields, `minute hour day-of-month month
+day-of-week`, or six with a leading **seconds** field for schedules finer than
+a minute:
+
+| Cron | Runs |
+|---|---|
+| `*/15 * * * * *` | every 15 seconds |
+| `*/10 * * * * *` | every 10 seconds |
+| `* * * * *` | every minute |
+| `*/15 * * * *` | every 15 minutes |
+| `30 2 * * *` | every day at 02:30 |
+| `0 9 * * 1-5` | weekdays at 09:00 |
+
+The server checks schedules every second. A due run is skipped (not queued) if
+the previous run of the pipeline is still going, and times missed while the
+server was down are not run afterwards.

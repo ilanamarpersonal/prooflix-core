@@ -256,7 +256,7 @@ export function ImportCodePanel({
             {conflicts.length === 0 && (
               <div>
                 <Button onClick={() => submit(false)} disabled={busy || targets.length === 0}>
-                  {busy ? <Loader2 className="animate-spin" /> : <Upload />} Import {targets.length} file
+                  <span className="contents">{busy ? <Loader2 className="animate-spin" /> : <Upload />}</span> Import {targets.length} file
                   {targets.length === 1 ? "" : "s"}
                 </Button>
               </div>

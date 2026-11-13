@@ -2,8 +2,9 @@
 
 A pipeline with ``schedule:`` in its YAML (and ``enabled: true``, the default) runs
 automatically at each time its cron expression matches. The scheduler runs inside
-the server: every few seconds it reloads the pipelines, so adding, editing or
-pausing a schedule takes effect on the next tick without a restart.
+the server: every second it reloads the pipelines, so adding, editing or pausing
+a schedule takes effect on the next tick without a restart, and six-field
+(seconds) schedules such as ``*/15 * * * * *`` run on time.
 
 - No catch-up: times that passed while the server was down, or before a schedule
   was added or changed, are not run afterwards. Counting starts from then.
@@ -28,7 +29,7 @@ from .executor import PipelineExecutor
 
 log = logging.getLogger(__name__)
 
-TICK_SECONDS = 5.0
+TICK_SECONDS = 1.0  # schedules can be seconds apart
 
 
 def utcnow() -> datetime:

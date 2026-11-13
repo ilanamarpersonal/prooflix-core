@@ -1,12 +1,17 @@
 """Cron expressions for pipeline schedules.
 
-Standard five fields, ``minute hour day-of-month month day-of-week``:
+Standard five fields, ``minute hour day-of-month month day-of-week``, or six
+with a leading ``second`` field for schedules finer than a minute:
 
     */15 * * * *      every 15 minutes
     0 * * * *         every hour, on the hour
     30 2 * * *        every day at 02:30
     0 9 * * 1-5       weekdays at 09:00
     0 6 1 * *         the 1st of every month at 06:00
+    */15 * * * * *    every 15 seconds (six fields: second first)
+    30 0 9 * * *      every day at 09:00:30
+
+A five-field expression runs at second 0 of each matching minute.
 
 Each field takes ``*``, a number, a range ``a-b``, a step ``*/n`` or ``a-b/n``, and
 lists of those separated by commas. Months and weekdays also take names (``jan``,
@@ -24,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+_SECOND = ("second", 0, 59)
 _FIELDS = (  # name, low, high
     ("minute", 0, 59),
     ("hour", 0, 23),
@@ -50,7 +56,8 @@ def zone(name: str) -> ZoneInfo:
 
 
 def _parse_field(text: str, index: int) -> frozenset[int]:
-    name, low, high = _FIELDS[index]
+    """One field; ``index`` is its place among the five standard fields, -1 for seconds."""
+    name, low, high = _SECOND if index < 0 else _FIELDS[index]
     names = _NAMES.get(index, {})
     values: set[int] = set()
 
@@ -94,6 +101,7 @@ def _parse_field(text: str, index: int) -> frozenset[int]:
 @dataclass(frozen=True)
 class Cron:
     expression: str
+    seconds: frozenset[int]  # {0} for a five-field expression
     minutes: frozenset[int]
     hours: frozenset[int]
     days: frozenset[int]
@@ -101,16 +109,28 @@ class Cron:
     weekdays: frozenset[int]  # 0 = Sunday
     any_day: bool  # day-of-month is "*"
     any_weekday: bool  # day-of-week is "*"
+    has_seconds: bool = False  # six fields: runs can be less than a minute apart
 
     @classmethod
     def parse(cls, expression: str) -> "Cron":
         fields = expression.split()
-        if len(fields) != 5:
+        if len(fields) not in (5, 6):
             raise CronError(
-                f"A cron expression has 5 fields (minute hour day-of-month month day-of-week), got {len(fields)}"
+                "A cron expression has 5 fields (minute hour day-of-month month day-of-week), "
+                f"or 6 with seconds first (second minute hour day-of-month month day-of-week); got {len(fields)}"
             )
-        parsed = [_parse_field(f, i) for i, f in enumerate(fields)]
-        return cls(" ".join(fields), *parsed, any_day=fields[2] == "*", any_weekday=fields[4] == "*")
+        has_seconds = len(fields) == 6
+        seconds = _parse_field(fields[0], -1) if has_seconds else frozenset({0})
+        rest = fields[1:] if has_seconds else fields
+        parsed = [_parse_field(f, i) for i, f in enumerate(rest)]
+        return cls(
+            " ".join(fields),
+            seconds,
+            *parsed,
+            any_day=rest[2] == "*",
+            any_weekday=rest[4] == "*",
+            has_seconds=has_seconds,
+        )
 
     def _day_matches(self, d: datetime) -> bool:
         if d.month not in self.months:
@@ -129,18 +149,24 @@ class Cron:
         """The first time strictly after ``after`` (an aware datetime) that matches,
         as an aware UTC datetime."""
         zi = zone(tz)
-        local = after.astimezone(zi).replace(second=0, microsecond=0) + timedelta(minutes=1)
+        # wall-clock time without the zone, so stepping doesn't jump at DST changes
+        local = after.astimezone(zi).replace(microsecond=0, tzinfo=None) + timedelta(seconds=1)
         limit = local + _SEARCH_LIMIT
         while local < limit:
             if not self._day_matches(local):
-                local = (local + timedelta(days=1)).replace(hour=0, minute=0)
+                local = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0)
                 continue
             if local.hour not in self.hours:
-                local = (local + timedelta(hours=1)).replace(minute=0)
+                local = (local + timedelta(hours=1)).replace(minute=0, second=0)
                 continue
             if local.minute not in self.minutes:
-                local += timedelta(minutes=1)
+                local = (local + timedelta(minutes=1)).replace(second=0)
                 continue
+            later = [s for s in self.seconds if s >= local.second]
+            if not later:  # no matching second left in this minute
+                local = (local + timedelta(minutes=1)).replace(second=0)
+                continue
+            local = local.replace(second=min(later))
             # wall-clock time -> real instant; skip times a DST jump makes not exist
             candidate = local.replace(tzinfo=zi)
             back = candidate.astimezone(timezone.utc).astimezone(zi)
@@ -148,7 +174,7 @@ class Cron:
                 result = candidate.astimezone(timezone.utc)
                 if result > after:
                     return result
-            local += timedelta(minutes=1)
+            local += timedelta(seconds=1)
         raise CronError(f"'{self.expression}' never matches")
 
     def next_runs(self, after: datetime, tz: str = "UTC", count: int = 3) -> list[datetime]:

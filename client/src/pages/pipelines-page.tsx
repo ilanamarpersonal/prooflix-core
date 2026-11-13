@@ -5,6 +5,7 @@ import { AlarmClock, AlertTriangle, FolderInput, History, Plus, Search, Workflow
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
 import { RunButton } from "@/components/run-button"
+import { RunningBadge, activeRunsByPipeline } from "@/components/running-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -43,6 +44,8 @@ export function PipelinesPage() {
   // All runs of the pipelines in the workspace, newest first.
   const ids = new Set(data?.map((p) => p.id))
   const pipelineRuns = data ? runs.data?.filter((r) => ids.has(r.pipeline)) : undefined
+  // runs still going (this list refreshes every second while any are)
+  const activeRuns = activeRunsByPipeline(runs.data)
   const [runQuery, setRunQuery] = useState("")
   const shownRuns = searchRuns(pipelineRuns, runQuery)
   const searching = !!runQuery.trim()
@@ -191,16 +194,19 @@ export function PipelinesPage() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {p.valid ? (
-                            <Badge variant="outline" className="text-status-succeeded">
-                              valid
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
-                              <AlertTriangle /> {p.errors.length} error
-                              {p.errors.length > 1 ? "s" : ""}
-                            </Badge>
-                          )}
+                          <div className="flex flex-wrap items-center gap-1">
+                            <RunningBadge runs={activeRuns.get(p.id)} />
+                            {p.valid ? (
+                              <Badge variant="outline" className="text-status-succeeded">
+                                valid
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-status-failed" title={p.errors.join("\n")}>
+                                <AlertTriangle /> {p.errors.length} error
+                                {p.errors.length > 1 ? "s" : ""}
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>
                           <RunButton

@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { api, useSetSchedule } from "@/lib/api"
 import {
   MINUTE_STEPS,
+  SECOND_STEPS,
   TRIGGER_KINDS,
   WEEKDAYS,
   describeCron,
@@ -72,7 +73,7 @@ export function TriggerCard({ pipeline }: { pipeline: PipelineDetail }) {
         <div className="ml-auto flex gap-2">
           {schedule && (
             <Button variant="outline" size="sm" onClick={togglePause} disabled={setSchedule.isPending}>
-              {schedule.enabled ? <Pause /> : <Play />} {schedule.enabled ? "Pause" : "Resume"}
+              <span className="contents">{schedule.enabled ? <Pause /> : <Play />}</span> {schedule.enabled ? "Pause" : "Resume"}
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={() => setEditing(!editing)} aria-expanded={editing}>
@@ -152,6 +153,21 @@ function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone:
 
       {form.kind !== "manual" && (
         <div className="flex flex-wrap items-end gap-4">
+          {form.kind === "seconds" && (
+            <Field label="Every">
+              <select
+                className={selectClass}
+                value={form.everySeconds}
+                onChange={(e) => update({ everySeconds: +e.target.value })}
+              >
+                {SECOND_STEPS.map((n) => (
+                  <option key={n} value={n}>
+                    {n} second{n === 1 ? "" : "s"}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           {form.kind === "minutes" && (
             <Field label="Every">
               <select className={selectClass} value={form.every} onChange={(e) => update({ every: +e.target.value })}>
@@ -220,12 +236,12 @@ function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone:
             </Field>
           )}
           {form.kind === "cron" && (
-            <Field label="Cron expression (minute hour day-of-month month day-of-week)">
+            <Field label="Cron expression: minute hour day-of-month month day-of-week, or 6 fields with seconds first">
               <Input
                 className="w-72 font-mono"
                 value={form.cron}
                 onChange={(e) => update({ cron: e.target.value })}
-                placeholder="0 9 * * 1-5"
+                placeholder="0 9 * * 1-5   or   */15 * * * * *"
                 aria-invalid={invalid || undefined}
               />
             </Field>

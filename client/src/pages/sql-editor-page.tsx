@@ -722,7 +722,7 @@ function QueryEditor({
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-3">
         <Button onClick={() => run()} disabled={query.isPending || !sql.trim()}>
-          {query.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run
+          <span className="contents">{query.isPending ? <Loader2 className="animate-spin" /> : <Play />}</span> Run
         </Button>
         <Button
           variant="outline"
