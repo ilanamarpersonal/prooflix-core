@@ -16,6 +16,14 @@ workspace/*
 catalog/
 server/tests/fixtures/sample_workspace/data/output/
 
+# Terraform: providers and local state (the lock file is committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
 # OS / editors
 .DS_Store
 .vscode/

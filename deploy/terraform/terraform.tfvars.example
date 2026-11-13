@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and adjust. Every setting is optional.
+
+# kube_context      = "kind-kind"
+# namespace         = "default"
+# image_tag         = "dev"
+# image_pull_policy = "Never"   # "IfNotPresent" for an image in a registry
+# scheduler_enabled = true
+# persistence_size  = "10Gi"
+
+# Any other chart value, e.g. an internal Ingress:
+# extra_values = {
+#   ingress = {
+#     enabled   = true
+#     className = "nginx"
+#     hosts     = [{ host = "prooflix.internal", paths = [{ path = "/", pathType = "Prefix" }] }]
+#   }
+# }

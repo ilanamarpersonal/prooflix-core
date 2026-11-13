@@ -119,6 +119,25 @@ After a code change, rebuild and load the image, then
 [values.yaml](deploy/helm/prooflix/values.yaml). The volume is kept on
 `helm uninstall`; delete it with `kubectl delete pvc prooflix`.
 
+### With Terraform
+
+[deploy/terraform](deploy/terraform) installs the same chart with the Helm
+provider (the image is still built and loaded as above). It targets the
+`kind-kind` context by default; copy
+[terraform.tfvars.example](deploy/terraform/terraform.tfvars.example) to
+`terraform.tfvars` to change that or other settings.
+
+```bash
+cd deploy/terraform
+terraform init
+terraform apply
+```
+
+Editing the chart triggers an upgrade on the next `apply`. A code change only
+needs a new image: rebuild, load it, and `kubectl rollout restart deploy/prooflix`.
+`terraform destroy` removes the release but keeps the volume. State is stored
+locally in `terraform.tfstate`, which is not committed.
+
 Prooflix has no login, so don't expose it publicly. Pipeline tasks run inside
 the server container, so libraries that imported projects need must be in the
 image.
