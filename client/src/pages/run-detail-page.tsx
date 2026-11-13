@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
-import { ArrowUpRight, Ban, FileCode2, List, PanelRightOpen, RotateCw, Workflow, X } from "lucide-react"
+import { ArrowUpRight, Ban, FileCode2, List, PanelRightOpen, RotateCw, ScrollText, Workflow } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
+import { RunOutput } from "@/components/run-output"
 import { RunTreeView } from "@/components/run-tree-view"
 import { StatusBadge } from "@/components/status-badge"
 import type { TaskAction } from "@/components/task-actions-menu"
@@ -49,8 +50,9 @@ export function RunDetailPage() {
 
   const active = !TERMINAL_STATUSES.includes(run.status)
   const tasks = Object.values(run.tasks)
-  // Default selection: the running task, else the first failed one, else the
-  // task that started last, so its printout is shown without a click.
+  // Highlighted in the graph: the task you picked, else the running task, else the
+  // first failed one, else the task that started last. Until you pick one, the
+  // output of every task is shown below (live while the run is going).
   const lastStarted = [...tasks]
     .filter((t) => t.started_at)
     .sort((a, b) => (a.started_at! < b.started_at! ? 1 : -1))[0]
@@ -61,7 +63,7 @@ export function RunDetailPage() {
     lastStarted?.key ??
     tasks[0]?.key ??
     null
-  const selected = selectedKey ? run.tasks[selectedKey] : undefined
+  const selected = picked ? run.tasks[picked] : undefined
 
   // A task's links: its source code, its sub-run and the pipeline it calls.
   const taskLinks = (key: string): TaskAction[] => {
@@ -163,7 +165,10 @@ export function RunDetailPage() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="grid min-w-0 content-start gap-4">
-          <p className="text-muted-foreground -mb-2 text-xs">Click a task to see its printout below.</p>
+          <p className="text-muted-foreground -mb-2 text-xs">
+            {selected ? "Showing one task's printout." : "Every task's output is shown below as it runs."} Click a task
+            to see only its printout.
+          </p>
           <PipelineGraph
             nodes={graph.nodes}
             edges={graph.edges}
@@ -176,16 +181,23 @@ export function RunDetailPage() {
             ]}
           />
           {selected ? (
-            <TaskRunPanel
-              task={selected}
-              childRun={run.children.find((c) => c.id === selected.child_run_id)}
-              actions={[
-                ...taskLinks(selected.key),
-                { label: "Close", icon: X, onSelect: () => setPicked(null) },
-              ]}
-            />
+            <>
+              <div>
+                <Button variant="outline" size="sm" onClick={() => setPicked(null)}>
+                  <ScrollText /> Show all output
+                </Button>
+              </div>
+              <TaskRunPanel
+                task={selected}
+                childRun={run.children.find((c) => c.id === selected.child_run_id)}
+                actions={[
+                  ...taskLinks(selected.key),
+                  { label: "Show all output", icon: ScrollText, onSelect: () => setPicked(null) },
+                ]}
+              />
+            </>
           ) : (
-            <p className="text-muted-foreground text-sm">Click a task to see its printout.</p>
+            <RunOutput run={run} />
           )}
         </div>
 
