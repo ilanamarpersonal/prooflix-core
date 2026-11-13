@@ -1,0 +1,6 @@
+apiVersion: v2
+name: prooflix
+description: Prooflix core - YAML pipelines with sub-pipelines, a catalog and a SQL editor
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

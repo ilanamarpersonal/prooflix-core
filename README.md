@@ -95,3 +95,30 @@ See [docs/pipelines.md](docs/pipelines.md) for the full format.
 cd server
 uv run pytest
 ```
+
+## Run on Kubernetes (Helm)
+
+The [Dockerfile](Dockerfile) builds one image: the server, which also serves
+the built client on port 8000. The chart in
+[deploy/helm/prooflix](deploy/helm/prooflix) runs it as a single pod (run
+history and the scheduler live in the server process, so it must not be scaled
+up) with the workspace and catalog on a persistent volume at `/data`.
+
+On a local [kind](https://kind.sigs.k8s.io/) cluster:
+
+```bash
+docker build -t prooflix:dev .
+kind load docker-image prooflix:dev
+helm install prooflix deploy/helm/prooflix --set image.tag=dev --set image.pullPolicy=Never
+kubectl port-forward svc/prooflix 8000:8000   # then open http://localhost:8000
+```
+
+After a code change, rebuild and load the image, then
+`kubectl rollout restart deploy/prooflix`. Settings (`prooflix.scheduler`,
+`persistence.size`, `ingress`, ...) are in
+[values.yaml](deploy/helm/prooflix/values.yaml). The volume is kept on
+`helm uninstall`; delete it with `kubectl delete pvc prooflix`.
+
+Prooflix has no login, so don't expose it publicly. Pipeline tasks run inside
+the server container, so libraries that imported projects need must be in the
+image.

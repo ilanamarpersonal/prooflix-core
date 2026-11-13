@@ -1,0 +1,19 @@
+Prooflix is starting. Open it with:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "prooflix.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+then browse to http://localhost:{{ .Values.service.port }} (API docs at /docs).
+
+{{- if .Values.persistence.enabled }}
+
+Workspace and catalog are on the PersistentVolumeClaim "{{ include "prooflix.claimName" . }}".
+{{- if not .Values.persistence.existingClaim }} It is kept on `helm uninstall`; delete it with
+  kubectl --namespace {{ .Release.Namespace }} delete pvc {{ include "prooflix.claimName" . }}
+{{- end }}
+{{- else }}
+
+WARNING: persistence is off. Imported projects, run history and the catalog
+are lost whenever the pod restarts.
+{{- end }}
+
+Prooflix has no login: do not expose it publicly.

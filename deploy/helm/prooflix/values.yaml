@@ -1,0 +1,68 @@
+# Prooflix keeps run history in memory (mirrored to the volume) and runs the
+# cron scheduler inside the server, so it must run as exactly one pod.
+# There is deliberately no replicaCount value.
+
+image:
+  repository: prooflix
+  tag: ""          # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+prooflix:
+  scheduler: true    # run pipelines on their cron schedules
+  maxDepth: 10       # maximum sub-pipeline nesting depth
+  extraEnv: []       # more environment variables, e.g. for pipeline code
+  #  - name: MY_SETTING
+  #    value: "x"
+
+# Workspace (imported projects, run history) and catalog, mounted at /data.
+persistence:
+  enabled: true      # false: an emptyDir, so everything is lost when the pod goes
+  size: 10Gi
+  storageClass: ""   # "" uses the cluster's default StorageClass
+  accessModes:
+    - ReadWriteOnce
+  existingClaim: ""  # use a PVC you created yourself
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Prooflix has no login: anyone who reaches it can import and run code.
+# Keep the Ingress internal, or use `kubectl port-forward`.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: prooflix.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

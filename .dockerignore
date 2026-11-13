@@ -1,0 +1,14 @@
+.git
+.claude
+.DS_Store
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/.pytest_cache
+**/node_modules
+client/dist
+workspace
+catalog
+docs
+deploy
+server/tests
