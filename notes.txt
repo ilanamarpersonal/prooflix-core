@@ -1,0 +1,1 @@
+After Code change: docker build -t prooflix:dev . && kind load docker-image prooflix:dev && kubectl rollout restart deploy/prooflix
