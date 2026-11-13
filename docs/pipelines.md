@@ -10,8 +10,9 @@ file name without `.yaml` is the pipeline **id**.
 Workspaces live in `workspaces/` (one folder each); the server runs pipelines
 from the active one. A workspace holds **projects**: the workspace folder itself
 (it has `pipelines/` and `src/`), plus each top-level folder in it with a
-`pipelines/` folder (usually brought in with **Workspace → Import code**). A project keeps the Python code its
-pipelines call in its own `src/`, and its data in `data/`.
+`pipelines/` folder (usually brought in with **Workspace → Import code**). A
+project keeps the Python code its pipelines call in its own `src/`, and its
+data in `data/`.
 
 ```text
 workspaces/
@@ -61,6 +62,9 @@ tasks:
 
 outputs:                           # returned to a calling pipeline
   total_revenue: ${tasks.transform.output.total_revenue}
+
+schedule:                          # optional: run on a cron schedule (see Schedules)
+  cron: "0 6 * * *"
 ```
 
 ### Fields common to all tasks
@@ -88,12 +92,13 @@ outputs:                           # returned to a calling pipeline
 # <workspace>/src/jobs/orders.py
 def extract(source_file: str, ctx) -> dict:
     ctx.log("reading")                       # appears in the task log
-    path = ctx.workspace / source_file       # workspace root as a Path
+    path = ctx.workspace / source_file       # the project folder as a Path
     return {"path": "...", "row_count": 10}  # must be JSON-serializable
 ```
 
 * `ctx` is optional; declare it to receive a `TaskContext` (`run_id`,
-  `root_run_id`, `pipeline`, `task_key`, `attempt`, `workspace`, `log()`).
+  `root_run_id`, `pipeline`, `task_key`, `attempt`, `workspace` (the project
+  folder), `log()`).
 * Plain functions run in a worker thread; `async def` functions run on the
   event loop.
 * A module is re-imported when its file changes, so code edits apply to the
@@ -110,7 +115,7 @@ def extract(source_file: str, ctx) -> dict:
     TARGET: ${params.target}
 ```
 
-Runs with `/bin/sh` and the workspace root as working directory. Each output
+Runs with `/bin/sh` and the project folder as working directory. Each output
 line goes to the task log. A non-zero exit code fails the task. The output is
 `{"exit_code": 0, "stdout": "<last 10 000 characters>"}`.
 

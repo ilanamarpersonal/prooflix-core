@@ -13,9 +13,18 @@ flowchart TB
         cli["cli.py<br/>serve / validate / run"]
     end
 
+    subgraph state["Workspaces"]
+        reg["workspaces.py<br/>WorkspaceRegistry"]
+        rt["runtime.py<br/>build_services, switch_workspace"]
+    end
+
     subgraph api["api/"]
         rp["pipelines.py<br/>/api/pipelines"]
         rr["runs.py<br/>/api/runs"]
+        rs2["schedules.py<br/>/api/schedules"]
+        rw["workspace.py<br/>/api/workspace (files)"]
+        rws["workspaces.py<br/>/api/workspaces, /api/fs"]
+        rsql["sql.py<br/>/api/sql, /api/catalog"]
         sch["schemas.py<br/>response models, graph"]
         deps["deps.py<br/>DI accessors"]
     end
@@ -24,7 +33,9 @@ flowchart TB
         models["models.py<br/>PipelineSpec, task models"]
         wsp["workspace.py<br/>Workspace, validation"]
         tpl["templating.py<br/>${...} resolve"]
-        graph["graph.py<br/>cycles, ancestors"]
+        gph["graph.py<br/>cycles, ancestors"]
+        cron["cron.py<br/>Cron (5 or 6 fields)"]
+        sy["schedule_yaml.py<br/>write schedule: block"]
         err["errors.py"]
     end
 
@@ -32,6 +43,7 @@ flowchart TB
         exe["executor.py<br/>PipelineExecutor"]
         run["runners.py<br/>python / shell"]
         ctx["context.py<br/>TaskContext"]
+        sched["scheduler.py<br/>Scheduler"]
     end
 
     subgraph runs["runs/"]
@@ -41,38 +53,59 @@ flowchart TB
 
     cfg["config.py<br/>Settings"]
 
-    main --> api
     main --> cfg
+    main --> reg
+    main --> rt
+    main --> api
+    cli --> reg
     cli --> engine
-    cli --> pipelines
+    rt --> wsp
+    rt --> exe
+    rt --> sched
+    rt --> rs
+    rws --> reg
+    rws --> rt
     rp --> wsp
     rp --> exe
+    rp --> sy
+    rs2 --> cron
     rr --> rs
     rr --> exe
+    rw --> wsp
+    rsql --> wsp
+    sched --> cron
+    sched --> exe
     exe --> wsp
     exe --> tpl
     exe --> run
     exe --> rs
     run --> ctx
     wsp --> models
-    wsp --> graph
+    wsp --> gph
     wsp --> tpl
+    models --> cron
     rs --> rm
 ```
 
 | Module | Responsibility |
 |---|---|
-| `config.py` | `Settings` from environment variables: workspace path, max nesting depth, CORS origins, client build folder |
-| `main.py` | Builds the FastAPI app, wires the active workspace's services into `app.state`, serves `client/dist` when it exists |
+| `config.py` | `Settings` from environment variables: workspaces folder, default workspace, home folder, catalog folder, scheduler on/off, max nesting depth, CORS origins, client build folder |
+| `main.py` | Builds the FastAPI app: makes the registry, builds the active workspace's services into `app.state`, starts/stops the scheduler with the app, serves `client/dist` when it exists |
 | `workspaces.py` | `WorkspaceRegistry`: finds the workspaces in the workspaces folder, tracks added ones and the active one, saved to `<PROOFLIX_HOME>/workspaces.json` |
-| `runtime.py` | Builds `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace, and swaps them in `app.state` when the active workspace changes |
+| `runtime.py` | `build_services()` makes `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace; `switch_workspace()` swaps them in `app.state` (refused while runs are going) |
 | `cli.py` | `prooflix serve`, `prooflix validate`, `prooflix run <id> -p key=value` |
-| `pipelines/models.py` | Pydantic models of the YAML format. Task types are a discriminated union on `type`. |
-| `pipelines/workspace.py` | Lists and reads YAML files, runs per-file and whole-workspace validation, saves and deletes files (atomic writes) |
+| `pipelines/models.py` | Pydantic models of the YAML format. Task types are a discriminated union on `type`; `schedule:` is validated with `Cron`. |
+| `pipelines/workspace.py` | Lists projects and YAML files, runs per-file and whole-workspace validation, saves and deletes files (atomic writes) |
 | `pipelines/templating.py` | Finds and resolves `${params...}`, `${tasks...}` and `${run...}` references |
 | `pipelines/graph.py` | Cycle detection, transitive dependencies, shortest path (used to report recursive calls) |
+| `pipelines/cron.py` | Parses cron expressions (5 fields, or 6 with seconds first) and computes the next times in a time zone, DST-aware |
+| `pipelines/schedule_yaml.py` | Adds, replaces or removes a pipeline's `schedule:` block while keeping the rest of the file and its comments |
 | `engine/executor.py` | Creates runs, schedules task DAGs, runs sub-pipelines as child runs, handles retries, timeouts and cancellation |
-| `engine/runners.py` | Executes `python` (import + call) and `shell` (subprocess) tasks |
+| `engine/runners.py` | Executes `python` (import + call, printout captured) and `shell` (subprocess) tasks |
+| `engine/scheduler.py` | Starts runs on their cron schedules: ticks every second, no catch-up, no overlap |
+| `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB |
+| `api/workspace.py` | The active workspace's files: tree, file content, import of uploaded folders, removal to trash |
+| `api/workspaces.py` | Create, list, activate and forget workspaces; list server folders for the folder picker |
 | `runs/models.py` | `Run`, `TaskRun`, `RunStatus` |
 | `runs/store.py` | Thread-safe in-memory run index mirrored to `<workspace>/.prooflix/runs/<id>.json` |
 
@@ -99,6 +132,8 @@ erDiagram
         string parent_task_key
         string root_run_id
         int depth
+        string trigger
+        datetime scheduled_for
     }
     TASK_RUN {
         string key
@@ -119,6 +154,11 @@ erDiagram
   as `R`, and `depth = R.depth + 1`. The parent task's `child_run_id` points
   to it.
 * `GET /api/runs/{id}/tree` follows these links to return the whole hierarchy.
+* `trigger` says what started a run: `manual` (the UI, API or CLI), `schedule`
+  (then `scheduled_for` holds the cron time it was due) or `pipeline` (a child
+  run started by a parent's task).
+* `TaskRun.logs` holds the task's log lines, including everything a Python task
+  printed; the client shows them as the task's printout.
 
 ## Execution engine
 
@@ -166,28 +206,89 @@ flowchart TD
 | Cancel a child run only | The child becomes `CANCELLED`. The parent task fails with "was cancelled" and its downstream tasks are skipped. |
 | Server restarts mid-run | On startup `RunStore.recover_interrupted()` marks leftover `RUNNING`/`PENDING` runs as `FAILED`. |
 
+## Scheduler
+
+`engine/scheduler.py` runs inside the server and is started and stopped with
+the app (and rebuilt when the active workspace changes). Every second it
+reloads the pipelines and, for each valid pipeline with an enabled
+`schedule:`, starts a run when the cron's next time after the last check has
+passed.
+
+```mermaid
+flowchart TD
+    T["tick (every second)"] --> L["load_all()"]
+    L --> P{"pipeline has an<br/>enabled schedule?"}
+    P -->|no| N["forget / skip"]
+    P -->|"new or changed"| S["start counting from now<br/>(no catch-up)"]
+    P -->|yes| D{"next cron time after<br/>the last check ≤ now?"}
+    D -->|no| W["wait for the next tick"]
+    D -->|yes| R{"a run of it still going?"}
+    R -->|yes| K["record skipped_at"]
+    R -->|no| X["executor.start(trigger=schedule,<br/>scheduled_for=due)"]
+```
+
+* **No catch-up**: times missed while the server was down, or before a schedule
+  was added or changed, are not run afterwards; only the latest due time runs.
+* **No overlap**: a due run is skipped (and recorded as skipped) if the
+  previous run of the pipeline is still going.
+* Cron expressions have 5 fields (`minute hour day-of-month month
+  day-of-week`) or 6 with seconds first (`*/15 * * * * *` is every 15 seconds),
+  and are matched in the schedule's time zone.
+* Scheduler state (last run, last skip, last error) is in memory and shown in
+  each pipeline's `schedule` info; `PROOFLIX_SCHEDULER=0` turns it off.
+
 ## REST API
 
 Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 
+**Pipelines and runs**
+
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/health` | | `{status, version, workspace}` |
-| GET | `/api/pipelines` | | `PipelineSummary[]` (invalid ones included, with `errors`) |
+| GET | `/api/health` | | `{status, version, workspace}` (the active workspace) |
+| GET | `/api/pipelines` | | `PipelineSummary[]` (invalid ones included, with `errors`; `project`, `file` and `schedule` info) |
 | GET | `/api/pipelines/{id}` | | `PipelineDetail`: summary + `source`, `spec`, `graph{nodes,edges}`, `used_by` |
 | POST | `/api/pipelines/{id}/validate` | `{source}` | `{valid, errors}`. Validates unsaved YAML against the rest of the workspace. |
 | PUT | `/api/pipelines/{id}[?create_only=true]` | `{source}` | `201`/`200 PipelineDetail`, `422 {detail:{errors}}`, `409` if `create_only` and it exists |
 | DELETE | `/api/pipelines/{id}` | | `204`, or `409` when other pipelines call it |
+| PUT | `/api/pipelines/{id}/schedule` | `{cron, timezone, enabled}` | `PipelineDetail`; writes the `schedule:` block into the YAML. `422` for an invalid cron or time zone. |
+| DELETE | `/api/pipelines/{id}/schedule` | | `PipelineDetail` without a schedule (runs only when started) |
+| GET | `/api/pipelines/{id}/tasks/{key}/code` | | `{type, language, path, content, line}`: the Python module (at the function), shell command or sub-pipeline YAML a task runs |
 | POST | `/api/pipelines/{id}/runs` | `{parameters}` | `202 Run`, `404`, `422` (invalid pipeline or unknown parameters) |
+| POST | `/api/schedules/preview` | `{cron, timezone}` | `{valid, cron, next_runs[5], error}`: checks a cron without saving |
 | GET | `/api/runs?pipeline=&root_only=true&limit=50` | | `Run[]`, newest first |
 | GET | `/api/runs/{id}` | | `Run` |
 | GET | `/api/runs/{id}/tree` | | `Run` + `children: RunTree[]` (recursive) |
 | POST | `/api/runs/{id}/cancel` | | `Run`, or `409` if already finished |
-| GET | `/api/workspaces` | | `{active, workspaces: [{name, path, active, default, exists}]}` |
+
+**Workspace files** (in the active workspace)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/workspace/tree` | | The folder tree (hidden folders like `.prooflix` left out) |
+| GET | `/api/workspace/file?path=` | | `{path, size, content}` (first 1 MB; `binary: true` for binary files) |
+| POST | `/api/workspace/import` | `{files: [{path, content_base64}], overwrite}` | `{written, pipelines}`; `409` with `conflicts` when files exist and `overwrite` is false |
+| DELETE | `/api/workspace/item?path=` | | Moves a file or folder to `.prooflix/trash/<time>/` |
+
+**Workspaces**
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/workspaces` | | `{active, root, workspaces: [{name, path, active, default, in_root, exists}]}` |
 | POST | `/api/workspaces` | `{parent, name}` | `201` entry. Creates `<parent>/<name>/` with `pipelines/` and `src/`; does not make it active. `409` if it exists. |
 | PUT | `/api/workspaces/active` | `{path}` | The list, with `path` active. `409` while runs are going. |
-| DELETE | `/api/workspaces?path=` | | The list without `path` (its folder is kept). `400` for the active or default workspace. |
+| DELETE | `/api/workspaces?path=` | | The list without `path` (its folder is kept). `400` for the active or default workspace, or one in the workspaces folder. |
 | GET | `/api/fs/dirs?path=` | | `{path, parent, dirs}`: sub-folders on the server, for the folder picker. Default: the workspaces folder. |
+
+**SQL and catalog** (DuckDB over the Parquet files of the active workspace's `data/` folders and the catalog folder)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/catalog` | | Schemas and their tables, with columns and row counts |
+| GET | `/api/sql/tables` | | Every table with its SQL name (`qualified`), source file, row count and columns; used for completion |
+| POST | `/api/sql/query` | `{sql, limit}` | `{columns, rows, row_count, truncated, elapsed_ms}`: one read-only `SELECT` |
+| POST | `/api/catalog/import` | `{schema, files, overwrite}` | Adds CSV or JSON files as Parquet tables |
+| GET | `/api/catalog/export?table=&schema=&format=` | | A table as CSV, or a ZIP (Parquet) of a table, a schema or the whole catalog |
 
 ### Workspaces
 
@@ -238,5 +339,8 @@ uv run pytest
 
 The suite covers templating, every validation rule, execution (sub-pipeline
 output flow, failure propagation, retries, timeouts, cancellation in both
-directions, depth limit, persistence and recovery) and the REST API end to end
-against a copy of the sample workspace.
+directions, depth limit, persistence and recovery), cron parsing and the
+scheduler (including second-level schedules and DST), workspaces (creating,
+switching, persistence, the workspaces folder), the SQL and catalog API, task
+code, and the REST API end to end against a copy of the sample workspace in
+`tests/fixtures/sample_workspace/`.

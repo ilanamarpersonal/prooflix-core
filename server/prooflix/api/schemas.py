@@ -46,7 +46,10 @@ class ScheduleInfo(BaseModel):
 
 
 class ScheduleIn(BaseModel):
-    cron: str = Field(min_length=1, description="minute hour day-of-month month day-of-week")
+    cron: str = Field(
+        min_length=1,
+        description="minute hour day-of-month month day-of-week, or 6 fields with seconds first",
+    )
     timezone: str = "UTC"
     enabled: bool = True
 
