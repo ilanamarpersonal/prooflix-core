@@ -1,1 +1,19 @@
-After Code change: docker build -t prooflix:dev . && kind load docker-image prooflix:dev && kubectl rollout restart deploy/prooflix
+After Code change: 
+   docker build -t prooflix:dev . && kind load docker-image prooflix:dev && kubectl rollout restart deploy/prooflix
+
+Deploy to cluster: 
+   docker build -t prooflix:dev .
+   kind load docker-image prooflix:dev
+   helm install prooflix deploy/helm/prooflix --set image.repository=prooflix --set image.tag=dev --set image.pullPolicy=Never
+   kubectl port-forward svc/prooflix 8000:8000
+
+
+Stop cluster:
+   docker stop kind-control-plane
+
+Start Cluster:
+   docker start kind-control-plane
+
+Deploy Terraform:
+   cd deploy/terraform && terraform state rm helm_release.prooflix
+   
