@@ -75,3 +75,27 @@ PROOFLIX_SOURCE_DATA: sourceData.path, else the source data volume's mount path,
 {{- end }}
 {{- end }}
 
+
+{{/* The Unity Catalog server the pipelines use */}}
+{{- define "prooflix.unityCatalogUri" -}}
+{{- if .Values.unityCatalog.uri }}
+{{- .Values.unityCatalog.uri }}
+{{- else if .Values.unityCatalog.enabled }}
+{{- printf "http://%s-unitycatalog:%v" (include "prooflix.fullname" .) .Values.unityCatalog.port }}
+{{- end }}
+{{- end }}
+
+{{- define "prooflix.unityCatalogClaimName" -}}
+{{- if .Values.unityCatalog.persistence.existingClaim }}
+{{- .Values.unityCatalog.persistence.existingClaim }}
+{{- else }}
+{{- printf "%s-unitycatalog" (include "prooflix.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/* Its own name label, so the Prooflix Service never selects the Unity Catalog pod */}}
+{{- define "prooflix.unityCatalogSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "prooflix.name" . }}-unitycatalog
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: unitycatalog
+{{- end }}

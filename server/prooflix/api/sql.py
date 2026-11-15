@@ -14,6 +14,12 @@ The catalog reads data lake files only (Parquet):
 A folder of Parquet files is one table (its files are read together), and a Parquet
 file directly in a schema's folder is a table of its own.
 
+Delta tables (a folder with a ``_delta_log``) anywhere under ``data/<catalog>/`` are
+tables of the schema named after their parent folder:
+``data/tenant1/lakehouse/bronze/accounts/`` is ``tenant1.bronze.accounts``. Only the
+files of their current version are read (see ``delta_log.py``), so overwritten rows
+are not counted twice.
+
 Queries run in DuckDB, which reads the Parquet files directly: every table is a view
 over its files, so nothing is loaded up front and tables of any size can be queried.
 Listing tables only reads the files' footers (row counts and columns). Each request
@@ -42,6 +48,8 @@ from typing import Any, Literal
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from .. import delta_log
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -147,6 +155,7 @@ class _Schema:
     data_dir: Path
     recursive: bool = True  # False for main: its sub-folders are catalogs of their own
     catalog: str = ""  # "tenant1" for data/tenant1/<schema>/, "" otherwise
+    delta: bool = False  # the schema's tables are the Delta tables in data_dir
 
     @property
     def short(self) -> str:
@@ -215,10 +224,21 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
     if data.is_dir():
         for catalog_folder in folders(data):
             cat = unique(schema_name(catalog_folder.name))
+            delta_parents = sorted({t.parent for t in delta_tables(catalog_folder)})
+            names = set()
             for schema_folder in folders(catalog_folder):
-                out.append(
-                    _Schema(f"{cat}.{schema_name(schema_folder.name)}", "workspace", "", schema_folder, catalog=cat)
-                )
+                if schema_folder in delta_parents:
+                    continue  # its Delta tables are listed below
+                name = f"{cat}.{schema_name(schema_folder.name)}"
+                names.add(name)
+                out.append(_Schema(name, "workspace", "", schema_folder, catalog=cat))
+            # Delta tables: the schema is the folder holding them, at any depth
+            for parent in delta_parents:
+                name = f"{cat}.{schema_name(parent.name)}"
+                while name in names:
+                    name += "_"
+                names.add(name)
+                out.append(_Schema(name, "workspace", "", parent, catalog=cat, delta=True))
 
     for project in Workspace(root).projects():
         if project != root:
@@ -226,6 +246,24 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
     if paths.catalog_dir.is_dir():
         for folder in folders(paths.catalog_dir):
             out.append(_Schema(unique(schema_name(folder.name)), "catalog", "", folder))
+    return out
+
+
+def delta_tables(folder: Path) -> list[Path]:
+    """Delta table folders under folder (not looking inside a table or hidden folders)."""
+    out: list[Path] = []
+
+    def walk(d: Path) -> None:
+        for child in sorted(d.iterdir()):
+            if not child.is_dir() or child.name.startswith((".", "_")):
+                continue
+            if delta_log.is_delta_table(child):
+                out.append(child)
+            else:
+                walk(child)
+
+    if folder.is_dir():
+        walk(folder)
     return out
 
 
@@ -251,6 +289,10 @@ def find_tables(paths: CatalogPaths) -> list[_Table]:
     for sch in schemas(paths):
         if not sch.data_dir.is_dir():
             continue
+        if sch.delta:
+            tables += _delta_schema_tables(paths, sch)
+            continue
+        inside_delta = {t for t in delta_tables(sch.data_dir)} if sch.recursive else set()
         groups: dict[Path, list[tuple[Path, int]]] = {}
         found = sch.data_dir.rglob(f"*{DATA_SUFFIX}") if sch.recursive else sch.data_dir.glob(f"*{DATA_SUFFIX}")
         for path in sorted(found, key=lambda p: p.as_posix()):
@@ -259,6 +301,8 @@ def find_tables(paths: CatalogPaths) -> list[_Table]:
                 continue
             if any(p.startswith((".", "_")) for p in rel.parts):
                 continue
+            if inside_delta and any(parent in inside_delta for parent in path.parents):
+                continue  # a Delta table's files: read through its log instead
             rows = _parquet_rows(path)
             if rows is not None:
                 groups.setdefault(table_key(rel), []).append((path, rows))
@@ -281,6 +325,33 @@ def find_tables(paths: CatalogPaths) -> list[_Table]:
                 )
             )
     return tables
+
+
+def _delta_schema_tables(paths: CatalogPaths, sch: _Schema) -> list[_Table]:
+    """The Delta tables directly in a schema's folder, each with its current files."""
+    out = []
+    for folder in sorted(sch.data_dir.iterdir()):
+        if folder.name.startswith((".", "_")) or not delta_log.is_delta_table(folder):
+            continue
+        try:
+            files = delta_log.current_files(folder)
+        except (delta_log.UnsupportedDeltaTable, OSError, ValueError, KeyError, pa.ArrowException):
+            continue  # unreadable here: left out, like unreadable Parquet files
+        if not files:
+            continue  # no data yet (DuckDB can't read an empty list of files)
+        rows = [f.rows if f.rows is not None else (_parquet_rows(f.path) or 0) for f in files]
+        out.append(
+            _Table(
+                schema=sch.name,
+                name=table_name(Path(folder.name)),
+                source=_display_path(paths, folder, True),
+                files=[f.path for f in files],
+                row_count=sum(rows),
+                in_workspace=True,
+                catalog=sch.catalog,
+            )
+        )
+    return out
 
 
 # ------------------------------------------------------------------ DuckDB

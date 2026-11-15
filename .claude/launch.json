@@ -8,6 +8,8 @@
         "run",
         "--directory",
         "server",
+        "--extra",
+        "spark",
         "prooflix",
         "serve",
         "--port",

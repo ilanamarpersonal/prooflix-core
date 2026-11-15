@@ -27,6 +27,10 @@ cd server
 uv run prooflix serve --reload
 ```
 
+Pipelines whose code runs on Spark need the `spark` extra and Java 17 (for
+example `brew install openjdk@17`): `uv run --extra spark prooflix serve --reload`.
+The Docker image has both.
+
 Client (http://localhost:5173), in a second terminal:
 
 ```bash

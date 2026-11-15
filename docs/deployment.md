@@ -15,8 +15,15 @@ flowchart LR
 ## Image (`Dockerfile`)
 
 * **Stage 1** (Node 20) builds `client/dist`.
-* **Stage 2** (Python 3.12 + uv) installs the server from `uv.lock` and copies
-  the client build next to it. The repository layout is kept under `/app`
+* **Stage 2** (Python 3.12 + uv) installs the server from `uv.lock`, with the
+  `spark` extra (PySpark), and copies the client build next to it.
+* **Spark**: Java 17 is copied in from `eclipse-temurin:17-jre` (OpenJDK, GPLv2
+  with the Classpath Exception, free for commercial use; `JAVA_HOME=/opt/java/openjdk`).
+  The Spark packages pipelines use (Delta Lake 4.3.1, the Unity Catalog connector
+  0.7.0, Avro; build argument `SPARK_PACKAGES`) are fetched at build time into
+  `/opt/spark-ivy` (`PROOFLIX_SPARK_IVY`, `PROOFLIX_SPARK_PACKAGES`), so pods
+  start without downloading anything. Rebuild the image now and then for Java
+  security updates. The repository layout is kept under `/app`
   (`/app/server`, `/app/client/dist`), because the server finds the client
   relative to the repository root.
 * Runs as a non-root user (uid 10001) with
@@ -92,6 +99,37 @@ workspace can still choose its own folders in the web client.
 For example `helm install prooflix deploy/helm/prooflix --set sourceData.volume.enabled=true --set sourceData.volume.existingClaim=raw-files --set dataLake.volume.enabled=true --set dataLake.volume.size=500Gi`.
 Terraform has matching `data_lake_*` variables.
 
+**Spark and Unity Catalog.** Spark is the execution engine inside pipeline
+tasks; Prooflix still orchestrates. Tasks share one Spark session in local mode
+inside the Prooflix pod, so the pod's memory limit has to cover the Spark driver.
+The chart also runs the open-source Unity Catalog server, where the Delta tables
+are registered (`tenant1.bronze.*`, `tenant1.silver.*`, `tenant1.gold.*`); their
+files stay in the data lake folder.
+
+```mermaid
+flowchart LR
+    subgraph POD["Prooflix pod"]
+        SRV["server: orchestrates pipelines"] --> SP["Spark (local mode)<br/>Delta, Avro"]
+    end
+    SP -->|"table names, schemas"| UC["Unity Catalog pod<br/>Service :8080"]
+    UC --> UCPVC["PVC: UC metadata"]
+    SP -->|"Delta files"| DL["data lake volume"]
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `spark.master` | `local[*]` | `PROOFLIX_SPARK_MASTER` |
+| `spark.driverMemory` | `4g` | `PROOFLIX_SPARK_DRIVER_MEMORY`; keep it below `resources.limits.memory` (default `6Gi`) |
+| `spark.conf` | `{}` | More Spark settings (`PROOFLIX_SPARK_CONF`, JSON) |
+| `unityCatalog.enabled` | `true` | Run the Unity Catalog server (`unitycatalog/unitycatalog:v0.7.0`) in the release |
+| `unityCatalog.uri` | `""` | Use a Unity Catalog server elsewhere instead (`PROOFLIX_UC_URI`; default: this release's) |
+| `unityCatalog.token` | `""` | `PROOFLIX_UC_TOKEN`, when that server needs one |
+| `unityCatalog.catalog` | `tenant1` | The tenant catalog (`PROOFLIX_UC_CATALOG`) |
+| `unityCatalog.persistence.*` | `1Gi` volume | The server's metadata database (kept on `helm uninstall`) |
+
+Terraform: `spark_driver_memory`, `unity_catalog_enabled`, `unity_catalog_uri`,
+`unity_catalog_catalog`.
+
 ## Terraform (`deploy/terraform`)
 
 Installs the chart with the `hashicorp/helm` provider (v3), so the chart stays
@@ -119,6 +157,8 @@ release but keeps the volume.
 
 * Pipeline tasks run inside the server container, so libraries an imported
   project needs must be in the image.
+* Spark runs in local mode in the Prooflix pod: it scales with the pod's CPU and
+  memory, not across nodes.
 * Only folders under `/data` survive a pod restart; the folder picker can
   browse the whole container filesystem.
 * No authentication: anyone who can reach the server can import and run code.

@@ -12,6 +12,14 @@ dependencies = [
     "duckdb>=2.0.0",
 ]
 
+[project.optional-dependencies]
+# Spark as the execution engine of pipeline tasks (the image installs it; see
+# deploy/helm). Java 17 and the Spark packages (Delta, Unity Catalog, Avro) are
+# set up by the Dockerfile.
+spark = [
+    "pyspark==4.0.5",
+]
+
 [project.scripts]
 prooflix = "prooflix.cli:main"
 

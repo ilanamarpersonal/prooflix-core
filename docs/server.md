@@ -104,7 +104,8 @@ flowchart TB
 | `engine/executor.py` | Creates runs, schedules task DAGs, runs sub-pipelines as child runs, handles retries, timeouts and cancellation |
 | `engine/runners.py` | Executes `python` (import + call, printout captured) and `shell` (subprocess) tasks |
 | `engine/scheduler.py` | Starts runs on their cron schedules: ticks every second, no catch-up, no overlap |
-| `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB |
+| `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB. Delta tables (a folder with `_delta_log`) are tables of the schema named after their parent folder, read at their current version |
+| `delta_log.py` | Replays a Delta table's `_delta_log` (newest checkpoint, then later commits) to list the Parquet files of its current version, so overwritten rows aren't read twice. Refuses deletion vectors and column mapping. |
 | `api/workspace.py` | The active workspace's files: tree, file content, import of uploaded folders, removal to trash |
 | `api/workspaces.py` | Create, list, activate and forget workspaces; list server folders for the folder picker |
 | `api/system.py` | The system parameters: list them with their value, default and source, save an edited value (checked first), and restart in place |
@@ -324,6 +325,12 @@ workspaces folder, or `PROOFLIX_CATALOG`). The CLI (`prooflix run`, `validate`)
 uses the active workspace, or `--workspace`.
 
 ## Configuration
+
+The server itself doesn't use Spark. Pipeline code can: the `spark` extra
+(`uv sync --extra spark`) installs PySpark, and the image adds Java 17 and the
+Spark packages (see [deployment.md](deployment.md)). The `PROOFLIX_SPARK_*` and
+`PROOFLIX_UC_*` variables the Helm chart sets are read by that pipeline code,
+not by the server.
 
 Every setting is a **system parameter**: an environment variable read when the
 server starts. The **System** tab lists them all with the value in use, the

@@ -9,6 +9,12 @@
 # start_date        = "2026-01-01"  # pipelines with no checkpoint yet start here
 # persistence_size  = "10Gi"
 
+# Spark and Unity Catalog (the image has Java, PySpark and the Spark packages):
+# spark_driver_memory   = "4g"
+# unity_catalog_enabled = true          # run Unity Catalog in the release
+# unity_catalog_uri     = ""            # or use one that runs elsewhere
+# unity_catalog_catalog = "tenant1"
+
 # Source files on a volume (every workspace's source/ links to /source-data, read-only):
 # source_data_volume_enabled = true
 # source_data_existing_claim = "my-source-files"

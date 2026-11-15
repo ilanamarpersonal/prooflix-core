@@ -1,0 +1,92 @@
+{{- if .Values.unityCatalog.enabled }}
+# The open-source Unity Catalog server: the catalog of the Delta tables pipelines
+# write through Spark. One pod; its metadata database is on its own volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prooflix.fullname" . }}-unitycatalog
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: unitycatalog
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "prooflix.unityCatalogSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prooflix.unityCatalogSelectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 101
+      containers:
+        - name: unitycatalog
+          image: "{{ .Values.unityCatalog.image.repository }}:{{ .Values.unityCatalog.image.tag }}"
+          imagePullPolicy: {{ .Values.unityCatalog.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.unityCatalog.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/2.1/unity-catalog/catalogs
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/2.1/unity-catalog/catalogs
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.unityCatalog.resources | nindent 12 }}
+          volumeMounts:
+            - name: db
+              mountPath: /home/unitycatalog/etc/db
+      volumes:
+        - name: db
+          {{- if .Values.unityCatalog.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "prooflix.unityCatalogClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prooflix.fullname" . }}-unitycatalog
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: unitycatalog
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.unityCatalog.port }}
+      targetPort: http
+  selector:
+    {{- include "prooflix.unityCatalogSelectorLabels" . | nindent 4 }}
+{{- if and .Values.unityCatalog.persistence.enabled (not .Values.unityCatalog.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "prooflix.unityCatalogClaimName" . }}
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: unitycatalog
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.unityCatalog.persistence.size }}
+  {{- with .Values.unityCatalog.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
+{{- end }}

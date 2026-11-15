@@ -20,6 +20,41 @@ prooflix:
   #  - name: MY_SETTING
   #    value: "x"
 
+# Spark: the execution engine inside pipeline tasks (Prooflix orchestrates, Spark
+# runs the work). The image has Java 17, PySpark and the Spark packages (Delta,
+# Unity Catalog, Avro); tasks share one Spark session in the server process, in
+# local mode, so give the pod the memory Spark needs (resources, below).
+spark:
+  master: "local[*]"     # PROOFLIX_SPARK_MASTER
+  driverMemory: 4g       # PROOFLIX_SPARK_DRIVER_MEMORY; keep below resources.limits.memory
+  conf: {}               # more Spark settings, PROOFLIX_SPARK_CONF
+  #  spark.sql.shuffle.partitions: "64"
+
+# Unity Catalog: where the Delta tables are registered (tenant catalog, schemas
+# bronze/silver/gold). The chart runs the open-source server next to Prooflix;
+# set uri to use one that runs elsewhere instead.
+unityCatalog:
+  enabled: true          # run the Unity Catalog server in this release
+  uri: ""                # "" = the server of this release; or e.g. https://uc.internal
+  token: ""              # PROOFLIX_UC_TOKEN, when the server needs one
+  catalog: tenant1       # PROOFLIX_UC_CATALOG: the tenant catalog
+  image:
+    repository: unitycatalog/unitycatalog
+    tag: v0.7.0
+    pullPolicy: IfNotPresent
+  port: 8080
+  persistence:           # the server's metadata database
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
 # Source data: the raw files pipelines read (bronze's input), PROOFLIX_SOURCE_DATA.
 # Each workspace's source/ folder becomes a link to it; a workspace can still
 # choose its own folder in the web client. Prooflix never writes to it, so its
@@ -77,12 +112,13 @@ ingress:
           pathType: Prefix
   tls: []
 
+# Spark runs inside this pod: the limit must cover spark.driverMemory plus the server.
 resources:
   requests:
-    cpu: 250m
-    memory: 512Mi
-  limits:
+    cpu: "1"
     memory: 2Gi
+  limits:
+    memory: 6Gi
 
 podSecurityContext:
   runAsNonRoot: true

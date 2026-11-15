@@ -63,6 +63,30 @@ variable "start_date" {
   default     = ""
 }
 
+variable "spark_driver_memory" {
+  description = "Memory of the Spark driver that runs pipeline tasks in the Prooflix pod (PROOFLIX_SPARK_DRIVER_MEMORY)"
+  type        = string
+  default     = "4g"
+}
+
+variable "unity_catalog_enabled" {
+  description = "Run the open-source Unity Catalog server in the release (the catalog of the Delta tables)"
+  type        = bool
+  default     = true
+}
+
+variable "unity_catalog_uri" {
+  description = "A Unity Catalog server that runs elsewhere; empty uses the one in the release"
+  type        = string
+  default     = ""
+}
+
+variable "unity_catalog_catalog" {
+  description = "The tenant catalog pipelines write to (PROOFLIX_UC_CATALOG)"
+  type        = string
+  default     = "tenant1"
+}
+
 variable "persistence_size" {
   description = "Size of the volume holding the workspace and catalog"
   type        = string

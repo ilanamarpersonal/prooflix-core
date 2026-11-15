@@ -29,6 +29,10 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # No Kubernetes service variables (<RELEASE>_SERVICE_HOST, ...): with a release
+      # named e.g. "prooflix-spark" they would look like PROOFLIX_SPARK_* settings.
+      # Services are reached by DNS name.
+      enableServiceLinks: false
       # Let running pipelines finish their current step on shutdown
       terminationGracePeriodSeconds: 60
       containers:
@@ -66,6 +70,26 @@ spec:
             {{- with include "prooflix.dataLakePath" . }}
             # every workspace's data/ links here (dataLake in values.yaml)
             - name: PROOFLIX_DATA_LAKE
+              value: {{ . | quote }}
+            {{- end }}
+            # Spark, the execution engine of pipeline tasks (spark in values.yaml)
+            - name: PROOFLIX_SPARK_MASTER
+              value: {{ .Values.spark.master | quote }}
+            - name: PROOFLIX_SPARK_DRIVER_MEMORY
+              value: {{ .Values.spark.driverMemory | quote }}
+            {{- with .Values.spark.conf }}
+            - name: PROOFLIX_SPARK_CONF
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with include "prooflix.unityCatalogUri" . }}
+            # where the Delta tables are registered (unityCatalog in values.yaml)
+            - name: PROOFLIX_UC_URI
+              value: {{ . | quote }}
+            {{- end }}
+            - name: PROOFLIX_UC_CATALOG
+              value: {{ .Values.unityCatalog.catalog | quote }}
+            {{- with .Values.unityCatalog.token }}
+            - name: PROOFLIX_UC_TOKEN
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.prooflix.extraEnv }}

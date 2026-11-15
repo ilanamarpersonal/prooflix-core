@@ -6,6 +6,7 @@ import { CatalogImportPanel } from "@/components/catalog-import-panel"
 import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
+import { ResizeDivider } from "@/components/resize-divider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -17,6 +18,20 @@ import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
 
 const PREVIEW_ROWS = 1000
+
+// The tree's width on md+ screens, set with the divider and remembered in the browser
+const TREE_WIDTH_KEY = "prooflix-catalog-tree-width"
+const DEFAULT_TREE_WIDTH = 288 // 18rem
+const clampTree = (w: number) => Math.min(640, Math.max(200, Math.round(w)))
+
+function loadTreeWidth(): number {
+  try {
+    const w = Number(localStorage.getItem(TREE_WIDTH_KEY))
+    return w ? clampTree(w) : DEFAULT_TREE_WIDTH
+  } catch {
+    return DEFAULT_TREE_WIDTH
+  }
+}
 
 /** Schemas (the workspace's own data and one per project) and their tables. */
 export function CatalogPage() {
@@ -38,6 +53,18 @@ export function CatalogPage() {
   // On md+ screens the tree and the detail fill the window and scroll inside.
   const panels = useRef<HTMLDivElement>(null)
   const panelsHeight = useFillHeight(panels)
+  const [treeWidth, setTreeWidth] = useState(loadTreeWidth)
+  const resizeTree = (w: number, save = false) => {
+    const next = clampTree(w)
+    setTreeWidth(next)
+    if (save) {
+      try {
+        localStorage.setItem(TREE_WIDTH_KEY, String(next))
+      } catch {
+        /* storage unavailable */
+      }
+    }
+  }
 
   // Export what is selected: a table, a schema, or everything.
   const exportTarget = selected
@@ -60,7 +87,7 @@ export function CatalogPage() {
         title="Catalog"
         description={
           catalog.data
-            ? `${catalog.data.length} schema${catalog.data.length === 1 ? "" : "s"} · ${tableCount} table${tableCount === 1 ? "" : "s"}. Schemas are imported datasets (kept in the catalog folder, outside the workspace) and projects' data/ folders; their Parquet files are the tables (a folder of Parquet files is one table).`
+            ? `${catalog.data.length} schema${catalog.data.length === 1 ? "" : "s"} · ${tableCount} table${tableCount === 1 ? "" : "s"}. Tables are the data lake's Delta tables (each under its catalog and schema, read at their current version) and Parquet files (a folder of Parquet files is one table), plus imported datasets kept in the catalog folder.`
             : undefined
         }
         actions={
@@ -99,8 +126,8 @@ export function CatalogPage() {
       {catalog.error && <ErrorAlert error={catalog.error} />}
       <div
         ref={panels}
-        style={panelsHeight ? { height: panelsHeight } : undefined}
-        className="grid gap-4 md:grid-cols-[18rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
+        style={{ ...(panelsHeight ? { height: panelsHeight } : {}), ["--tree-width" as string]: `${treeWidth}px` }}
+        className="grid gap-4 md:grid-cols-[var(--tree-width)_1.25rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:gap-1"
       >
         <Card className="max-h-[60vh] gap-0 overflow-auto py-2 md:max-h-none">
           {catalog.isLoading ? (
@@ -144,6 +171,15 @@ export function CatalogPage() {
             })
           )}
         </Card>
+        <ResizeDivider
+          orientation="vertical"
+          className="hidden md:flex"
+          label="Resize the tree and the table panel"
+          value={treeWidth}
+          onResize={(w) => resizeTree(w)}
+          onDone={(w) => resizeTree(w, true)}
+          onReset={() => resizeTree(DEFAULT_TREE_WIDTH, true)}
+        />
 
         {selected ? (
           <TableDetail table={selected} />

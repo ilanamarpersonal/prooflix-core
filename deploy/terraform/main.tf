@@ -35,6 +35,14 @@ resource "helm_release" "prooflix" {
         maxDepth  = var.max_depth
         startDate = var.start_date
       }
+      spark = {
+        driverMemory = var.spark_driver_memory
+      }
+      unityCatalog = {
+        enabled = var.unity_catalog_enabled
+        uri     = var.unity_catalog_uri
+        catalog = var.unity_catalog_catalog
+      }
       persistence = {
         size         = var.persistence_size
         storageClass = var.storage_class
