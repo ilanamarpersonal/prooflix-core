@@ -22,6 +22,8 @@ def test_parameters_list_every_setting_with_value_and_source(sample_workspace, t
     assert lake["value"] is None and lake["source"] == "default"
     assert params["PROOFLIX_SCHEDULER"]["value"] == "off"
     assert all(p["description"] for p in params.values())
+    assert params["PROOFLIX_DATA_LAKE"]["kind"] == "folder" and params["PROOFLIX_CATALOG"]["kind"] == "folder"
+    assert params["PROOFLIX_MAX_DEPTH"]["kind"] == "text" and params["PROOFLIX_CORS"]["kind"] == "text"
 
 
 def test_edit_parameter_saves_it_for_the_next_start(sample_workspace, tmp_path, monkeypatch):
@@ -57,3 +59,45 @@ def test_parameters_are_read_only_without_a_home(sample_workspace, tmp_path):
         assert not any(p["editable"] for p in c.get("/api/system/parameters").json())
         res = c.put("/api/system/parameters/PROOFLIX_MAX_DEPTH", json={"value": "4"})
         assert res.status_code == 409
+
+
+def test_restart_applies_edited_parameters_in_place(sample_workspace, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    for name in ("PROOFLIX_MAX_DEPTH", "PROOFLIX_SCHEDULER", "PROOFLIX_CORS", "PROOFLIX_CATALOG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PROOFLIX_HOME", str(home))
+    monkeypatch.setenv("PROOFLIX_WORKSPACES", str(sample_workspace.parent))
+    monkeypatch.setenv("PROOFLIX_WORKSPACE", str(sample_workspace))
+    with _client(sample_workspace, tmp_path, home=home) as c:
+        c.put("/api/system/parameters/PROOFLIX_MAX_DEPTH", json={"value": "3"})
+        c.put("/api/system/parameters/PROOFLIX_CORS", json={"value": "https://example.com"})
+        res = c.post("/api/system/restart")
+        assert res.status_code == 200
+        params = {p["name"]: p for p in res.json()}
+        depth = params["PROOFLIX_MAX_DEPTH"]
+        assert (depth["value"], depth["source"], depth["restart_needed"]) == ("3", "saved", False)
+        assert c.app.state.executor.max_depth == 3
+        # the allowed origins are fixed until the process itself restarts
+        cors = params["PROOFLIX_CORS"]
+        assert cors["restart_needed"] and not cors["live"]
+        # the server still works on the same workspace
+        assert c.get("/api/pipelines").status_code == 200
+
+
+def test_start_date_is_normalised_and_reaches_pipelines(sample_workspace, tmp_path, monkeypatch):
+    from prooflix.config import parse_start_date
+
+    assert parse_start_date("2026-01-01") == "2026-01-01T00:00:00+00:00"
+    assert parse_start_date("2026-01-01T10:00:00+02:00") == "2026-01-01T08:00:00+00:00"
+    monkeypatch.delenv("PROOFLIX_START_DATE", raising=False)
+    home = tmp_path / "home"
+    with _client(sample_workspace, tmp_path, home=home) as c:
+        bad = c.put("/api/system/parameters/PROOFLIX_START_DATE", json={"value": "yesterday"})
+        assert bad.status_code == 422
+        res = c.put("/api/system/parameters/PROOFLIX_START_DATE", json={"value": "2026-03-01"})
+        start = next(p for p in res.json() if p["name"] == "PROOFLIX_START_DATE")
+        assert (start["saved"], start["kind"], start["value"]) == ("2026-03-01T00:00:00+00:00", "date", None)
+    monkeypatch.setenv("PROOFLIX_HOME", str(home))
+    from prooflix.config import Settings as S
+
+    assert S.from_env().start_date == "2026-03-01T00:00:00+00:00"

@@ -27,7 +27,7 @@ client/
     ├── lib/
     │   ├── api.ts           fetch wrapper, ApiError, query and mutation hooks
     │   ├── types.ts         TypeScript mirror of the server schemas
-    │   ├── tabs.ts          the four sections (sidebar + tabs) and their last page
+    │   ├── tabs.ts          the five sections (sidebar + tabs) and their last page
     │   ├── schedule.ts      trigger presets <-> cron, cron descriptions
     │   ├── dom-guard.ts     keeps React working if page translation rewrites text
     │   ├── sql-completion.ts, sql-names.ts   SQL editor completion and table names
@@ -50,7 +50,7 @@ client/
     │   ├── import-workspace-panel.tsx  upload a folder as a new workspace
     │   ├── new-workspace-panel.tsx, switch-workspace-panel.tsx, folder-picker.tsx
     │   ├── catalog-import-panel.tsx, data-grid.tsx   catalog import, result grids
-    │   └── ...                     status-badge, page-header, pager, error-alert, ...
+    │   └── ...                     status-badge, page-header, pager, error-alert (with copy), ...
     └── pages/
         ├── pipelines-page.tsx        /pipelines (pipelines + all runs)
         ├── new-pipeline-page.tsx     /pipelines/new
@@ -59,12 +59,13 @@ client/
         ├── run-detail-page.tsx       /runs/:runId
         ├── sql-editor-page.tsx       /sql
         ├── catalog-page.tsx          /catalog
-        └── workspace-page.tsx        /workspace
+        ├── workspace-page.tsx        /workspace
+        └── system-page.tsx           /system (system parameters)
 ```
 
 ## Sections, routes and screens
 
-The sidebar and the tabs show four sections; each remembers the last page you
+The sidebar and the tabs show five sections; each remembers the last page you
 opened in it.
 
 ```mermaid
@@ -87,6 +88,7 @@ flowchart LR
     WSP["/workspace<br/>files, import,<br/>new / switch workspace"]
     WSP -->|"Open in Pipelines"| PD
     PD -->|"Open in Workspace"| WSP
+    SYS["/system<br/>system parameters"]
 ```
 
 | Screen | What it shows |
@@ -97,6 +99,7 @@ flowchart LR
 | **SQL Editor** | Query tabs saved in the browser, completion of table and column names, results grid, Save SQL / Load SQL (`.sql` files), schema list beside the editor. |
 | **Catalog** | Schemas (a project's `data/` or a folder in `catalog/`) and their tables with columns and row counts; Import CSV/JSON as tables; Export as CSV or Parquet ZIP. |
 | **Workspace** | The list of workspaces (the active one in bold) above the active workspace's file tree; a file or folder viewer (the top folder has **Remove workspace**); **Import Workspace** (upload a folder from this computer as a new workspace), **New workspace** (folder picker on the server, creates `pipelines/` and `src/`), **Switch workspace** (make another active, open another folder, remove from list). Removing a workspace only takes it off the list. |
+| **System** | Every system parameter (`PROOFLIX_*`, see [server.md](server.md#configuration)): its value in use, default and source (edited here, environment or default). The pencil edits a value in place (a folder browser for folders, a date picker for the start date, a text box otherwise); the arrow removes the edited value. Edited values show **Restart to apply** until **Restart server** (in the header and in the banner) applies them. |
 
 ## Component tree
 

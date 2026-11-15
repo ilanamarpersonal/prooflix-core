@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 # server/prooflix/config.py -> repository root is two levels above the package.
@@ -51,6 +52,11 @@ class Settings:
                            which one is active (default ~/.prooflix)
       PROOFLIX_SOURCE_DATA default source data folder (the raw files pipelines read)
                            for every workspace: its source/ links there
+      PROOFLIX_START_DATE  where data processing starts when the system is initialized:
+                           a pipeline with no checkpoint yet processes data from this
+                           date on (ISO 8601 date or time, UTC; default: all data).
+                           Pipelines read it as ctx.start_date, ${system.start_date}
+                           or the PROOFLIX_START_DATE variable of shell tasks
       PROOFLIX_DATA_LAKE   default data lake folder (what pipelines build: bronze,
                            gold, checkpoints) for every workspace: its data/ links there
                            (default for both: the workspace's own folder; a workspace
@@ -76,6 +82,7 @@ class Settings:
     home: Path | None = None  # None: the workspace list is kept in memory only
     source_data: Path | None = None  # None: each workspace's own source/ folder
     data_lake: Path | None = None  # None: each workspace's own data/ folder
+    start_date: str | None = None  # ISO 8601 time (UTC); None: process all data
     # the values from PROOFLIX_HOME/parameters.json this server started with
     saved_parameters: dict[str, str] = field(default_factory=dict, compare=False)
 
@@ -139,9 +146,22 @@ class Settings:
             kwargs["source_data"] = Path(source).expanduser().resolve()
         if lake := env.get("PROOFLIX_DATA_LAKE"):
             kwargs["data_lake"] = Path(lake).expanduser().resolve()
+        if start := env.get("PROOFLIX_START_DATE"):
+            kwargs["start_date"] = parse_start_date(start)
         if cors := env.get("PROOFLIX_CORS"):
             kwargs["cors_origins"] = tuple(o.strip() for o in cors.split(",") if o.strip())
         return cls(**kwargs)
+
+
+def parse_start_date(value: str) -> str:
+    """An ISO 8601 date ("2026-01-01") or time, as a UTC time ("2026-01-01T00:00:00+00:00")."""
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("must be a date like 2026-01-01 or a time like 2026-01-01T08:00:00") from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def parse_flag(value: str) -> bool:

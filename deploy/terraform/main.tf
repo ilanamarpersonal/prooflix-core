@@ -32,6 +32,8 @@ resource "helm_release" "prooflix" {
       }
       prooflix = {
         scheduler = var.scheduler_enabled
+        maxDepth  = var.max_depth
+        startDate = var.start_date
       }
       persistence = {
         size         = var.persistence_size

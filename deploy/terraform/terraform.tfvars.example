@@ -5,6 +5,8 @@
 # image_tag         = "dev"
 # image_pull_policy = "Never"   # "IfNotPresent" for an image in a registry
 # scheduler_enabled = true
+# max_depth         = 10
+# start_date        = "2026-01-01"  # pipelines with no checkpoint yet start here
 # persistence_size  = "10Gi"
 
 # Source files on a volume (every workspace's source/ links to /source-data, read-only):

@@ -240,3 +240,33 @@ def test_runs_persist_and_interrupted_runs_are_recovered(ws_factory):
     again = RunStore(ws_factory.root / ".prooflix" / "runs")
     assert again.recover_interrupted() == 1
     assert again.get(result.id).status == F
+
+
+def test_system_start_date_reaches_tasks(ws_factory):
+    (ws_factory.root / "src" / "starttasks.py").write_text(
+        "def show(given, ctx):\n"
+        "    return {'given': given, 'ctx': ctx.start_date.isoformat() if ctx.start_date else None}\n"
+    )
+    ws_factory.add("starts", """
+        tasks:
+          - {key: show, type: python, entrypoint: "starttasks:show", parameters: {given: "${system.start_date}"}}
+        outputs:
+          start: ${tasks.show.output}
+    """)
+    when = "2026-03-01T00:00:00+00:00"
+    result, _ = run(ws_factory.workspace, "starts", start_date=when)
+    assert result.status == S, result.error
+    assert result.outputs == {"start": {"given": when, "ctx": when}}
+    # not set: all data
+    result, _ = run(ws_factory.workspace, "starts")
+    assert result.outputs == {"start": {"given": None, "ctx": None}}
+
+
+def test_unknown_system_field_is_rejected(ws_factory):
+    ws_factory.add("bad", """
+        tasks:
+          - {key: t, type: python, entrypoint: "testtasks:add", parameters: {a: "${system.nope}", b: 1}}
+    """)
+    executor, _ = make_executor(ws_factory.workspace)
+    with pytest.raises(PipelineValidationError, match="use system.start_date"):
+        executor.prepare("bad")

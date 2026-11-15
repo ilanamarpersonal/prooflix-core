@@ -46,6 +46,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Prooflix", version=__version__, lifespan=lifespan)
     app.state.registry = registry
+    # PROOFLIX_CORS is applied once, so the System tab compares it with these
+    app.state.boot_parameters = dict(settings.saved_parameters)
     app.state.switch_lock = asyncio.Lock()
     install(app, build_services(settings))
 

@@ -47,8 +47,29 @@ flowchart TB
 | Ingress off by default | There is no login; reach it with `kubectl port-forward` or an internal Ingress. |
 
 Main values: `image.repository/tag/pullPolicy`, `prooflix.scheduler`,
-`prooflix.maxDepth`, `prooflix.extraEnv`, `persistence.size/storageClass/existingClaim`,
-`dataLake.*`, `ingress.*`, `resources`.
+`prooflix.maxDepth`, `prooflix.startDate`, `prooflix.extraEnv`,
+`persistence.size/storageClass/existingClaim`, `sourceData.*`, `dataLake.*`,
+`ingress.*`, `resources`.
+
+**System parameters in the pod.** The chart sets these environment variables;
+the rest keep their defaults (see [server.md](server.md#configuration)):
+
+| Variable | Set from |
+|---|---|
+| `PROOFLIX_WORKSPACES` | `/data/workspaces` (fixed) |
+| `PROOFLIX_CATALOG` | `/data/catalog` (fixed) |
+| `PROOFLIX_HOME` | `/data/.prooflix` (fixed, on the volume) |
+| `PROOFLIX_SCHEDULER` | `prooflix.scheduler` |
+| `PROOFLIX_MAX_DEPTH` | `prooflix.maxDepth` |
+| `PROOFLIX_START_DATE` | `prooflix.startDate`, when not empty |
+| `PROOFLIX_SOURCE_DATA` | `sourceData.path`, or its volume's mount path |
+| `PROOFLIX_DATA_LAKE` | `dataLake.path`, or its volume's mount path |
+
+A value edited in the **System** tab is saved in `PROOFLIX_HOME` on the volume
+and wins over the chart's value, so it survives pod restarts and upgrades;
+remove it in the System tab to go back to the chart's value. **Restart server**
+applies edits without restarting the pod (`PROOFLIX_CORS` needs a
+`kubectl rollout restart`).
 
 **Source data** (`sourceData`): the raw files pipelines read. Every workspace's
 `source/` becomes a link to it (`PROOFLIX_SOURCE_DATA`). Same keys as `dataLake`

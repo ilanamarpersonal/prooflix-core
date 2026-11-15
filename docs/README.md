@@ -18,13 +18,15 @@ Current capabilities:
   import a folder as a workspace and remove one from the list in the web client.
 - **SQL and catalog**: DuckDB queries over Parquet files, import (CSV/JSON) and
   export (CSV/Parquet).
+- **System parameters**: every server setting in the System tab, editable, with
+  a start date for processing data and **Restart server** to apply edits.
 - **Deployment**: one Docker image, a Helm chart and a Terraform configuration.
 
 | Document | What it covers |
 |---|---|
 | [architecture.md](architecture.md) | System overview, repository layout, request flows, key design decisions |
 | [pipelines.md](pipelines.md) | The pipeline YAML format, sub-pipelines, `${...}` references, validation rules, schedules |
-| [server.md](server.md) | Python server structure, execution engine, scheduler, run model, workspaces, REST API, configuration |
+| [server.md](server.md) | Python server structure, execution engine, scheduler, run model, workspaces, REST API, system parameters |
 | [client.md](client.md) | React + shadcn/ui client structure, sections and screens, data flow, components |
 | [deployment.md](deployment.md) | Docker image, Helm chart, Terraform and the local kind workflow |
 

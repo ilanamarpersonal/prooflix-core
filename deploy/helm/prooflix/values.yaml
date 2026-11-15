@@ -14,6 +14,8 @@ fullnameOverride: ""
 prooflix:
   scheduler: true    # run pipelines on their cron schedules
   maxDepth: 10       # maximum sub-pipeline nesting depth
+  startDate: ""      # where data processing starts when the system is initialized,
+                     # e.g. "2026-01-01" (PROOFLIX_START_DATE); "" = all data
   extraEnv: []       # more environment variables, e.g. for pipeline code
   #  - name: MY_SETTING
   #    value: "x"

@@ -134,6 +134,7 @@ export const api = {
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
   systemParameters: () => request<SystemParameter[]>("/system/parameters"),
+  restartServer: () => request<SystemParameter[]>("/system/restart", { method: "POST" }),
   setSystemParameter: (name: string, value: string | null) =>
     request<SystemParameter[]>(`/system/parameters/${encodeURIComponent(name)}`, {
       method: "PUT",
@@ -260,6 +261,18 @@ export function useSetSystemParameter() {
   return useMutation({
     mutationFn: ({ name, value }: { name: string; value: string | null }) => api.setSystemParameter(name, value),
     onSuccess: (data) => qc.setQueryData(["system", "parameters"], data),
+  })
+}
+
+/** Apply the edited parameters: the server rebuilds its services, so everything is refetched. */
+export function useRestartServer() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: api.restartServer,
+    onSuccess: (data) => {
+      qc.setQueryData(["system", "parameters"], data)
+      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "system" })
+    },
   })
 }
 

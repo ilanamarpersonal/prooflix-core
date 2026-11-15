@@ -264,8 +264,12 @@ export interface SystemParameter {
   source: "saved" | "environment" | "default"
   description: string
   editable: boolean
+  /** "folder": a path on the server, chosen with a folder browser; "date": a date picker */
+  kind: "folder" | "date" | "text"
   /** the value edited in the System tab, if any (used from the next start) */
   saved: string | null
-  /** the saved value changed since the server started */
+  /** the saved value changed since the last (re)start */
   restart_needed: boolean
+  /** applied by Restart server; false: only restarting the server process applies it */
+  live: boolean
 }

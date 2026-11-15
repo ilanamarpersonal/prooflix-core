@@ -266,6 +266,9 @@ def _check_reference(
     elif root == "run":
         if ref[1:] not in (("id",), ("pipeline",)):
             return [f"{where}: unknown run field in {text} (use run.id or run.pipeline)"]
+    elif root == "system":
+        if ref[1:] != ("start_date",):
+            return [f"{where}: unknown system field in {text} (use system.start_date)"]
     return []
 
 

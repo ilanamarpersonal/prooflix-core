@@ -98,7 +98,15 @@ def extract(source_file: str, ctx) -> dict:
 
 * `ctx` is optional; declare it to receive a `TaskContext` (`run_id`,
   `root_run_id`, `pipeline`, `task_key`, `attempt`, `workspace` (the project
-  folder), `log()`).
+  folder), `start_date`, `log()`).
+* `ctx.start_date` is the system start date (`PROOFLIX_START_DATE`) as a UTC
+  `datetime`, or `None` for all data. Use it where processing starts when the
+  system is initialized, for example the first checkpoint of an incremental
+  load:
+
+  ```python
+  since = read_checkpoint(path) or ctx.start_date or datetime(1970, 1, 1, tzinfo=timezone.utc)
+  ```
 * Plain functions run in a worker thread; `async def` functions run on the
   event loop.
 * A module is re-imported when its file changes, so code edits apply to the
@@ -115,7 +123,9 @@ def extract(source_file: str, ctx) -> dict:
     TARGET: ${params.target}
 ```
 
-Runs with `/bin/sh` and the project folder as working directory. Each output
+Runs with `/bin/sh` and the project folder as working directory, with the
+server's environment plus `env`; when the system start date is set it is also in
+`$PROOFLIX_START_DATE` (a task's own `env` wins). Each output
 line goes to the task log. A non-zero exit code fails the task. The output is
 `{"exit_code": 0, "stdout": "<last 10 000 characters>"}`.
 
@@ -162,6 +172,7 @@ sequenceDiagram
 | `${tasks.<key>.output}` | Whole output of an upstream task |
 | `${tasks.<key>.output.<field>.<0>...}` | A field, or a list index, inside that output |
 | `${run.id}`, `${run.pipeline}` | Current run id / pipeline id |
+| `${system.start_date}` | The system start date (`PROOFLIX_START_DATE`, System tab) as an ISO 8601 UTC time, or empty / `null` when it is not set |
 
 * If a value is **exactly** one reference, it keeps its type (number, list,
   object). Inside a longer string it is inserted as text (objects as JSON).

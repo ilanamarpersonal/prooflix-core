@@ -45,7 +45,9 @@ def build_services(settings: Settings) -> Services:
     recovered = store.recover_interrupted()
     if recovered:
         log.warning("Marked %d interrupted run(s) as FAILED", recovered)
-    executor = PipelineExecutor(workspace, store, max_depth=settings.max_depth)
+    executor = PipelineExecutor(
+        workspace, store, max_depth=settings.max_depth, start_date=settings.start_date
+    )
     scheduler = Scheduler(workspace, executor, store)
     return Services(settings, workspace, store, executor, scheduler)
 
@@ -87,3 +89,39 @@ async def switch_workspace(app: FastAPI, root: Path) -> bool:
         app.state.registry.set_active(root)
         log.info("Active workspace is now %s", root)
         return True
+
+
+async def restart(app: FastAPI) -> Settings:
+    """Read the parameters again and rebuild every service, as a server start does.
+
+    Picks up values edited in the System tab (``PROOFLIX_HOME/parameters.json``)
+    without stopping the process. Only the allowed browser origins
+    (``PROOFLIX_CORS``) are fixed for the life of the process. Refuses
+    (``WorkspaceBusy``) while runs are going.
+    """
+    from .workspaces import WorkspaceRegistry  # imported here: workspaces imports nothing from runtime
+
+    lock: asyncio.Lock = app.state.switch_lock
+    async with lock:
+        running = app.state.executor.active_count()
+        if running:
+            raise WorkspaceBusy(
+                f"{running} run{'s are' if running != 1 else ' is'} still going; "
+                "wait for them to finish or cancel them, then restart"
+            )
+        current: Settings = app.state.settings
+        fresh = replace(
+            Settings.from_env(),
+            client_dist=current.client_dist,
+            cors_origins=current.cors_origins,  # the CORS middleware is built once
+        )
+        registry = WorkspaceRegistry(fresh.workspaces_root, fresh.workspaces_file, default=fresh.workspace)
+        services = build_services(replace(fresh, workspace=registry.keep_active()))
+        await app.state.scheduler.stop()
+        await app.state.executor.shutdown()
+        app.state.registry = registry
+        install(app, services)
+        if services.settings.scheduler:
+            services.scheduler.start()
+        log.info("Restarted with the current parameters (workspace %s)", services.settings.workspace)
+        return services.settings

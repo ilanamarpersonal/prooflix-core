@@ -99,7 +99,9 @@ async def _run(settings: Settings, pipeline_id: str, raw_params: list[str]) -> i
         params[key] = _parse_value(value)
 
     store = RunStore(settings.runs_dir)
-    executor = PipelineExecutor(Workspace(settings.workspace), store, max_depth=settings.max_depth)
+    executor = PipelineExecutor(
+        Workspace(settings.workspace), store, max_depth=settings.max_depth, start_date=settings.start_date
+    )
     try:
         run = await executor.run(pipeline_id, params)
     except PipelineError as exc:

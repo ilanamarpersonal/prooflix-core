@@ -51,6 +51,18 @@ variable "scheduler_enabled" {
   default     = true
 }
 
+variable "max_depth" {
+  description = "Maximum sub-pipeline nesting depth (PROOFLIX_MAX_DEPTH)"
+  type        = number
+  default     = 10
+}
+
+variable "start_date" {
+  description = "Where data processing starts when the system is initialized, e.g. \"2026-01-01\" (PROOFLIX_START_DATE); empty processes all data"
+  type        = string
+  default     = ""
+}
+
 variable "persistence_size" {
   description = "Size of the volume holding the workspace and catalog"
   type        = string

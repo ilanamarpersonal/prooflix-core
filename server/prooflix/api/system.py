@@ -15,7 +15,15 @@ from typing import Callable, Literal
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
-from ..config import DEFAULT_WORKSPACES, Settings, load_saved_parameters, parse_flag, save_parameters
+from ..config import (
+    DEFAULT_WORKSPACES,
+    Settings,
+    load_saved_parameters,
+    parse_flag,
+    parse_start_date,
+    save_parameters,
+)
+from ..runtime import WorkspaceBusy, restart
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -27,8 +35,12 @@ class SystemParameter(BaseModel):
     source: Literal["saved", "environment", "default"]  # where the value in use comes from
     description: str
     editable: bool
+    # "folder": a path on the server, chosen with a folder browser; "date": a date picker
+    kind: Literal["folder", "date", "text"]
     saved: str | None  # the value edited in the System tab, if any
-    restart_needed: bool  # the saved value changed since the server started
+    restart_needed: bool  # the saved value changed since the last (re)start
+    # applied by the Restart button; False: only a restart of the server process applies it
+    live: bool
 
 
 class ParameterUpdate(BaseModel):
@@ -82,6 +94,7 @@ class _Param:
     value: Callable[[Settings], str | None]
     # normalises an edited value, raising ValueError; None: can't be edited here
     parse: Callable[[str], str] | None
+    live: bool = True  # False: fixed for the life of the server process
 
 
 # In the order of the Settings docstring (config.py).
@@ -114,6 +127,7 @@ PARAMS: tuple[_Param, ...] = (
         ", ".join(Settings.__dataclass_fields__["cors_origins"].default),
         lambda s: ", ".join(s.cors_origins),
         _parse_origins,
+        live=False,
     ),
     _Param(
         "PROOFLIX_CATALOG",
@@ -128,6 +142,15 @@ PARAMS: tuple[_Param, ...] = (
         "on",
         lambda s: "on" if s.scheduler else "off",
         _parse_flag,
+    ),
+    _Param(
+        "PROOFLIX_START_DATE",
+        "Where data processing starts when the system is initialized: a pipeline with no "
+        "checkpoint yet processes data from this date on (UTC). Pipelines read it as "
+        "ctx.start_date or ${system.start_date}.",
+        "1970-01-01 (all data)",
+        lambda s: s.start_date,
+        parse_start_date,
     ),
     _Param(
         "PROOFLIX_HOME",
@@ -155,9 +178,16 @@ PARAMS: tuple[_Param, ...] = (
 _BY_NAME = {p.name: p for p in PARAMS}
 
 
-def _list(settings: Settings) -> list[SystemParameter]:
+def _kind(p: _Param) -> Literal["folder", "date", "text"]:
+    if p.parse in (_parse_dir, _parse_path) or p.name == "PROOFLIX_HOME":
+        return "folder"
+    return "date" if p.parse is parse_start_date else "text"
+
+
+def _list(settings: Settings, boot: dict[str, str] | None = None) -> list[SystemParameter]:
     saved_now = load_saved_parameters(settings.home)
     started = settings.saved_parameters
+    boot = started if boot is None else boot  # what the process started with
 
     def source(name: str) -> Literal["saved", "environment", "default"]:
         if started.get(name):
@@ -172,8 +202,10 @@ def _list(settings: Settings) -> list[SystemParameter]:
             source=source(p.name),
             description=p.description,
             editable=p.parse is not None and settings.home is not None,
+            kind=_kind(p),
             saved=saved_now.get(p.name),
-            restart_needed=saved_now.get(p.name) != started.get(p.name),
+            restart_needed=saved_now.get(p.name) != (started if p.live else boot).get(p.name),
+            live=p.live,
         )
         for p in PARAMS
     ]
@@ -181,7 +213,27 @@ def _list(settings: Settings) -> list[SystemParameter]:
 
 @router.get("/parameters", response_model=list[SystemParameter])
 async def parameters(request: Request) -> list[SystemParameter]:
-    return _list(request.app.state.settings)
+    return _list(request.app.state.settings, _boot(request))
+
+
+def _boot(request: Request) -> dict[str, str] | None:
+    return getattr(request.app.state, "boot_parameters", None)
+
+
+@router.post("/restart", response_model=list[SystemParameter])
+async def restart_server(request: Request) -> list[SystemParameter]:
+    """Apply the edited parameters: read them again and rebuild every service.
+
+    The process keeps running, so this works the same on a laptop and in Kubernetes.
+    Refused while runs are going.
+    """
+    try:
+        settings = await restart(request.app)
+    except WorkspaceBusy as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
+    except (OSError, ValueError, RuntimeError) as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Restart failed: {e}") from None
+    return _list(settings, _boot(request))
 
 
 @router.put("/parameters/{name}", response_model=list[SystemParameter])
@@ -205,4 +257,4 @@ async def set_parameter(name: str, body: ParameterUpdate, request: Request) -> l
     else:
         saved.pop(name, None)
     save_parameters(settings.home, saved)
-    return _list(settings)
+    return _list(settings, _boot(request))

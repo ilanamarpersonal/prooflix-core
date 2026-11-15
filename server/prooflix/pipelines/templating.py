@@ -5,6 +5,8 @@ Supported roots:
 * ``${params.<name>}``             a pipeline parameter
 * ``${tasks.<key>.output[.path]}`` the output of an upstream task
 * ``${run.id}`` / ``${run.pipeline}``
+* ``${system.start_date}``          the system start date (PROOFLIX_START_DATE), ISO 8601
+                                    UTC, or empty when not set
 
 A value that is exactly one reference keeps the referenced type (numbers, lists,
 objects). References embedded in a longer string are interpolated as text.
@@ -21,8 +23,8 @@ from typing import Any
 
 from .errors import TemplateError
 
-ROOTS = ("params", "tasks", "run")
-_REF = r"\$\{\s*((?:params|tasks|run)(?:\.[A-Za-z0-9_\-]+)+)\s*\}"
+ROOTS = ("params", "tasks", "run", "system")
+_REF = r"\$\{\s*((?:params|tasks|run|system)(?:\.[A-Za-z0-9_\-]+)+)\s*\}"
 _REF_RE = re.compile(_REF)
 _FULL_RE = re.compile(rf"^{_REF}$")
 

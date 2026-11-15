@@ -89,15 +89,15 @@ flowchart TB
 
 | Module | Responsibility |
 |---|---|
-| `config.py` | `Settings` from environment variables: workspaces folder, default workspace, home folder, catalog folder, scheduler on/off, max nesting depth, CORS origins, client build folder |
+| `config.py` | `Settings` from environment variables and the values edited in the System tab (`<PROOFLIX_HOME>/parameters.json`, which win): workspaces folder, default workspace, home folder, catalog folder, scheduler on/off, max nesting depth, CORS origins, start date, linked folder defaults, client build folder |
 | `main.py` | Builds the FastAPI app: makes the registry, builds the active workspace's services into `app.state`, starts/stops the scheduler with the app, serves `client/dist` when it exists |
 | `linked_folders.py` | The source data (`source/`) and data lake (`data/`) folders per workspace (its setting, `PROOFLIX_SOURCE_DATA` / `PROOFLIX_DATA_LAKE`, or its own folder) and the links to them |
 | `workspaces.py` | `WorkspaceRegistry`: finds the workspaces in the workspaces folder, tracks added ones and the active one, saved to `<PROOFLIX_HOME>/workspaces.json` |
-| `runtime.py` | `build_services()` makes `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace; `switch_workspace()` swaps them in `app.state` (refused while runs are going) |
+| `runtime.py` | `build_services()` makes `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace; `switch_workspace()` swaps them in `app.state`; `restart()` reads the parameters again and rebuilds everything, for **Restart server** (both refused while runs are going) |
 | `cli.py` | `prooflix serve`, `prooflix validate`, `prooflix run <id> -p key=value` |
 | `pipelines/models.py` | Pydantic models of the YAML format. Task types are a discriminated union on `type`; `schedule:` is validated with `Cron`. |
 | `pipelines/workspace.py` | Lists projects and YAML files, runs per-file and whole-workspace validation, saves and deletes files (atomic writes) |
-| `pipelines/templating.py` | Finds and resolves `${params...}`, `${tasks...}` and `${run...}` references |
+| `pipelines/templating.py` | Finds and resolves `${params...}`, `${tasks...}`, `${run...}` and `${system...}` references |
 | `pipelines/graph.py` | Cycle detection, transitive dependencies, shortest path (used to report recursive calls) |
 | `pipelines/cron.py` | Parses cron expressions (5 fields, or 6 with seconds first) and computes the next times in a time zone, DST-aware |
 | `pipelines/schedule_yaml.py` | Adds, replaces or removes a pipeline's `schedule:` block while keeping the rest of the file and its comments |
@@ -107,6 +107,7 @@ flowchart TB
 | `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB |
 | `api/workspace.py` | The active workspace's files: tree, file content, import of uploaded folders, removal to trash |
 | `api/workspaces.py` | Create, list, activate and forget workspaces; list server folders for the folder picker |
+| `api/system.py` | The system parameters: list them with their value, default and source, save an edited value (checked first), and restart in place |
 | `runs/models.py` | `Run`, `TaskRun`, `RunStatus` |
 | `runs/store.py` | Thread-safe in-memory run index mirrored to `<workspace>/.prooflix/runs/<id>.json` |
 
@@ -284,6 +285,14 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | DELETE | `/api/workspaces?path=` | | The list without `path`. Its folder is never touched; one in the workspaces folder is remembered as hidden. Removing the active workspace switches to another first (none if it was the last; `409` while runs are going). `400` for `PROOFLIX_WORKSPACE`. |
 | GET | `/api/fs/dirs?path=` | | `{path, parent, dirs}`: sub-folders on the server, for the folder picker. Default: the workspaces folder. |
 
+**System parameters** (see [Configuration](#configuration))
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/system/parameters` | | `[{name, value, default, source, description, editable, kind, saved, restart_needed, live}]`: `value` is what the server uses now, `source` is `saved`, `environment` or `default`, `kind` is `folder`, `date` or `text`, `saved` the edited value and `restart_needed` whether it differs from what is in use |
+| PUT | `/api/system/parameters/{name}` | `{value}` | The list. Saves the value to `<PROOFLIX_HOME>/parameters.json` after checking it (`422` with the reason); `null` or `""` removes it. `400` for `PROOFLIX_HOME`, `409` without a home folder. |
+| POST | `/api/system/restart` | | The list. Reads the parameters again and rebuilds the registry and every service, without stopping the process. `409` while runs are going. `PROOFLIX_CORS` still needs a process restart. |
+
 **SQL and catalog** (DuckDB over the Parquet files of the active workspace's `data/` folders and the catalog folder)
 
 | Method | Path | Body | Response |
@@ -316,15 +325,33 @@ uses the active workspace, or `--workspace`.
 
 ## Configuration
 
+Every setting is a **system parameter**: an environment variable read when the
+server starts. The **System** tab lists them all with the value in use, the
+default and where it comes from, and edits them:
+
+* An edited value is checked (folders must exist, numbers must be in range and
+  so on), then saved to `<PROOFLIX_HOME>/parameters.json`. It **wins over the
+  environment variable**, including one set by Helm.
+* It is used after a restart: **Restart server** in the System tab reads the
+  parameters again and rebuilds every service without stopping the process
+  (refused while runs are going), and so does a normal process restart. Until
+  then the row shows the value it will switch to.
+* Removing the edited value goes back to the environment variable, or the
+  default.
+* `PROOFLIX_HOME` is set with the environment variable only, since edited values
+  are saved in it. `PROOFLIX_CORS` is applied only when the process itself
+  restarts.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `PROOFLIX_WORKSPACES` | `<repo>/workspaces` | Folder of workspaces |
-| `PROOFLIX_WORKSPACE` | first workspace in the folder | Default workspace |
-| `PROOFLIX_MAX_DEPTH` | `10` | Maximum sub-pipeline nesting depth |
-| `PROOFLIX_CORS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed browser origins |
+| `PROOFLIX_WORKSPACES` | `<repo>/workspaces` | Folder of workspaces: each sub-folder with `pipelines/` is a workspace |
+| `PROOFLIX_WORKSPACE` | first workspace in the folder | Default workspace, used until another one is made active |
+| `PROOFLIX_MAX_DEPTH` | `10` | Maximum sub-pipeline nesting depth (1 to 100) |
+| `PROOFLIX_CORS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed browser origins, comma-separated |
 | `PROOFLIX_CATALOG` | `<workspaces>/../catalog` | Catalog folder for datasets outside projects |
-| `PROOFLIX_SCHEDULER` | `1` | `0` stops pipelines running on their schedules |
-| `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state: the workspace list and the active workspace |
+| `PROOFLIX_SCHEDULER` | `1` (on) | `0` / `off` stops pipelines running on their schedules |
+| `PROOFLIX_START_DATE` | unset (all data) | Where data processing starts when the system is initialized: a pipeline with no checkpoint yet processes data from this date on. ISO 8601 date (`2026-01-01`) or time, stored as UTC. Pipelines read it as `ctx.start_date`, `${system.start_date}` or, in shell tasks, `$PROOFLIX_START_DATE` (see [pipelines.md](pipelines.md#references-)) |
+| `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state: the workspace list, the active workspace (`workspaces.json`) and the edited parameters (`parameters.json`). Environment variable only. |
 | `PROOFLIX_SOURCE_DATA` | unset | Default source data folder (raw files pipelines read): every workspace's `source/` links there, unless the workspace chose its own (`<workspace>/.prooflix/settings.json`) |
 | `PROOFLIX_DATA_LAKE` | unset | Default data lake folder (bronze, gold, checkpoints; read by the catalog and SQL): every workspace's `data/` links there, unless the workspace chose its own |
 

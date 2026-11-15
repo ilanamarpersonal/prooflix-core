@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,9 @@ class TaskContext:
             ctx.log(f"reading {source_file}")
             data = (ctx.workspace / source_file).read_text()
             return {"rows": len(data.splitlines())}
+
+    ``start_date`` is the system's start date (``PROOFLIX_START_DATE``): where
+    processing starts when there is no checkpoint yet. ``None`` means all data.
     """
 
     run_id: str
@@ -27,6 +31,7 @@ class TaskContext:
     attempt: int
     workspace: Path
     parameters: dict[str, Any] = field(default_factory=dict)
+    start_date: datetime | None = None
     _log: Callable[[str], None] = field(default=print, repr=False)
 
     def log(self, message: object) -> None:

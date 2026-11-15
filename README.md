@@ -76,6 +76,30 @@ in the workspace, or a folder in `catalog/` (next to `workspaces/`, set with
 adds CSV or JSON files as tables; **Export** downloads a table as CSV, or as a
 ZIP with a Parquet file, and a schema or the whole catalog as a ZIP.
 
+## System parameters
+
+The **System** tab lists every server setting (`PROOFLIX_*`) with the value in
+use, its default and where it comes from. The pencil edits a value: a folder
+browser for folders, a date picker for the start date, a text box otherwise.
+Edited values are saved to `~/.prooflix/parameters.json`, win over environment
+variables (and Helm values), and are applied by **Restart server** (refused
+while runs are going).
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `PROOFLIX_WORKSPACES` | `workspaces/` in this repository | Folder of workspaces |
+| `PROOFLIX_WORKSPACE` | the first workspace | Default workspace, until another is made active |
+| `PROOFLIX_MAX_DEPTH` | `10` | Maximum sub-pipeline nesting depth |
+| `PROOFLIX_CORS` | `http://localhost:5173,http://127.0.0.1:5173` | Browser origins allowed to call the API (needs a process restart) |
+| `PROOFLIX_CATALOG` | `catalog/` next to the workspaces folder | Catalog schemas that are not part of a project |
+| `PROOFLIX_SCHEDULER` | on | Run pipelines on their cron schedules |
+| `PROOFLIX_START_DATE` | unset (all data) | Where data processing starts when the system is initialized: a pipeline with no checkpoint yet processes data from this date on (`ctx.start_date` in Python, `${system.start_date}` in YAML) |
+| `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state; environment variable only |
+| `PROOFLIX_SOURCE_DATA` | each workspace's `source/` | Default source data folder |
+| `PROOFLIX_DATA_LAKE` | each workspace's `data/` | Default data lake folder |
+
+The full reference is in [docs/server.md](docs/server.md#configuration).
+
 ## Use it from the command line
 
 ```bash
@@ -138,7 +162,7 @@ kubectl port-forward svc/prooflix 8000:8000   # then open http://localhost:8000
 
 After a code change, rebuild and load the image, then
 `kubectl rollout restart deploy/prooflix`. Settings (`prooflix.scheduler`,
-`persistence.size`, `ingress`, ...) are in
+`prooflix.startDate`, `persistence.size`, `ingress`, ...) are in
 [values.yaml](deploy/helm/prooflix/values.yaml). The volume is kept on
 `helm uninstall`; delete it with `kubectl delete pvc prooflix`.
 

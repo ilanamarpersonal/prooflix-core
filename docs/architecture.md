@@ -66,9 +66,10 @@ flowchart LR
   executes runs on its asyncio event loop, starts scheduled runs, keeps run
   history and answers SQL queries over the data lake. It also serves the built
   client, so production needs nothing else.
-* **Client**: a single-page app with four sections: **Pipelines** (list, graph,
-  YAML, triggers, runs with live output), **SQL Editor**, **Catalog** and
-  **Workspace** (files, import, create and switch workspaces).
+* **Client**: a single-page app with five sections: **Pipelines** (list, graph,
+  YAML, triggers, runs with live output), **SQL Editor**, **Catalog**,
+  **Workspace** (files, import, create and switch workspaces) and **System**
+  (the system parameters: view, edit, restart).
 * **CLI**: the same engine without the web UI, for scripts and CI. It uses the
   active workspace unless `--workspace` is given.
 
@@ -82,9 +83,9 @@ prooflix-core/
 │   ├── prooflix/
 │   │   ├── main.py          FastAPI app factory
 │   │   ├── cli.py           prooflix serve | validate | run
-│   │   ├── config.py        settings from environment variables
+│   │   ├── config.py        system parameters: environment variables and values edited in the System tab
 │   │   ├── workspaces.py    WorkspaceRegistry: the workspaces and the active one
-│   │   ├── runtime.py       the active workspace's services, and switching
+│   │   ├── runtime.py       the active workspace's services, switching and restarting in place
 │   │   ├── api/             HTTP routes and response schemas
 │   │   ├── pipelines/       YAML models, workspace loading, validation, templating, cron
 │   │   ├── engine/          executor (DAG, sub-pipelines), task runners, scheduler

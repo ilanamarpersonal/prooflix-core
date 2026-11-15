@@ -54,10 +54,13 @@ class _Parent:
 
 
 class PipelineExecutor:
-    def __init__(self, workspace: Workspace, store: RunStore, *, max_depth: int = 10):
+    def __init__(
+        self, workspace: Workspace, store: RunStore, *, max_depth: int = 10, start_date: str | None = None
+    ):
         self.workspace = workspace
         self.store = store
         self.max_depth = max_depth
+        self.start_date = start_date  # PROOFLIX_START_DATE, ISO 8601 (UTC); None: all data
         self._active: dict[str, asyncio.Task[Run]] = {}
         install_print_capture()  # print() inside python tasks goes to the task log
 
@@ -170,6 +173,7 @@ class PipelineExecutor:
             "params": run.parameters,
             "tasks": {},
             "run": {"id": run.id, "pipeline": run.pipeline},
+            "system": {"start_date": self.start_date},
         }
         tasks = {t.key: t for t in spec.tasks}
         pending = list(tasks)  # keeps YAML order for deterministic scheduling
@@ -303,6 +307,7 @@ class PipelineExecutor:
                 attempt=attempt,
                 workspace=project,
                 parameters=params,
+                start_date=datetime.fromisoformat(self.start_date) if self.start_date else None,
                 _log=logger,
             )
             tr.log(f"Calling {task.entrypoint}")
@@ -311,6 +316,8 @@ class PipelineExecutor:
         if isinstance(task, ShellTask):
             command = resolve(task.command, scope)
             env = {k: str(v) for k, v in resolve(task.env, scope).items()}
+            if self.start_date:  # the task's own env wins
+                env = {"PROOFLIX_START_DATE": self.start_date, **env}
             tr.log(f"$ {command}")
             return await run_shell(command, env, self.workspace.project_dir_for(run.pipeline), logger)
 
