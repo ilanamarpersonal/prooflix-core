@@ -38,6 +38,13 @@ resource "helm_release" "prooflix" {
       spark = {
         driverMemory = var.spark_driver_memory
       }
+      clickhouse = {
+        enabled   = var.clickhouse_enabled
+        publicUrl = var.clickhouse_public_url
+        service = {
+          type = var.clickhouse_service_type
+        }
+      }
       unityCatalog = {
         enabled = var.unity_catalog_enabled
         uri     = var.unity_catalog_uri

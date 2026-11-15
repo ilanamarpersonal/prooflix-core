@@ -1,0 +1,159 @@
+{{- if .Values.clickhouse.enabled }}
+{{- $name := include "prooflix.clickhouseName" . }}
+{{- if not .Values.clickhouse.auth.existingSecret }}
+# Passwords: given in values, or generated on the first install and kept afterwards
+{{- $old := (lookup "v1" "Secret" .Release.Namespace $name).data | default dict }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+type: Opaque
+data:
+  password: {{ .Values.clickhouse.auth.password | b64enc | default (get $old "password") | default (randAlphaNum 24 | b64enc) | quote }}
+  reader-password: {{ .Values.clickhouse.auth.readerPassword | b64enc | default (get $old "reader-password") | default (randAlphaNum 24 | b64enc) | quote }}
+---
+{{- end }}
+# The read-only user (SELECT only), from files/clickhouse-reader.xml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-users
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+data:
+  reader.xml: |
+{{ .Files.Get "files/clickhouse-reader.xml" | replace "<name>reader</name>" "" | replace "<reader>" (printf "<%s>" .Values.clickhouse.auth.readerUser) | replace "</reader>" (printf "</%s>" .Values.clickhouse.auth.readerUser) | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate         # one pod owns the data volume
+  selector:
+    matchLabels:
+      {{- include "prooflix.clickhouseSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/users: {{ .Files.Get "files/clickhouse-reader.xml" | sha256sum }}
+      labels:
+        {{- include "prooflix.clickhouseSelectorLabels" . | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        fsGroup: 101       # the clickhouse user in the image
+      containers:
+        - name: clickhouse
+          image: "{{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}"
+          imagePullPolicy: {{ .Values.clickhouse.image.pullPolicy }}
+          env:
+            - name: CLICKHOUSE_USER
+              value: {{ .Values.clickhouse.auth.user | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prooflix.clickhouseSecretName" . }}
+                  key: password
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+            - name: CLICKHOUSE_READER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prooflix.clickhouseSecretName" . }}
+                  key: reader-password
+          ports:
+            - name: http
+              containerPort: 8123
+            - name: native
+              containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: users
+              mountPath: /etc/clickhouse-server/users.d/reader.xml
+              subPath: reader.xml
+              readOnly: true
+      volumes:
+        - name: data
+          {{- if .Values.clickhouse.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.clickhouse.persistence.existingClaim | default $name }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: users
+          configMap:
+            name: {{ $name }}-users
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+  {{- with .Values.clickhouse.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.clickhouse.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.clickhouse.service.httpPort }}
+      targetPort: http
+      {{- if and (eq .Values.clickhouse.service.type "NodePort") .Values.clickhouse.service.httpNodePort }}
+      nodePort: {{ .Values.clickhouse.service.httpNodePort }}
+      {{- end }}
+    - name: native
+      port: {{ .Values.clickhouse.service.nativePort }}
+      targetPort: native
+      {{- if and (eq .Values.clickhouse.service.type "NodePort") .Values.clickhouse.service.nativeNodePort }}
+      nodePort: {{ .Values.clickhouse.service.nativeNodePort }}
+      {{- end }}
+  selector:
+    {{- include "prooflix.clickhouseSelectorLabels" . | nindent 4 }}
+{{- if and .Values.clickhouse.persistence.enabled (not .Values.clickhouse.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.clickhouse.persistence.size }}
+  {{- with .Values.clickhouse.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
+{{- end }}

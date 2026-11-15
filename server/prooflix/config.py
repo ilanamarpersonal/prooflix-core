@@ -57,6 +57,14 @@ class Settings:
                            date on (ISO 8601 date or time, UTC; default: all data).
                            Pipelines read it as ctx.start_date, ${system.start_date}
                            or the PROOFLIX_START_DATE variable of shell tasks
+      PROOFLIX_CLICKHOUSE_URL        ClickHouse HTTP endpoint gold tables are copied to
+                                     (e.g. http://localhost:8123); unset: the ClickHouse tab
+                                     is off
+      PROOFLIX_CLICKHOUSE_USER       user Prooflix writes with (default "default")
+      PROOFLIX_CLICKHOUSE_PASSWORD   its password
+      PROOFLIX_CLICKHOUSE_PUBLIC_URL where people outside connect to query ClickHouse
+                                     (shown in the ClickHouse tab only)
+      PROOFLIX_CLICKHOUSE_READER     the read-only user they connect as (shown only)
       PROOFLIX_DATA_LAKE   default data lake folder (what pipelines build: bronze,
                            gold, checkpoints) for every workspace: its data/ links there
                            (default for both: the workspace's own folder; a workspace
@@ -83,6 +91,11 @@ class Settings:
     source_data: Path | None = None  # None: each workspace's own source/ folder
     data_lake: Path | None = None  # None: each workspace's own data/ folder
     start_date: str | None = None  # ISO 8601 time (UTC); None: process all data
+    clickhouse_url: str | None = None  # None: no ClickHouse
+    clickhouse_user: str = "default"
+    clickhouse_password: str = ""
+    clickhouse_public_url: str | None = None  # shown to people who query it from outside
+    clickhouse_reader: str | None = None  # the read-only user they use (shown only)
     # the values from PROOFLIX_HOME/parameters.json this server started with
     saved_parameters: dict[str, str] = field(default_factory=dict, compare=False)
 
@@ -146,6 +159,16 @@ class Settings:
             kwargs["source_data"] = Path(source).expanduser().resolve()
         if lake := env.get("PROOFLIX_DATA_LAKE"):
             kwargs["data_lake"] = Path(lake).expanduser().resolve()
+        if ch := env.get("PROOFLIX_CLICKHOUSE_URL"):
+            kwargs["clickhouse_url"] = ch.rstrip("/")
+        if ch_user := env.get("PROOFLIX_CLICKHOUSE_USER"):
+            kwargs["clickhouse_user"] = ch_user
+        if ch_password := env.get("PROOFLIX_CLICKHOUSE_PASSWORD"):
+            kwargs["clickhouse_password"] = ch_password
+        if ch_public := env.get("PROOFLIX_CLICKHOUSE_PUBLIC_URL"):
+            kwargs["clickhouse_public_url"] = ch_public.rstrip("/")
+        if ch_reader := env.get("PROOFLIX_CLICKHOUSE_READER"):
+            kwargs["clickhouse_reader"] = ch_reader
         if start := env.get("PROOFLIX_START_DATE"):
             kwargs["start_date"] = parse_start_date(start)
         if cors := env.get("PROOFLIX_CORS"):

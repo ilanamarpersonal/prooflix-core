@@ -66,10 +66,11 @@ flowchart LR
   executes runs on its asyncio event loop, starts scheduled runs, keeps run
   history and answers SQL queries over the data lake. It also serves the built
   client, so production needs nothing else.
-* **Client**: a single-page app with five sections: **Pipelines** (list, graph,
+* **Client**: a single-page app with six sections: **Pipelines** (list, graph,
   YAML, triggers, runs with live output), **SQL Editor**, **Catalog**,
-  **Workspace** (files, import, create and switch workspaces) and **System**
-  (the system parameters: view, edit, restart).
+  **Workspace** (files, import, create and switch workspaces), **ClickHouse**
+  (copy gold tables to ClickHouse for outside queries) and **System** (the system
+  parameters: view, edit, restart).
 * **CLI**: the same engine without the web UI, for scripts and CI. It uses the
   active workspace unless `--workspace` is given.
 

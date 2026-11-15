@@ -1,0 +1,24 @@
+<!--
+  A read-only ClickHouse user for querying from outside (BI tools, clients):
+  SELECT only (profile readonly = 1: no writes, no settings changes).
+  Its password comes from the environment variable CLICKHOUSE_READER_PASSWORD.
+  Used by the Helm chart (templates/clickhouse.yaml mounts it as a ConfigMap) and
+  by the local Docker container (see docs/deployment.md).
+-->
+<clickhouse>
+    <profiles>
+        <readonly>
+            <readonly>1</readonly>
+        </readonly>
+    </profiles>
+    <users>
+        <reader>
+            <password from_env="CLICKHOUSE_READER_PASSWORD"/>
+            <profile>readonly</profile>
+            <quota>default</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+        </reader>
+    </users>
+</clickhouse>

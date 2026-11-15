@@ -99,3 +99,18 @@ app.kubernetes.io/name: {{ include "prooflix.name" . }}-unitycatalog
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: unitycatalog
 {{- end }}
+
+{{/* ClickHouse */}}
+{{- define "prooflix.clickhouseName" -}}
+{{- printf "%s-clickhouse" (include "prooflix.fullname" .) }}
+{{- end }}
+
+{{- define "prooflix.clickhouseSecretName" -}}
+{{- .Values.clickhouse.auth.existingSecret | default (include "prooflix.clickhouseName" .) }}
+{{- end }}
+
+{{- define "prooflix.clickhouseSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "prooflix.name" . }}-clickhouse
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: clickhouse
+{{- end }}

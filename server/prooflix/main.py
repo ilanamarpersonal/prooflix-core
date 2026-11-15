@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import __version__
-from .api import pipelines, runs, schedules, sql, system, workspace as workspace_api
+from .api import clickhouse as clickhouse_api, pipelines, runs, schedules, sql, system, workspace as workspace_api
 from .api import workspaces as workspaces_api
 from .config import Settings
 from .runtime import build_services, install
@@ -66,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(sql.router)
     app.include_router(sql.catalog_router)
     app.include_router(system.router)
+    app.include_router(clickhouse_api.router)
 
     @app.get("/api/health", tags=["meta"])
     async def health() -> dict:

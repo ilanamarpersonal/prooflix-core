@@ -87,6 +87,24 @@ variable "unity_catalog_catalog" {
   default     = "tenant1"
 }
 
+variable "clickhouse_enabled" {
+  description = "Run ClickHouse in the release (the ClickHouse tab copies gold tables to it)"
+  type        = bool
+  default     = true
+}
+
+variable "clickhouse_service_type" {
+  description = "How ClickHouse is reached from outside the cluster: ClusterIP (port-forward), NodePort or LoadBalancer"
+  type        = string
+  default     = "ClusterIP"
+}
+
+variable "clickhouse_public_url" {
+  description = "The address outside users query ClickHouse at, shown in the ClickHouse tab (e.g. http://clickhouse.internal:8123)"
+  type        = string
+  default     = ""
+}
+
 variable "persistence_size" {
   description = "Size of the volume holding the workspace and catalog"
   type        = string

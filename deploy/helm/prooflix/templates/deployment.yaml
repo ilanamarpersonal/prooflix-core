@@ -92,6 +92,24 @@ spec:
             - name: PROOFLIX_UC_TOKEN
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.clickhouse.enabled }}
+            # where the ClickHouse tab copies gold tables (clickhouse in values.yaml)
+            - name: PROOFLIX_CLICKHOUSE_URL
+              value: {{ printf "http://%s:%v" (include "prooflix.clickhouseName" .) .Values.clickhouse.service.httpPort | quote }}
+            - name: PROOFLIX_CLICKHOUSE_USER
+              value: {{ .Values.clickhouse.auth.user | quote }}
+            - name: PROOFLIX_CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prooflix.clickhouseSecretName" . }}
+                  key: password
+            - name: PROOFLIX_CLICKHOUSE_READER
+              value: {{ .Values.clickhouse.auth.readerUser | quote }}
+            {{- with .Values.clickhouse.publicUrl }}
+            - name: PROOFLIX_CLICKHOUSE_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.prooflix.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

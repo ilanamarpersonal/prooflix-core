@@ -27,7 +27,7 @@ client/
     ├── lib/
     │   ├── api.ts           fetch wrapper, ApiError, query and mutation hooks
     │   ├── types.ts         TypeScript mirror of the server schemas
-    │   ├── tabs.ts          the five sections (sidebar + tabs) and their last page
+    │   ├── tabs.ts          the six sections (sidebar + tabs) and their last page
     │   ├── schedule.ts      trigger presets <-> cron, cron descriptions
     │   ├── dom-guard.ts     keeps React working if page translation rewrites text
     │   ├── sql-completion.ts, sql-names.ts   SQL editor completion and table names
@@ -60,12 +60,13 @@ client/
         ├── sql-editor-page.tsx       /sql
         ├── catalog-page.tsx          /catalog
         ├── workspace-page.tsx        /workspace
+        ├── clickhouse-page.tsx       /clickhouse (copy gold tables to ClickHouse)
         └── system-page.tsx           /system (system parameters)
 ```
 
 ## Sections, routes and screens
 
-The sidebar and the tabs show five sections; each remembers the last page you
+The sidebar and the tabs show six sections; each remembers the last page you
 opened in it.
 
 ```mermaid
@@ -99,6 +100,7 @@ flowchart LR
 | **SQL Editor** | Query tabs saved in the browser, completion of table and column names, results grid, Save SQL / Load SQL (`.sql` files), schema list beside the editor. |
 | **Catalog** | Catalogs, schemas and their tables with columns and row counts: the data lake's Delta tables (`tenant1.bronze.*` and so on, at their current version), Parquet folders, and datasets in `catalog/`. Import CSV/JSON as tables; Export as CSV or Parquet ZIP. A draggable divider sets the tree's width (double-click resets it). |
 | **Workspace** | The list of workspaces (the active one in bold) above the active workspace's file tree; a file or folder viewer (the top folder has **Remove workspace**); **Import Workspace** (upload a folder from this computer as a new workspace), **New workspace** (folder picker on the server, creates `pipelines/` and `src/`), **Switch workspace** (make another active, open another folder, remove from list). Removing a workspace only takes it off the list. |
+| **ClickHouse** | The connection (where Prooflix writes, the address and read-only user for outside queries, an example query) and every gold table with a checkbox: rows, the ClickHouse table it becomes, rows already there, and its columns with their ClickHouse types. **Import to ClickHouse** copies the chosen tables and shows each one's result. |
 | **System** | Every system parameter (`PROOFLIX_*`, see [server.md](server.md#configuration)): its value in use, default and source (edited here, environment or default). The pencil edits a value in place (a folder browser for folders, a date picker for the start date, a text box otherwise); the arrow removes the edited value. Edited values show **Restart to apply** until **Restart server** (in the header and in the banner) applies them. |
 
 ## Component tree

@@ -105,6 +105,8 @@ flowchart TB
 | `engine/runners.py` | Executes `python` (import + call, printout captured) and `shell` (subprocess) tasks |
 | `engine/scheduler.py` | Starts runs on their cron schedules: ticks every second, no catch-up, no overlap |
 | `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB. Delta tables (a folder with `_delta_log`) are tables of the schema named after their parent folder, read at their current version |
+| `clickhouse.py` | Copies a catalog table into ClickHouse over its HTTP interface: maps the columns to ClickHouse types (`Int64`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, ..., each `Nullable`), loads the rows as Parquet into a staging table and swaps it in (`EXCHANGE TABLES`) |
+| `api/clickhouse.py` | The ClickHouse tab: connection status, the gold tables with their ClickHouse columns, and the import |
 | `delta_log.py` | Replays a Delta table's `_delta_log` (newest checkpoint, then later commits) to list the Parquet files of its current version, so overwritten rows aren't read twice. Refuses deletion vectors and column mapping. |
 | `api/workspace.py` | The active workspace's files: tree, file content, import of uploaded folders, removal to trash |
 | `api/workspaces.py` | Create, list, activate and forget workspaces; list server folders for the folder picker |
@@ -286,6 +288,14 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | DELETE | `/api/workspaces?path=` | | The list without `path`. Its folder is never touched; one in the workspaces folder is remembered as hidden. Removing the active workspace switches to another first (none if it was the last; `409` while runs are going). `400` for `PROOFLIX_WORKSPACE`. |
 | GET | `/api/fs/dirs?path=` | | `{path, parent, dirs}`: sub-folders on the server, for the folder picker. Default: the workspaces folder. |
 
+**ClickHouse** (gold tables copied for outside queries)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/clickhouse/status` | | `{configured, reachable, url, public_url, reader, version, error, tables: [{database, name, rows, bytes}]}` |
+| GET | `/api/clickhouse/gold-tables` | | `[{table, target, rows, columns: [{name, clickhouse_type}], error}]`: every table of a `gold` schema and the ClickHouse table it becomes (`tenant1.gold.x` -> `tenant1.x`) |
+| POST | `/api/clickhouse/import` | `{tables: ["tenant1.gold.x", ...]}` | One result per table: `{table, target, ok, rows, columns, replaced, seconds, error}`. Each table is replaced as a whole; one failing leaves its old copy and doesn't stop the others. `409` when ClickHouse isn't configured. |
+
 **System parameters** (see [Configuration](#configuration))
 
 | Method | Path | Body | Response |
@@ -360,6 +370,9 @@ default and where it comes from, and edits them:
 | `PROOFLIX_START_DATE` | unset (all data) | Where data processing starts when the system is initialized: a pipeline with no checkpoint yet processes data from this date on. ISO 8601 date (`2026-01-01`) or time, stored as UTC. Pipelines read it as `ctx.start_date`, `${system.start_date}` or, in shell tasks, `$PROOFLIX_START_DATE` (see [pipelines.md](pipelines.md#references-)) |
 | `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state: the workspace list, the active workspace (`workspaces.json`) and the edited parameters (`parameters.json`). Environment variable only. |
 | `PROOFLIX_SOURCE_DATA` | unset | Default source data folder (raw files pipelines read): every workspace's `source/` links there, unless the workspace chose its own (`<workspace>/.prooflix/settings.json`) |
+| `PROOFLIX_CLICKHOUSE_URL` | unset (tab off) | ClickHouse HTTP endpoint gold tables are copied to |
+| `PROOFLIX_CLICKHOUSE_USER` / `_PASSWORD` | `default` / none | The user Prooflix writes with; the password is never shown in the System tab |
+| `PROOFLIX_CLICKHOUSE_PUBLIC_URL` / `_READER` | unset | The address and read-only user shown to people who query it from outside |
 | `PROOFLIX_DATA_LAKE` | unset | Default data lake folder (bronze, gold, checkpoints; read by the catalog and SQL): every workspace's `data/` links there, unless the workspace chose its own |
 
 ## Security note

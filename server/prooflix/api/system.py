@@ -35,8 +35,9 @@ class SystemParameter(BaseModel):
     source: Literal["saved", "environment", "default"]  # where the value in use comes from
     description: str
     editable: bool
-    # "folder": a path on the server, chosen with a folder browser; "date": a date picker
-    kind: Literal["folder", "date", "text"]
+    # "folder": a path on the server, chosen with a folder browser; "date": a date picker;
+    # "secret": a password, never sent back (value and saved show "********" when set)
+    kind: Literal["folder", "date", "text", "secret"]
     saved: str | None  # the value edited in the System tab, if any
     restart_needed: bool  # the saved value changed since the last (re)start
     # applied by the Restart button; False: only a restart of the server process applies it
@@ -78,6 +79,17 @@ def _parse_flag(raw: str) -> str:
     return "on" if parse_flag(raw) else "off"
 
 
+def _parse_http_url(raw: str) -> str:
+    url = raw.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")) or len(url) < 10:
+        raise ValueError("must be an http:// or https:// URL, e.g. http://localhost:8123")
+    return url
+
+
+def _parse_text(raw: str) -> str:
+    return raw.strip()
+
+
 def _parse_origins(raw: str) -> str:
     origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
     bad = [o for o in origins if not o.startswith(("http://", "https://"))]
@@ -95,6 +107,7 @@ class _Param:
     # normalises an edited value, raising ValueError; None: can't be edited here
     parse: Callable[[str], str] | None
     live: bool = True  # False: fixed for the life of the server process
+    secret: bool = False  # a password: its value is never shown
 
 
 # In the order of the Settings docstring (config.py).
@@ -174,11 +187,50 @@ PARAMS: tuple[_Param, ...] = (
         lambda s: _path(s.data_lake),
         _parse_dir,
     ),
+    _Param(
+        "PROOFLIX_CLICKHOUSE_URL",
+        "ClickHouse HTTP endpoint the ClickHouse tab copies gold tables to.",
+        "not set: the ClickHouse tab is off",
+        lambda s: s.clickhouse_url,
+        _parse_http_url,
+    ),
+    _Param(
+        "PROOFLIX_CLICKHOUSE_USER",
+        "ClickHouse user Prooflix creates and loads the tables with.",
+        "default",
+        lambda s: s.clickhouse_user,
+        _parse_text,
+    ),
+    _Param(
+        "PROOFLIX_CLICKHOUSE_PASSWORD",
+        "Password of that ClickHouse user (never shown).",
+        "none",
+        lambda s: s.clickhouse_password or None,
+        _parse_text,
+        secret=True,
+    ),
+    _Param(
+        "PROOFLIX_CLICKHOUSE_PUBLIC_URL",
+        "Where people outside connect to query ClickHouse (shown in the ClickHouse tab).",
+        "the ClickHouse URL",
+        lambda s: s.clickhouse_public_url,
+        _parse_http_url,
+    ),
+    _Param(
+        "PROOFLIX_CLICKHOUSE_READER",
+        "The read-only ClickHouse user they connect as (shown in the ClickHouse tab).",
+        "not set",
+        lambda s: s.clickhouse_reader,
+        _parse_text,
+    ),
 )
 _BY_NAME = {p.name: p for p in PARAMS}
+MASK = "********"
 
 
-def _kind(p: _Param) -> Literal["folder", "date", "text"]:
+def _kind(p: _Param) -> Literal["folder", "date", "text", "secret"]:
+    if p.secret:
+        return "secret"
     if p.parse in (_parse_dir, _parse_path) or p.name == "PROOFLIX_HOME":
         return "folder"
     return "date" if p.parse is parse_start_date else "text"
@@ -194,16 +246,19 @@ def _list(settings: Settings, boot: dict[str, str] | None = None) -> list[System
             return "saved"
         return "environment" if os.environ.get(name) else "default"
 
+    def shown(p: _Param, value: str | None) -> str | None:
+        return MASK if p.secret and value else value
+
     return [
         SystemParameter(
             name=p.name,
-            value=p.value(settings),
+            value=shown(p, p.value(settings)),
             default=p.default,
             source=source(p.name),
             description=p.description,
             editable=p.parse is not None and settings.home is not None,
             kind=_kind(p),
-            saved=saved_now.get(p.name),
+            saved=shown(p, saved_now.get(p.name)),
             restart_needed=saved_now.get(p.name) != (started if p.live else boot).get(p.name),
             live=p.live,
         )

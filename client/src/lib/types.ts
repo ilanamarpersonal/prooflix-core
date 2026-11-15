@@ -265,11 +265,49 @@ export interface SystemParameter {
   description: string
   editable: boolean
   /** "folder": a path on the server, chosen with a folder browser; "date": a date picker */
-  kind: "folder" | "date" | "text"
+  kind: "folder" | "date" | "text" | "secret"
   /** the value edited in the System tab, if any (used from the next start) */
   saved: string | null
   /** the saved value changed since the last (re)start */
   restart_needed: boolean
   /** applied by Restart server; false: only restarting the server process applies it */
   live: boolean
+}
+
+/** GET /api/clickhouse/status */
+export interface ClickHouseStatus {
+  configured: boolean
+  reachable: boolean
+  /** where Prooflix writes */
+  url: string | null
+  /** where people outside connect */
+  public_url: string | null
+  /** the read-only user they connect as */
+  reader: string | null
+  version: string | null
+  error: string | null
+  tables: { database: string; name: string; rows: number | null; bytes: number | null }[]
+}
+
+/** GET /api/clickhouse/gold-tables */
+export interface GoldTable {
+  /** "tenant1.gold.agg_transactions_per_date" */
+  table: string
+  /** the ClickHouse table it becomes: "tenant1.agg_transactions_per_date" */
+  target: string
+  rows: number
+  columns: { name: string; clickhouse_type: string }[]
+  error: string | null
+}
+
+/** POST /api/clickhouse/import, one per table */
+export interface ClickHouseImportResult {
+  table: string
+  target: string | null
+  ok: boolean
+  rows: number | null
+  columns: number | null
+  replaced: boolean | null
+  seconds: number | null
+  error: string | null
 }

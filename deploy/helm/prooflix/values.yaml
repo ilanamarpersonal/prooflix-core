@@ -55,6 +55,43 @@ unityCatalog:
     limits:
       memory: 1Gi
 
+# ClickHouse: the ClickHouse tab copies gold tables here, with the same columns and
+# types, for people outside Prooflix to query. Prooflix writes as auth.user; outside
+# users connect as auth.readerUser, which can only SELECT (readonly profile).
+clickhouse:
+  enabled: true
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "26.8.30"         # 26.8 LTS
+    pullPolicy: IfNotPresent
+  auth:
+    user: prooflix         # the user Prooflix creates and loads tables with
+    password: ""           # "" = generated once and kept in the Secret
+    readerUser: reader     # read-only, for queries from outside
+    readerPassword: ""     # "" = generated once and kept in the Secret
+    existingSecret: ""     # or a Secret you made, with keys "password" and "reader-password"
+  # How people outside the cluster reach it. ClusterIP: use kubectl port-forward;
+  # NodePort or LoadBalancer: reachable on the network (keep it internal).
+  service:
+    type: ClusterIP
+    httpPort: 8123         # HTTP interface (curl, JDBC/ODBC drivers, BI tools)
+    nativePort: 9000       # native protocol (clickhouse-client)
+    httpNodePort: ""       # with type NodePort, e.g. 30123
+    nativeNodePort: ""     # with type NodePort, e.g. 30900
+    annotations: {}        # e.g. an internal load balancer annotation
+  publicUrl: ""            # shown in the ClickHouse tab, e.g. http://clickhouse.internal:8123
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 4Gi
+
 # Source data: the raw files pipelines read (bronze's input), PROOFLIX_SOURCE_DATA.
 # Each workspace's source/ folder becomes a link to it; a workspace can still
 # choose its own folder in the web client. Prooflix never writes to it, so its

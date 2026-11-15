@@ -4,6 +4,9 @@ import {
   TERMINAL_STATUSES,
   type PipelineDetail,
   type SystemParameter,
+  type ClickHouseImportResult,
+  type ClickHouseStatus,
+  type GoldTable,
   type PipelineSummary,
   type Run,
   type RunTree,
@@ -134,6 +137,10 @@ export const api = {
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
   systemParameters: () => request<SystemParameter[]>("/system/parameters"),
+  clickhouseStatus: () => request<ClickHouseStatus>("/clickhouse/status"),
+  goldTables: () => request<GoldTable[]>("/clickhouse/gold-tables"),
+  importToClickHouse: (tables: string[]) =>
+    request<ClickHouseImportResult[]>("/clickhouse/import", { method: "POST", body: JSON.stringify({ tables }) }),
   restartServer: () => request<SystemParameter[]>("/system/restart", { method: "POST" }),
   setSystemParameter: (name: string, value: string | null) =>
     request<SystemParameter[]>(`/system/parameters/${encodeURIComponent(name)}`, {
@@ -273,6 +280,19 @@ export function useRestartServer() {
       qc.setQueryData(["system", "parameters"], data)
       qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "system" })
     },
+  })
+}
+
+export const useClickHouseStatus = () =>
+  useQuery({ queryKey: ["clickhouse", "status"], queryFn: api.clickhouseStatus })
+
+export const useGoldTables = () => useQuery({ queryKey: ["clickhouse", "gold"], queryFn: api.goldTables })
+
+export function useImportToClickHouse() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (tables: string[]) => api.importToClickHouse(tables),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["clickhouse", "status"] }),
   })
 }
 

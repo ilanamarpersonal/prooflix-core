@@ -130,6 +130,51 @@ flowchart LR
 Terraform: `spark_driver_memory`, `unity_catalog_enabled`, `unity_catalog_uri`,
 `unity_catalog_catalog`.
 
+**ClickHouse.** The chart runs a ClickHouse server (`clickhouse/clickhouse-server:26.8.30`,
+26.8 LTS, Apache 2.0) with its own volume. The ClickHouse tab copies gold tables
+into it with the same columns and types; people outside Prooflix query them there.
+
+* Two users: `clickhouse.auth.user` (`prooflix`), which Prooflix creates and loads
+  tables with, and `clickhouse.auth.readerUser` (`reader`), which can only `SELECT`
+  (`files/clickhouse-reader.xml`: profile `readonly = 1`). Their passwords are
+  generated on the first install, kept in the Secret `<release>-clickhouse` (keys
+  `password`, `reader-password`) and reused by every upgrade; set them in values or
+  bring your own Secret (`clickhouse.auth.existingSecret`).
+* Outside access: `clickhouse.service.type` (`ClusterIP`: `kubectl port-forward
+  svc/<release>-clickhouse 8123:8123`; `NodePort` with `httpNodePort` /
+  `nativeNodePort`; or `LoadBalancer`, kept internal with `service.annotations`).
+  Port 8123 is HTTP (curl, JDBC/ODBC drivers, BI tools), 9000 the native protocol
+  (`clickhouse-client`). Set `clickhouse.publicUrl` to show that address in the tab.
+* The reader's password: `kubectl get secret <release>-clickhouse -o jsonpath='{.data.reader-password}' | base64 -d`.
+
+```bash
+curl -u reader:<password> 'http://localhost:8123/?query=SELECT+*+FROM+tenant1.agg_transactions_per_date+LIMIT+5'
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `clickhouse.enabled` | `true` | Run ClickHouse in the release |
+| `clickhouse.auth.user` / `password` | `prooflix` / generated | The user Prooflix writes with |
+| `clickhouse.auth.readerUser` / `readerPassword` | `reader` / generated | The read-only user for outside queries |
+| `clickhouse.service.type` | `ClusterIP` | `NodePort` or `LoadBalancer` to reach it from outside |
+| `clickhouse.publicUrl` | `""` | The address shown in the ClickHouse tab |
+| `clickhouse.persistence.*` | `20Gi` volume | Its data (kept on `helm uninstall`) |
+
+Terraform: `clickhouse_enabled`, `clickhouse_service_type`, `clickhouse_public_url`.
+
+Locally, without Kubernetes:
+
+```bash
+docker run -d --name prooflix-clickhouse -p 8123:8123 -p 9000:9000 \
+  -e CLICKHOUSE_USER=prooflix -e CLICKHOUSE_PASSWORD=prooflix-dev -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+  -e CLICKHOUSE_READER_PASSWORD=reader-dev -v prooflix-clickhouse-data:/var/lib/clickhouse \
+  -v $PWD/deploy/helm/prooflix/files/clickhouse-reader.xml:/etc/clickhouse-server/users.d/reader.xml:ro \
+  clickhouse/clickhouse-server:26.8.30
+```
+
+then set `PROOFLIX_CLICKHOUSE_URL=http://localhost:8123`, `_USER`, `_PASSWORD` and
+`_READER` in the System tab.
+
 ## Terraform (`deploy/terraform`)
 
 Installs the chart with the `hashicorp/helm` provider (v3), so the chart stays
@@ -159,6 +204,7 @@ release but keeps the volume.
   project needs must be in the image.
 * Spark runs in local mode in the Prooflix pod: it scales with the pod's CPU and
   memory, not across nodes.
+* ClickHouse is a single server (no replicas or shards).
 * Only folders under `/data` survive a pod restart; the folder picker can
   browse the whole container filesystem.
 * No authentication: anyone who can reach the server can import and run code.

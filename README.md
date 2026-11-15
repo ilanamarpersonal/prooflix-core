@@ -104,6 +104,14 @@ while runs are going).
 
 The full reference is in [docs/server.md](docs/server.md#configuration).
 
+## ClickHouse
+
+The **ClickHouse** tab copies gold tables (the tables of a `gold` schema, such as
+`tenant1.gold.agg_transactions_per_date`) into ClickHouse with the same columns and
+types, as `tenant1.agg_transactions_per_date`. People outside Prooflix query them
+there with a read-only user (`SELECT` only). The Helm chart runs ClickHouse; see
+[docs/deployment.md](docs/deployment.md) for outside access and running it locally.
+
 ## Use it from the command line
 
 ```bash

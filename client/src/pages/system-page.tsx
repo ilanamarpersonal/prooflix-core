@@ -138,6 +138,18 @@ function ParameterRow({ param: p }: { param: SystemParameter }) {
             {p.kind === "folder" ? (
               // browse the server's folders, or type a path
               <FolderPicker value={draft} onChange={setDraft} />
+            ) : p.kind === "secret" ? (
+              <Input
+                type="password"
+                autoFocus
+                autoComplete="new-password"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setDraft(null)}
+                placeholder="New password"
+                aria-label={`New value for ${p.name}`}
+                className="w-72"
+              />
             ) : p.kind === "date" ? (
               <Input
                 type="date"
@@ -222,7 +234,7 @@ function ParameterRow({ param: p }: { param: SystemParameter }) {
                     setter.reset()
                     const current = p.saved ?? p.value ?? ""
                 // a date picker shows the day only (the server stores midnight UTC)
-                setDraft(p.kind === "date" ? current.slice(0, 10) : current)
+                setDraft(p.kind === "secret" ? "" : p.kind === "date" ? current.slice(0, 10) : current)
                   }}
                 >
                   <Pencil />
