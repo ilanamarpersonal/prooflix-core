@@ -15,6 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from . import linked_folders
 from .config import Settings
 from .engine import PipelineExecutor, Scheduler
 from .pipelines import Workspace
@@ -37,6 +38,8 @@ class Services:
 
 
 def build_services(settings: Settings) -> Services:
+    # <workspace>/source and data link to the source data and data lake folders
+    linked_folders.apply(settings.workspace, settings.folder_defaults)
     workspace = Workspace(settings.workspace)
     store = RunStore(settings.runs_dir)
     recovered = store.recover_interrupted()

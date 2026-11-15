@@ -37,6 +37,24 @@ resource "helm_release" "prooflix" {
         size         = var.persistence_size
         storageClass = var.storage_class
       }
+      sourceData = {
+        path = var.source_data_path
+        volume = {
+          enabled       = var.source_data_volume_enabled
+          size          = var.source_data_volume_size
+          storageClass  = var.storage_class
+          existingClaim = var.source_data_existing_claim
+        }
+      }
+      dataLake = {
+        path = var.data_lake_path
+        volume = {
+          enabled       = var.data_lake_volume_enabled
+          size          = var.data_lake_volume_size
+          storageClass  = var.storage_class
+          existingClaim = var.data_lake_existing_claim
+        }
+      }
       podAnnotations = {
         "prooflix/chart-hash" = local.chart_hash
       }

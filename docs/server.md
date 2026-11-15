@@ -91,6 +91,7 @@ flowchart TB
 |---|---|
 | `config.py` | `Settings` from environment variables: workspaces folder, default workspace, home folder, catalog folder, scheduler on/off, max nesting depth, CORS origins, client build folder |
 | `main.py` | Builds the FastAPI app: makes the registry, builds the active workspace's services into `app.state`, starts/stops the scheduler with the app, serves `client/dist` when it exists |
+| `linked_folders.py` | The source data (`source/`) and data lake (`data/`) folders per workspace (its setting, `PROOFLIX_SOURCE_DATA` / `PROOFLIX_DATA_LAKE`, or its own folder) and the links to them |
 | `workspaces.py` | `WorkspaceRegistry`: finds the workspaces in the workspaces folder, tracks added ones and the active one, saved to `<PROOFLIX_HOME>/workspaces.json` |
 | `runtime.py` | `build_services()` makes `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace; `switch_workspace()` swaps them in `app.state` (refused while runs are going) |
 | `cli.py` | `prooflix serve`, `prooflix validate`, `prooflix run <id> -p key=value` |
@@ -269,15 +270,18 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/workspace/file?path=` | | `{path, size, content}` (first 1 MB; `binary: true` for binary files) |
 | POST | `/api/workspace/import` | `{files: [{path, content_base64}], overwrite}` | `{written, pipelines}`; `409` with `conflicts` when files exist and `overwrite` is false |
 | DELETE | `/api/workspace/item?path=` | | Moves a file or folder to `.prooflix/trash/<time>/` |
+| GET | `/api/workspace/folders/{source-data,data-lake}` | | `{kind, link, path, origin, workspace_setting, server_default, linked}`: the folder `source/` or `data/` uses and whether it is the workspace's choice, the server default or its own folder |
+| PUT | `/api/workspace/folders/{source-data,data-lake}` | `{path}` | Sets the active workspace's folder (`null`: back to the default); `source/` or `data/` becomes a link to it. `400` if it doesn't exist, is inside the workspace, or the workspace's own folder holds files |
 
 **Workspaces**
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/workspaces` | | `{active, root, workspaces: [{name, path, active, default, in_root, exists}]}` |
-| POST | `/api/workspaces` | `{parent, name}` | `201` entry. Creates `<parent>/<name>/` with `pipelines/` and `src/`; does not make it active. `409` if it exists. |
+| GET | `/api/workspaces` | | `{active, root, workspaces: [{name, path, active, default, in_root, exists}]}`; `active` is `null` while the list is empty |
+| POST | `/api/workspaces` | `{parent, name}` | `201` entry. Creates `<parent>/<name>/` with `pipelines/` and `src/`; does not make it active unless the list was empty. `409` if it exists. |
+| POST | `/api/workspaces/import` | `{name, files: [{path, content_base64}], activate}` | `201` `{workspace, written, pipelines}`. Creates `<workspaces folder>/<name>/` from the uploaded files (adding `pipelines/` and `src/` if missing) and makes it active unless `activate` is false. `409` if the folder exists. |
 | PUT | `/api/workspaces/active` | `{path}` | The list, with `path` active. `409` while runs are going. |
-| DELETE | `/api/workspaces?path=` | | The list without `path` (its folder is kept). `400` for the active or default workspace, or one in the workspaces folder. |
+| DELETE | `/api/workspaces?path=` | | The list without `path`. Its folder is never touched; one in the workspaces folder is remembered as hidden. Removing the active workspace switches to another first (none if it was the last; `409` while runs are going). `400` for `PROOFLIX_WORKSPACE`. |
 | GET | `/api/fs/dirs?path=` | | `{path, parent, dirs}`: sub-folders on the server, for the folder picker. Default: the workspaces folder. |
 
 **SQL and catalog** (DuckDB over the Parquet files of the active workspace's `data/` folders and the catalog folder)
@@ -321,6 +325,8 @@ uses the active workspace, or `--workspace`.
 | `PROOFLIX_CATALOG` | `<workspaces>/../catalog` | Catalog folder for datasets outside projects |
 | `PROOFLIX_SCHEDULER` | `1` | `0` stops pipelines running on their schedules |
 | `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state: the workspace list and the active workspace |
+| `PROOFLIX_SOURCE_DATA` | unset | Default source data folder (raw files pipelines read): every workspace's `source/` links there, unless the workspace chose its own (`<workspace>/.prooflix/settings.json`) |
+| `PROOFLIX_DATA_LAKE` | unset | Default data lake folder (bronze, gold, checkpoints; read by the catalog and SQL): every workspace's `data/` links there, unless the workspace chose its own |
 
 ## Security note
 

@@ -53,6 +53,16 @@ spec:
               value: {{ ternary "1" "0" .Values.prooflix.scheduler | quote }}
             - name: PROOFLIX_MAX_DEPTH
               value: {{ .Values.prooflix.maxDepth | quote }}
+            {{- with include "prooflix.sourceDataPath" . }}
+            # every workspace's source/ links here (sourceData in values.yaml)
+            - name: PROOFLIX_SOURCE_DATA
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with include "prooflix.dataLakePath" . }}
+            # every workspace's data/ links here (dataLake in values.yaml)
+            - name: PROOFLIX_DATA_LAKE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.prooflix.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -79,6 +89,15 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.sourceData.volume.enabled }}
+            - name: source-data
+              mountPath: {{ .Values.sourceData.volume.mountPath }}
+              readOnly: {{ .Values.sourceData.volume.readOnly }}
+            {{- end }}
+            {{- if .Values.dataLake.volume.enabled }}
+            - name: datalake
+              mountPath: {{ .Values.dataLake.volume.mountPath }}
+            {{- end }}
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}
@@ -87,6 +106,17 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.sourceData.volume.enabled }}
+        - name: source-data
+          persistentVolumeClaim:
+            claimName: {{ include "prooflix.sourceDataClaimName" . }}
+            readOnly: {{ .Values.sourceData.volume.readOnly }}
+        {{- end }}
+        {{- if .Values.dataLake.volume.enabled }}
+        - name: datalake
+          persistentVolumeClaim:
+            claimName: {{ include "prooflix.dataLakeClaimName" . }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

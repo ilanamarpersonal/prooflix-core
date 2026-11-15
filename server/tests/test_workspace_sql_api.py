@@ -56,9 +56,10 @@ def test_tree_lists_workspace_without_hidden_folders(client):
     tree = client.get("/api/workspace/tree").json()
     assert tree["type"] == "dir"
     top = [c["name"] for c in tree["children"]]
-    assert {"data", "pipelines", "src"} <= set(top)
+    assert {"pipelines", "src"} <= set(top)
     assert ".prooflix" not in top
-    assert top.index("data") < top.index("pipelines")  # folders sorted by name
+    assert "data" not in top  # the data lake is browsed in the Catalog, not the tree
+    assert top.index("pipelines") < top.index("src")  # folders sorted by name
 
 
 def test_read_file(client):

@@ -10,7 +10,7 @@ file name without `.yaml` is the pipeline **id**.
 Workspaces live in `workspaces/` (one folder each); the server runs pipelines
 from the active one. A workspace holds **projects**: the workspace folder itself
 (it has `pipelines/` and `src/`), plus each top-level folder in it with a
-`pipelines/` folder (usually brought in with **Workspace → Import code**). A
+`pipelines/` folder (copied in by hand, or a workspace brought in with **Workspace → Import Workspace**). A
 project keeps the Python code its pipelines call in its own `src/`, and its
 data in `data/`.
 

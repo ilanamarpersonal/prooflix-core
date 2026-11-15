@@ -131,9 +131,11 @@ export interface WorkspaceFile {
   binary: boolean
 }
 
-export interface ImportResult {
-  written: string[]
-  /** ids of pipeline files that were added or replaced */
+export interface ImportWorkspaceResult {
+  workspace: WorkspaceEntry
+  /** number of files written */
+  written: number
+  /** ids of the pipelines it brought */
   pipelines: string[]
 }
 
@@ -164,7 +166,8 @@ export interface WorkspaceEntry {
 }
 
 export interface WorkspaceList {
-  active: string
+  /** null while there are no workspaces */
+  active: string | null
   /** the folder holding the workspaces */
   root: string | null
   workspaces: WorkspaceEntry[]
@@ -232,4 +235,31 @@ export interface SqlResult {
   row_count: number
   truncated: boolean
   elapsed_ms: number
+}
+
+export type LinkedFolderKind = "source-data" | "data-lake"
+
+/** where the active workspace's source/ (raw files) or data/ (data lake) points */
+export interface LinkedFolder {
+  kind: "source_data" | "data_lake"
+  /** its name in the workspace: "source" or "data" */
+  link: string
+  path: string
+  /** the workspace's own choice, the server default (PROOFLIX_SOURCE_DATA / PROOFLIX_DATA_LAKE), or its own folder */
+  origin: "workspace" | "server" | "default"
+  workspace_setting: string | null
+  server_default: string | null
+  /** the workspace's folder is a link to it */
+  linked: boolean
+}
+
+/** A server setting, from a PROOFLIX_* environment variable (GET /api/system/parameters). */
+export interface SystemParameter {
+  name: string
+  /** what the server uses now; null: not set */
+  value: string | null
+  /** what is used when the variable is not set */
+  default: string
+  source: "environment" | "default"
+  description: string
 }

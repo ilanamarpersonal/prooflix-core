@@ -1,0 +1,20 @@
+{{- if and .Values.dataLake.volume.enabled (not .Values.dataLake.volume.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "prooflix.dataLakeClaimName" . }}
+  labels:
+    {{- include "prooflix.labels" . | nindent 4 }}
+  annotations:
+    # Keep the data lake on `helm uninstall`
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.dataLake.volume.accessModes | nindent 4 }}
+  {{- with .Values.dataLake.volume.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.dataLake.volume.size }}
+{{- end }}

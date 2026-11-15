@@ -7,6 +7,15 @@
 # scheduler_enabled = true
 # persistence_size  = "10Gi"
 
+# Source files on a volume (every workspace's source/ links to /source-data, read-only):
+# source_data_volume_enabled = true
+# source_data_existing_claim = "my-source-files"
+
+# Data lake on a volume of its own (every workspace's data/ links to /datalake):
+# data_lake_volume_enabled = true
+# data_lake_volume_size    = "100Gi"
+# data_lake_existing_claim = ""   # or bind an existing PVC
+
 # Any other chart value, e.g. an internal Ingress:
 # extra_values = {
 #   ingress = {

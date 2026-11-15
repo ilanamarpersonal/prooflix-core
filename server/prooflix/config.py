@@ -27,6 +27,12 @@ class Settings:
       PROOFLIX_SCHEDULER   "0" turns off running pipelines on their schedules (default on)
       PROOFLIX_HOME        folder for server-wide state: the list of workspaces and
                            which one is active (default ~/.prooflix)
+      PROOFLIX_SOURCE_DATA default source data folder (the raw files pipelines read)
+                           for every workspace: its source/ links there
+      PROOFLIX_DATA_LAKE   default data lake folder (what pipelines build: bronze,
+                           gold, checkpoints) for every workspace: its data/ links there
+                           (default for both: the workspace's own folder; a workspace
+                           can choose its own, see linked_folders.py)
 
     ``workspace`` is the default workspace; ``None`` means the first one in
     ``workspaces_root``. The one the server uses is the active workspace chosen
@@ -43,6 +49,13 @@ class Settings:
     client_dist: Path = DEFAULT_CLIENT_DIST
     catalog: Path | None = None  # None: <workspace>/../catalog
     home: Path | None = None  # None: the workspace list is kept in memory only
+    source_data: Path | None = None  # None: each workspace's own source/ folder
+    data_lake: Path | None = None  # None: each workspace's own data/ folder
+
+    @property
+    def folder_defaults(self) -> dict:
+        """Server defaults for the linked folders (see linked_folders.py)."""
+        return {"source_data": self.source_data, "data_lake": self.data_lake}
 
     @property
     def workspaces_file(self) -> Path | None:
@@ -90,6 +103,10 @@ class Settings:
             kwargs["scheduler"] = sched.strip().lower() not in ("0", "false", "no", "off")
         if depth := os.environ.get("PROOFLIX_MAX_DEPTH"):
             kwargs["max_depth"] = int(depth)
+        if source := os.environ.get("PROOFLIX_SOURCE_DATA"):
+            kwargs["source_data"] = Path(source).expanduser().resolve()
+        if lake := os.environ.get("PROOFLIX_DATA_LAKE"):
+            kwargs["data_lake"] = Path(lake).expanduser().resolve()
         if cors := os.environ.get("PROOFLIX_CORS"):
             kwargs["cors_origins"] = tuple(o.strip() for o in cors.split(",") if o.strip())
         return cls(**kwargs)

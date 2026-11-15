@@ -23,7 +23,8 @@ flowchart LR
   `prooflix serve --host 0.0.0.0 --port 8000`.
 * Data lives under `/data`: `PROOFLIX_WORKSPACES=/data/workspaces`,
   `PROOFLIX_CATALOG=/data/catalog` and `PROOFLIX_HOME=/data/.prooflix` (the
-  workspace list and the active workspace).
+  workspace list and the active workspace). The data lake defaults to each
+  workspace's `data/` on that volume; `dataLake` moves it (see below).
 
 ## Helm chart (`deploy/helm/prooflix`)
 
@@ -47,7 +48,28 @@ flowchart TB
 
 Main values: `image.repository/tag/pullPolicy`, `prooflix.scheduler`,
 `prooflix.maxDepth`, `prooflix.extraEnv`, `persistence.size/storageClass/existingClaim`,
-`ingress.*`, `resources`.
+`dataLake.*`, `ingress.*`, `resources`.
+
+**Source data** (`sourceData`): the raw files pipelines read. Every workspace's
+`source/` becomes a link to it (`PROOFLIX_SOURCE_DATA`). Same keys as `dataLake`
+below (mounted at `/source-data`), plus `sourceData.volume.readOnly` (default
+`true`: Prooflix never writes there). Terraform: `source_data_*` variables.
+
+**Data lake** (`dataLake`): what pipelines build, `data/<catalog>/<schema>/<table>/`
+(bronze, gold) and their checkpoints; the catalog and the SQL editor read it.
+Every workspace's `data/` becomes a link to it (`PROOFLIX_DATA_LAKE`). A
+workspace can still choose its own folders in the web client.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `dataLake.path` | `""` | Folder in the pod. Empty: `dataLake.volume.mountPath` when the volume is enabled, else each workspace's own `data/` |
+| `dataLake.volume.enabled` | `false` | Mount a separate volume for the data lake (data lakes outgrow the main volume) |
+| `dataLake.volume.mountPath` | `/datalake` | Where it is mounted |
+| `dataLake.volume.size` / `storageClass` / `accessModes` | `100Gi` / cluster default / `ReadWriteOnce` | For the PVC the chart creates (kept on `helm uninstall`) |
+| `dataLake.volume.existingClaim` | `""` | Mount a PVC you created, e.g. one bound to existing data |
+
+For example `helm install prooflix deploy/helm/prooflix --set sourceData.volume.enabled=true --set sourceData.volume.existingClaim=raw-files --set dataLake.volume.enabled=true --set dataLake.volume.size=500Gi`.
+Terraform has matching `data_lake_*` variables.
 
 ## Terraform (`deploy/terraform`)
 

@@ -75,7 +75,7 @@ export function RunOutput({ run }: { run: RunTree }) {
         <div
           ref={box}
           onScroll={onScroll}
-          className="max-h-[32rem] overflow-auto rounded-md bg-zinc-950 p-3 font-mono text-sm leading-relaxed text-zinc-100"
+          className="bg-card text-foreground max-h-[32rem] overflow-auto rounded-md border p-3 font-mono text-sm leading-relaxed"
           aria-live="polite"
         >
           {all.map(({ task, depth, id }) => {
@@ -85,17 +85,17 @@ export function RunOutput({ run }: { run: RunTree }) {
             const Icon = STATUS_STYLE[task.status].icon
             return (
               <section key={id} style={{ paddingLeft: depth * 20 }} className="mb-3 last:mb-0">
-                <div className={cn("flex items-center gap-1.5 text-xs", started ? "text-zinc-400" : "text-zinc-600")}>
+                <div className={cn("flex items-center gap-1.5 text-xs", started ? "text-muted-foreground" : "text-muted-foreground/60")}>
                   <Icon className={cn("size-3.5", STATUS_STYLE[task.status].className.split(" ")[0], running && "animate-spin")} />
-                  <span className="font-semibold text-zinc-200">{task.key}</span>
+                  <span className="text-foreground font-semibold">{task.key}</span>
                   <span>
                     {task.type === "pipeline" ? `sub-pipeline ${task.pipeline}` : task.type} · {task.status.toLowerCase()}
                   </span>
                 </div>
-                {task.error && <div className="whitespace-pre-wrap text-red-400">{task.error}</div>}
+                {task.error && <div className="text-destructive whitespace-pre-wrap">{task.error}</div>}
                 {lines.length > 0 && <div className="whitespace-pre-wrap">{lines.join("\n")}</div>}
                 {running && task.type !== "pipeline" && (
-                  <div className="flex items-center gap-1.5 text-zinc-500">
+                  <div className="text-muted-foreground flex items-center gap-1.5">
                     <Loader2 className="size-3.5 animate-spin" /> {lines.length ? "" : "waiting for output…"}
                   </div>
                 )}

@@ -49,12 +49,21 @@ which one is active: pipelines, runs and schedules come from the active
 workspace, shown in bold in the list on the left. The active choice is saved in
 `~/.prooflix/workspaces.json` (`PROOFLIX_HOME`).
 
+A workspace has two data folders, and either can live elsewhere and be used in
+place (select the workspace's top folder, then **Change**):
+
+- **Source data folder** (`source/`): the raw files pipelines read, never written
+  to. Server default `PROOFLIX_SOURCE_DATA` (Helm `sourceData`).
+- **Data lake folder** (`data/`): what pipelines build, `data/<catalog>/<schema>/<table>/`
+  (bronze, gold) and their checkpoints (`data/<catalog>/checkpoint/`); the catalog
+  and SQL editor read it. Server default `PROOFLIX_DATA_LAKE` (Helm `dataLake`).
+
 ## Add pipelines
 
 A new workspace starts empty. Write pipelines in it, or open
-**Workspace → Import code** and choose a project folder that has
-`pipelines/*.yaml` and its Python code in `src/`. Each imported project lives in
-its own folder in the active workspace, and its pipelines appear in the
+**Workspace → Import Workspace** and choose a folder on your computer that has
+`pipelines/*.yaml` and its Python code in `src/`. It is copied into
+`workspaces/` as a new workspace and made active, and its pipelines appear in the
 **Pipelines** tab, where **Run** starts them and clicking a task shows what it
 printed.
 

@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import {
   TERMINAL_STATUSES,
   type PipelineDetail,
+  type SystemParameter,
   type PipelineSummary,
   type Run,
   type RunTree,
@@ -12,7 +13,9 @@ import {
   type TaskCode,
   type CatalogImportResult,
   type CatalogSchema,
-  type ImportResult,
+  type LinkedFolder,
+  type LinkedFolderKind,
+  type ImportWorkspaceResult,
   type RemoveResult,
   type DirListing,
   type ValidationResult,
@@ -97,12 +100,10 @@ export const api = {
   getRunTree: (id: string) => request<RunTree>(`/runs/${id}/tree`),
   cancelRun: (id: string) => request<Run>(`/runs/${id}/cancel`, { method: "POST" }),
   workspaceTree: () => request<WorkspaceNode>("/workspace/tree"),
+  linkedFolder: (kind: LinkedFolderKind) => request<LinkedFolder>(`/workspace/folders/${kind}`),
+  setLinkedFolder: (kind: LinkedFolderKind, path: string | null) =>
+    request<LinkedFolder>(`/workspace/folders/${kind}`, { method: "PUT", body: JSON.stringify({ path }) }),
   workspaceFile: (path: string) => request<WorkspaceFile>(`/workspace/file?${new URLSearchParams({ path })}`),
-  workspaceImport: (files: { path: string; content_base64: string }[], overwrite = false) =>
-    request<ImportResult>("/workspace/import", {
-      method: "POST",
-      body: JSON.stringify({ files, overwrite }),
-    }),
   removeWorkspaceItem: (path: string) =>
     request<RemoveResult>(`/workspace/item?${new URLSearchParams({ path })}`, { method: "DELETE" }),
   workspaces: () => request<WorkspaceList>("/workspaces"),
@@ -110,6 +111,16 @@ export const api = {
     request<WorkspaceEntry>("/workspaces", { method: "POST", body: JSON.stringify({ parent, name }) }),
   activateWorkspace: (path: string) =>
     request<WorkspaceList>("/workspaces/active", { method: "PUT", body: JSON.stringify({ path }) }),
+  importWorkspace: (
+    name: string,
+    files: { path: string; content_base64: string }[],
+    activate = true,
+    overwrite = false,
+  ) =>
+    request<ImportWorkspaceResult>("/workspaces/import", {
+      method: "POST",
+      body: JSON.stringify({ name, files, activate, overwrite }),
+    }),
   forgetWorkspace: (path: string) =>
     request<WorkspaceList>(`/workspaces?${new URLSearchParams({ path })}`, { method: "DELETE" }),
   listDirs: (path?: string) => request<DirListing>(`/fs/dirs${path ? `?${new URLSearchParams({ path })}` : ""}`),
@@ -122,6 +133,7 @@ export const api = {
   sqlTables: () => request<SqlTable[]>("/sql/tables"),
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
+  systemParameters: () => request<SystemParameter[]>("/system/parameters"),
 }
 
 const isActive = (r?: { status: Run["status"] }) => !!r && !TERMINAL_STATUSES.includes(r.status)
@@ -210,6 +222,22 @@ export function useDeletePipeline() {
   })
 }
 
+export const useLinkedFolder = (kind: LinkedFolderKind) =>
+  useQuery({ queryKey: ["workspace", "folders", kind], queryFn: () => api.linkedFolder(kind) })
+
+/** Point the active workspace's source/ or data/ at another folder: the tree, catalog and SQL change with it. */
+export function useSetLinkedFolder(kind: LinkedFolderKind) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (path: string | null) => api.setLinkedFolder(kind, path),
+    onSuccess: (data) => {
+      qc.setQueryData(["workspace", "folders", kind], data)
+      qc.invalidateQueries({ queryKey: ["workspace", "tree"] })
+      qc.invalidateQueries({ queryKey: ["sql"] })
+    },
+  })
+}
+
 export const useWorkspaceTree = () => useQuery({ queryKey: ["workspace", "tree"], queryFn: api.workspaceTree })
 
 export const useWorkspaceFile = (path: string | null) =>
@@ -218,6 +246,9 @@ export const useWorkspaceFile = (path: string | null) =>
     queryFn: () => api.workspaceFile(path!),
     enabled: !!path,
   })
+
+export const useSystemParameters = () =>
+  useQuery({ queryKey: ["system", "parameters"], queryFn: api.systemParameters })
 
 export const useWorkspaces = () => useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces })
 
@@ -252,7 +283,12 @@ export function useForgetWorkspace() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (path: string) => api.forgetWorkspace(path),
-    onSuccess: (data) => qc.setQueryData(["workspaces"], data),
+    onSuccess: (data) => {
+      const before = qc.getQueryData<WorkspaceList>(["workspaces"])?.active
+      qc.setQueryData(["workspaces"], data)
+      // removing the active workspace switched to another: every page's data changes with it
+      if (before !== data.active) qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "workspaces" })
+    },
   })
 }
 
@@ -264,15 +300,25 @@ export const useSqlTables = () => useQuery({ queryKey: ["sql", "tables"], queryF
 export const useSqlQuery = () =>
   useMutation({ mutationFn: ({ sql, limit }: { sql: string; limit?: number }) => api.sqlQuery(sql, limit) })
 
+/** Upload a folder as a new workspace; when it is made active, every page's data changes with it. */
 export function useImportWorkspace() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ files, overwrite }: { files: { path: string; content_base64: string }[]; overwrite?: boolean }) =>
-      api.workspaceImport(files, overwrite),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workspace"] })
-      qc.invalidateQueries({ queryKey: ["pipelines"] })
-      qc.invalidateQueries({ queryKey: ["sql"] })
+    mutationFn: ({
+      name,
+      files,
+      activate,
+      overwrite = false,
+    }: {
+      name: string
+      files: { path: string; content_base64: string }[]
+      activate: boolean
+      /** update the existing workspace of that name */
+      overwrite?: boolean
+    }) => api.importWorkspace(name, files, activate, overwrite),
+    onSuccess: (r) => {
+      if (r.workspace.active) qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "workspaces" })
+      qc.invalidateQueries({ queryKey: ["workspaces"] })
     },
   })
 }

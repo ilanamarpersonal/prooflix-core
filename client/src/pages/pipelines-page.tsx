@@ -103,13 +103,13 @@ export function PipelinesPage() {
                 <div>
                   <p className="text-foreground font-medium">No pipelines yet</p>
                   <p>
-                    Import a project with a <code className="font-mono">pipelines/</code> folder (and its code in{" "}
+                    Import a workspace with a <code className="font-mono">pipelines/</code> folder (and its code in{" "}
                     <code className="font-mono">src/</code>) to run its pipelines here.
                   </p>
                 </div>
                 <Button asChild>
                   <Link to="/workspace">
-                    <FolderInput /> Import code in Workspace
+                    <FolderInput /> Import Workspace
                   </Link>
                 </Button>
               </div>

@@ -47,7 +47,7 @@ client/
     │   ├── run-output.tsx          every task's printout, live
     │   ├── task-run-panel.tsx      one task's status, error and printout
     │   ├── run-tree-view.tsx       nested run → task → sub-run hierarchy
-    │   ├── import-code-panel.tsx   upload a project folder into the workspace
+    │   ├── import-workspace-panel.tsx  upload a folder as a new workspace
     │   ├── new-workspace-panel.tsx, switch-workspace-panel.tsx, folder-picker.tsx
     │   ├── catalog-import-panel.tsx, data-grid.tsx   catalog import, result grids
     │   └── ...                     status-badge, page-header, pager, error-alert, ...
@@ -96,7 +96,7 @@ flowchart LR
 | **Run detail** | The DAG colored by live task status, the run hierarchy, parameters and outputs. Below the graph, the **Output** panel: every task's printout in the order they ran (sub-pipeline tasks nested), updating live and following the newest line. Clicking a task shows only its printout. Cancel while active, Run again when finished. |
 | **SQL Editor** | Query tabs saved in the browser, completion of table and column names, results grid, Save SQL / Load SQL (`.sql` files), schema list beside the editor. |
 | **Catalog** | Schemas (a project's `data/` or a folder in `catalog/`) and their tables with columns and row counts; Import CSV/JSON as tables; Export as CSV or Parquet ZIP. |
-| **Workspace** | The list of workspaces (the active one in bold) above the active workspace's file tree; a file or folder viewer; **Import code**, **New workspace** (folder picker on the server, creates `pipelines/` and `src/`), **Switch workspace** (make another active, open another folder, remove from list). |
+| **Workspace** | The list of workspaces (the active one in bold) above the active workspace's file tree; a file or folder viewer (the top folder has **Remove workspace**); **Import Workspace** (upload a folder from this computer as a new workspace), **New workspace** (folder picker on the server, creates `pipelines/` and `src/`), **Switch workspace** (make another active, open another folder, remove from list). Removing a workspace only takes it off the list. |
 
 ## Component tree
 

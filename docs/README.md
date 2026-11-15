@@ -15,7 +15,7 @@ Current capabilities:
 - **Runs**: live status, every task's printout as it runs, nested sub-runs,
   run history per workspace.
 - **Workspaces**: a folder of workspaces, one active at a time; create, switch
-  and import code from the web client.
+  import a folder as a workspace and remove one from the list in the web client.
 - **SQL and catalog**: DuckDB queries over Parquet files, import (CSV/JSON) and
   export (CSV/Parquet).
 - **Deployment**: one Docker image, a Helm chart and a Terraform configuration.

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import re
 import shutil
 import time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from .. import linked_folders
+from ..linked_folders import KINDS, LINK_NAMES, FolderError, Kind
 from ..pipelines import Workspace
 from .deps import get_workspace
 
@@ -57,12 +60,22 @@ def _node(root: Path, p: Path) -> WorkspaceNode:
 
 
 def resolve_inside(root: Path, rel: str) -> Path:
-    """Resolve ``rel`` under ``root``, refusing paths that escape it."""
+    """Resolve ``rel`` under ``root``, refusing paths that escape it.
+
+    ``source/`` and ``data/`` may be links to folders elsewhere (see
+    linked_folders.py): paths through them resolve there.
+    """
     root = root.resolve()
     target = (root / rel).resolve()
-    if target != root and root not in target.parents:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Path is outside the workspace")
-    return target
+    inside = lambda base: target == base or base in target.parents  # noqa: E731
+    lexical = Path(os.path.normpath(root / rel))
+    if inside(root):
+        return target
+    for name in LINK_NAMES:
+        link = root / name
+        if link.is_symlink() and (lexical == link or link in lexical.parents) and inside(link.resolve()):
+            return target
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, "Path is outside the workspace")
 
 
 MAX_IMPORT_FILES = 2000
@@ -185,9 +198,16 @@ def remove_item(
 
 @router.get("/tree", response_model=WorkspaceNode)
 async def tree(ws: Workspace = Depends(get_workspace)) -> WorkspaceNode:
+    """The workspace's files, without the data lake folder.
+
+    ``data/`` holds what pipelines build (browsed in the Catalog and SQL editor tabs),
+    so it is left out of the tree.
+    """
     root = ws.root.resolve()
     node = _node(root, root)
     node.name = root.name
+    data_lake = KINDS["data_lake"].link
+    node.children = [c for c in node.children or [] if c.name != data_lake]
     return node
 
 
@@ -196,7 +216,8 @@ async def read_file(
     path: str = Query(..., min_length=1), ws: Workspace = Depends(get_workspace)
 ) -> WorkspaceFile:
     target = resolve_inside(ws.root, path)
-    parts = target.relative_to(ws.root.resolve()).parts
+    # as asked for: a file in a linked data lake is outside the workspace folder itself
+    parts = Path(os.path.normpath(path)).parts
     hidden = any(part.startswith(".") or part in HIDDEN_NAMES for part in parts)
     if hidden or not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"File '{path}' not found")
@@ -210,3 +231,70 @@ async def read_file(
         content=raw.decode("utf-8", errors="replace"),
         truncated=size > MAX_FILE_BYTES,
     )
+
+
+# ------------------------------------------------------------------ linked folders
+URL_KINDS: dict[str, Kind] = {"source-data": "source_data", "data-lake": "data_lake"}
+
+
+class LinkedFolderOut(BaseModel):
+    kind: Kind
+    link: str  # the folder's name in the workspace: "source" or "data"
+    path: str  # the folder it uses
+    origin: Literal["workspace", "server", "default"]  # the workspace's choice, the server default, or its own folder
+    workspace_setting: str | None  # the workspace's own choice
+    server_default: str | None  # PROOFLIX_SOURCE_DATA / PROOFLIX_DATA_LAKE (Helm sourceData / dataLake)
+    linked: bool  # the workspace's folder is a link to it
+
+
+class LinkedFolderIn(BaseModel):
+    path: str | None = Field(None, description="absolute folder; null goes back to the server default or the workspace's own")
+
+
+def _kind(name: str) -> Kind:
+    if name not in URL_KINDS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown folder '{name}' (source-data or data-lake)")
+    return URL_KINDS[name]
+
+
+def _folder_out(ws: Workspace, r: linked_folders.Resolved) -> LinkedFolderOut:
+    here = ws.root.resolve() / KINDS[r.kind].link
+    return LinkedFolderOut(
+        kind=r.kind,
+        link=KINDS[r.kind].link,
+        path=str(r.path),
+        origin=r.origin,
+        workspace_setting=str(r.workspace_setting) if r.workspace_setting else None,
+        server_default=str(r.server_default) if r.server_default else None,
+        linked=here.is_symlink() and here.resolve() == r.path,
+    )
+
+
+@router.get("/folders/{name}", response_model=LinkedFolderOut)
+def get_linked_folder(name: str, request: Request, ws: Workspace = Depends(get_workspace)) -> LinkedFolderOut:
+    """The active workspace's source data (``source-data``) or data lake (``data-lake``) folder."""
+    kind = _kind(name)
+    return _folder_out(ws, linked_folders.resolve(ws.root, kind, request.app.state.settings.folder_defaults[kind]))
+
+
+@router.put("/folders/{name}", response_model=LinkedFolderOut)
+def set_linked_folder(
+    name: str, body: LinkedFolderIn, request: Request, ws: Workspace = Depends(get_workspace)
+) -> LinkedFolderOut:
+    """Choose the active workspace's source data or data lake folder: ``source/`` or
+    ``data/`` becomes a link to it.
+
+    ``400`` when the folder doesn't exist, is inside the workspace, or the
+    workspace's own folder holds files (they are never replaced).
+    """
+    kind = _kind(name)
+    path: Path | None = None
+    if body.path is not None and body.path.strip():
+        path = Path(body.path.strip()).expanduser()
+        if not path.is_absolute():
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{body.path}' is not an absolute path")
+    try:
+        r = linked_folders.set_workspace_setting(ws.root, kind, path, request.app.state.settings.folder_defaults[kind])
+    except (FolderError, OSError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _folder_out(ws, r)

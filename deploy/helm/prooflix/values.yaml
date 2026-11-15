@@ -18,6 +18,37 @@ prooflix:
   #  - name: MY_SETTING
   #    value: "x"
 
+# Source data: the raw files pipelines read (bronze's input), PROOFLIX_SOURCE_DATA.
+# Each workspace's source/ folder becomes a link to it; a workspace can still
+# choose its own folder in the web client. Prooflix never writes to it, so its
+# volume is mounted read-only.
+sourceData:
+  path: ""           # "" = volume.mountPath when the volume is enabled, else each workspace's own source/
+  volume:
+    enabled: false   # mount a volume holding the source files
+    mountPath: /source-data
+    readOnly: true
+    size: 100Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    existingClaim: ""  # use a PVC you created yourself (usually one already holding the files)
+
+# The data lake: what pipelines build, data/<catalog>/<schema>/<table>/ (bronze,
+# gold) and their checkpoints, data/<catalog>/checkpoint/; the catalog and the SQL
+# editor read it. PROOFLIX_DATA_LAKE. Each workspace's data/ folder becomes a link
+# to it. Data lakes get big, so they can have a volume of their own.
+dataLake:
+  path: ""           # "" = volume.mountPath when the volume is enabled, else each workspace's own data/ (on the main volume)
+  volume:
+    enabled: false   # mount a separate volume for the data lake
+    mountPath: /datalake
+    size: 100Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    existingClaim: ""  # use a PVC you created yourself (e.g. one bound to existing data)
+
 # Workspace (imported projects, run history) and catalog, mounted at /data.
 persistence:
   enabled: true      # false: an emptyDir, so everything is lost when the pod goes

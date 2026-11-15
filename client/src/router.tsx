@@ -8,6 +8,7 @@ import { PipelinesPage } from "@/pages/pipelines-page"
 import { RunDetailPage } from "@/pages/run-detail-page"
 import { RunsPage } from "@/pages/runs-page"
 import { SqlEditorPage } from "@/pages/sql-editor-page"
+import { SystemPage } from "@/pages/system-page"
 import { WorkspacePage } from "@/pages/workspace-page"
 
 // Each top-level area is a tab; see SECTIONS in lib/tabs.ts. "/" goes to Pipelines.
@@ -25,6 +26,7 @@ export const router = createBrowserRouter([
       { path: "sql", element: <SqlEditorPage /> },
       { path: "workspace", element: <WorkspacePage /> },
       { path: "catalog", element: <CatalogPage /> },
+      { path: "system", element: <SystemPage /> },
     ],
   },
 ])

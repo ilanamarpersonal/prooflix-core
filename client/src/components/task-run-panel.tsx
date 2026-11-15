@@ -47,9 +47,9 @@ function Printout({ task }: { task: TaskRun }) {
     )
   }
   return (
-    <pre className="max-h-[28rem] overflow-auto rounded-md bg-zinc-950 p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap text-zinc-100">
+    <pre className="bg-card text-foreground max-h-[28rem] overflow-auto rounded-md border p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap">
       {lines.join("\n")}
-      {running && <Loader2 className="mt-1 size-3.5 animate-spin text-zinc-500" />}
+      {running && <Loader2 className="text-muted-foreground mt-1 size-3.5 animate-spin" />}
     </pre>
   )
 }

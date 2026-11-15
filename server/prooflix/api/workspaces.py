@@ -6,6 +6,8 @@ folder picker (a browser can't hand the server a path of its own).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from ..runtime import WorkspaceBusy, switch_workspace
 from ..workspaces import WorkspaceRegistry, create_workspace_dirs
+from .workspace import MAX_IMPORT_BYTES, ImportFile, _clean_import_path, resolve_inside
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 fs_router = APIRouter(prefix="/api/fs", tags=["workspaces"])
@@ -32,7 +35,7 @@ class WorkspaceEntry(BaseModel):
 
 
 class WorkspaceList(BaseModel):
-    active: str
+    active: str | None  # None while the list is empty
     root: str | None  # the workspaces folder
     workspaces: list[WorkspaceEntry]
 
@@ -40,6 +43,21 @@ class WorkspaceList(BaseModel):
 class CreateWorkspaceIn(BaseModel):
     parent: str = Field(..., min_length=1, description="existing folder to create the workspace in")
     name: str = Field(..., min_length=1, max_length=100, description="name of the new folder")
+
+
+class ImportWorkspaceIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="name of the new workspace folder")
+    files: list[ImportFile] = Field(..., min_length=1, max_length=2000)  # paths relative to the new workspace
+    activate: bool = True
+    # update an existing workspace of that name: uploaded files replace those
+    # with the same path, everything else in it (run history too) is kept
+    overwrite: bool = False
+
+
+class ImportWorkspaceResult(BaseModel):
+    workspace: WorkspaceEntry
+    written: int  # number of files
+    pipelines: list[str]  # ids of the pipelines it brought
 
 
 class PathIn(BaseModel):
@@ -68,11 +86,21 @@ def _absolute(raw: str) -> Path:
     return path.resolve()
 
 
+def _check_name(raw: str) -> str:
+    name = raw.strip()
+    if not NAME_RE.match(name):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Use letters, digits, spaces, '.', '_' or '-' for the name, starting with a letter or digit",
+        )
+    return name
+
+
 def _listing(registry: WorkspaceRegistry) -> WorkspaceList:
-    active = registry.active
+    active = registry.active if registry.has_active else None
     default = registry.default
     return WorkspaceList(
-        active=str(active),
+        active=str(active) if active else None,
         root=str(registry.root) if registry.root else None,
         workspaces=[
             WorkspaceEntry(
@@ -94,17 +122,13 @@ def list_workspaces(request: Request) -> WorkspaceList:
 
 
 @router.post("", response_model=WorkspaceEntry, status_code=status.HTTP_201_CREATED)
-def create_workspace(body: CreateWorkspaceIn, request: Request) -> WorkspaceEntry:
+async def create_workspace(body: CreateWorkspaceIn, request: Request) -> WorkspaceEntry:
     """Create ``<parent>/<name>/`` with ``pipelines/`` and ``src/``, and list it.
 
-    The new workspace is not made active; that is a separate choice.
+    The new workspace is not made active (a separate choice), unless the list
+    was empty.
     """
-    name = body.name.strip()
-    if not NAME_RE.match(name):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Use letters, digits, spaces, '.', '_' or '-' for the name, starting with a letter or digit",
-        )
+    name = _check_name(body.name)
     parent = _absolute(body.parent)
     if not parent.is_dir():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Folder '{parent}' does not exist")
@@ -118,7 +142,88 @@ def create_workspace(body: CreateWorkspaceIn, request: Request) -> WorkspaceEntr
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Could not create '{target}': {exc.strerror}") from exc
     registry = _registry(request)
     registry.add(target)
+    if not registry.has_active:  # the first workspace in an empty list becomes active
+        await switch_workspace(request.app, target)
     return next(w for w in _listing(registry).workspaces if w.path == str(target.resolve()))
+
+
+@router.post("/import", response_model=ImportWorkspaceResult, status_code=status.HTTP_201_CREATED)
+async def import_workspace(body: ImportWorkspaceIn, request: Request) -> ImportWorkspaceResult:
+    """Create a workspace in the workspaces folder from uploaded files (a folder
+    chosen in the browser), and make it active unless ``activate`` is false.
+
+    ``pipelines/`` and ``src/`` are created when the upload has none. Nothing is
+    written when a path is invalid or the upload is too large. When the folder
+    exists, the import is refused (``409`` with ``exists``, ``path`` and whether
+    it is a workspace removed from the list) unless ``overwrite`` is set and the
+    folder is a workspace; it is then listed again and updated.
+    """
+    registry = _registry(request)
+    if registry.root is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "There is no workspaces folder to import into")
+    name = _check_name(body.name)
+    target = registry.root / name
+    is_workspace = (target / "pipelines").is_dir()
+    if target.exists() and not (body.overwrite and is_workspace):
+        removed = is_workspace and target.resolve() not in registry.paths()
+        message = (
+            f"A workspace named '{name}' already exists"
+            + (" (removed from the list)" if removed else "")
+            + ": use it, update it with this folder, or choose another name"
+            if is_workspace
+            else f"'{name}' already exists in the workspaces folder and is not a workspace; choose another name"
+        )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "errors": [message],
+                "exists": True,
+                "workspace": is_workspace,
+                "removed": removed,
+                "path": str(target.resolve()),
+            },
+        )
+
+    decoded: dict[str, bytes] = {}
+    total = 0
+    for f in body.files:
+        rel = _clean_import_path(f.path)
+        resolve_inside(target, rel)
+        try:
+            data = base64.b64decode(f.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{rel}' is not valid base64") from exc
+        total += len(data)
+        if total > MAX_IMPORT_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"Import is larger than {MAX_IMPORT_BYTES // (1024 * 1024)} MB",
+            )
+        decoded[rel] = data
+    # "a" and "a/b" can't both be files
+    for rel in decoded:
+        if any(parent.as_posix() in decoded for parent in Path(rel).parents[:-1]):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{rel}' is inside a file of the upload")
+
+    try:
+        for rel, data in decoded.items():
+            dest = target / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        create_workspace_dirs(target)
+    except OSError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Could not write '{target}': {exc.strerror}") from exc
+
+    registry.add(target)
+    if body.activate or not registry.has_active:
+        try:
+            await switch_workspace(request.app, target)
+        except WorkspaceBusy as exc:
+            # imported and listed, just not active yet
+            raise HTTPException(status.HTTP_409_CONFLICT, f"Imported '{name}', but could not switch to it: {exc}") from exc
+    pipelines = sorted(Path(rel).stem for rel in decoded if re.fullmatch(r"pipelines/[^/]+\.ya?ml", rel))
+    entry = next(w for w in _listing(registry).workspaces if w.path == str(target.resolve()))
+    return ImportWorkspaceResult(workspace=entry, written=len(decoded), pipelines=pipelines)
 
 
 @router.put("/active", response_model=WorkspaceList)
@@ -135,12 +240,23 @@ async def set_active(body: PathIn, request: Request) -> WorkspaceList:
 
 
 @router.delete("", response_model=WorkspaceList)
-def forget_workspace(request: Request, path: str = Query(..., min_length=1)) -> WorkspaceList:
-    """Remove a workspace from the list. Its folder and files are left alone."""
+async def forget_workspace(request: Request, path: str = Query(..., min_length=1)) -> WorkspaceList:
+    """Remove a workspace from the list. Its folder and files are left alone.
+
+    Removing the active workspace first switches to another one (a new
+    ``default`` workspace when it was the only one), which waits for no runs.
+    """
     registry = _registry(request)
+    target = _absolute(path)
     try:
-        registry.forget(_absolute(path))
-    except ValueError as exc:
+        if registry.has_active and target == registry.active:
+            if target == registry.explicit_default:
+                raise ValueError("The default workspace (PROOFLIX_WORKSPACE) can't be removed")
+            await switch_workspace(request.app, registry.replacement_for(target))
+        registry.forget(target)
+    except WorkspaceBusy as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (ValueError, OSError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return _listing(registry)
 

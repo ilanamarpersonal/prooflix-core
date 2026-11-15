@@ -226,12 +226,18 @@ def test_first_workspace_in_folder_is_default_and_active(tmp_path):
         assert c.get("/api/health").json()["workspace"] == str((root / "Alpha").resolve())
 
 
-def test_empty_folder_gets_a_default_workspace(tmp_path):
+def test_empty_folder_means_an_empty_list(tmp_path):
     root = tmp_path / "workspaces"
     with root_client(root, tmp_path) as c:
         body = c.get("/api/workspaces").json()
-    assert body["active"] == str((root / "default").resolve())
-    assert (root / "default" / "pipelines").is_dir() and (root / "default" / "src").is_dir()
+        assert body["active"] is None and body["workspaces"] == []
+        assert c.get("/api/pipelines").json() == []  # runs on the empty placeholder
+        # the first workspace created becomes active
+        c.post("/api/workspaces", json={"parent": str(root), "name": "first"})
+        body = c.get("/api/workspaces").json()
+        assert body["active"] == str((root / "first").resolve())
+        assert c.get("/api/health").json()["workspace"] == str((root / "first").resolve())
+    assert not (root / "default").exists()
 
 
 def test_workspace_created_in_folder_is_listed_by_name(tmp_path):
@@ -245,13 +251,9 @@ def test_workspace_created_in_folder_is_listed_by_name(tmp_path):
         assert [w["name"] for w in body["workspaces"]] == ["aaa", "main"]  # by name
         # "aaa" is now first, but the active workspace doesn't change by itself
         assert body["active"] == str((root / "main").resolve())
-        # in-folder workspaces can't be forgotten: they'd be found again
-        c.post("/api/workspaces", json={"parent": str(root), "name": "zzz"})
-        r = c.delete("/api/workspaces", params={"path": str(root / "zzz")})
-        assert r.status_code == 400 and "workspaces folder" in r.json()["detail"]
     # the active workspace is saved; in-folder workspaces aren't (they're found by name)
     saved = json.loads((tmp_path / "home" / "workspaces.json").read_text())
-    assert saved == {"active": str((root / "main").resolve()), "workspaces": []}
+    assert saved == {"active": str((root / "main").resolve()), "workspaces": [], "hidden": []}
 
 
 def test_active_stays_after_restart_when_a_new_first_workspace_appears(tmp_path):
@@ -291,3 +293,150 @@ def test_explicit_default_wins_over_first_in_folder(tmp_path):
 def test_catalog_sits_next_to_the_workspaces_folder(tmp_path):
     settings = Settings(workspaces_root=tmp_path / "workspaces", workspace=tmp_path / "workspaces" / "a")
     assert settings.catalog_dir == tmp_path / "catalog"
+
+
+def test_first_in_folder_workspace_can_be_removed_once_another_is_active(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "aaa")
+    make_ws(root / "bbb")
+    with root_client(root, tmp_path) as c:
+        c.put("/api/workspaces/active", json={"path": str(root / "bbb")})
+        r = c.delete("/api/workspaces", params={"path": str(root / "aaa")})
+        assert r.status_code == 200
+        assert [(w["name"], w["active"], w["default"]) for w in r.json()["workspaces"]] == [("bbb", True, True)]
+
+
+def test_removing_in_folder_workspace_keeps_its_folder_and_stays_removed(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    make_ws(root / "old")
+    (root / "old" / "pipelines" / "p.yaml").write_text("name: p\ntasks: []\n")
+    with root_client(root, tmp_path) as c:
+        r = c.delete("/api/workspaces", params={"path": str(root / "old")})
+        assert r.status_code == 200
+        assert [w["name"] for w in r.json()["workspaces"]] == ["main"]
+        assert (root / "old" / "pipelines" / "p.yaml").is_file()  # nothing moved or deleted
+    # still removed after a restart
+    with root_client(root, tmp_path) as c:
+        assert [w["name"] for w in c.get("/api/workspaces").json()["workspaces"]] == ["main"]
+        # opening it again lists it again
+        c.put("/api/workspaces/active", json={"path": str(root / "old")})
+        assert [w["name"] for w in c.get("/api/workspaces").json()["workspaces"]] == ["main", "old"]
+
+
+def test_removing_active_workspace_switches_to_another_first(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "aaa")
+    make_ws(root / "bbb")
+    with root_client(root, tmp_path) as c:
+        assert c.get("/api/workspaces").json()["active"] == str((root / "aaa").resolve())
+        r = c.delete("/api/workspaces", params={"path": str(root / "aaa")})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["active"] == str((root / "bbb").resolve())
+        assert [w["name"] for w in body["workspaces"]] == ["bbb"]
+        assert c.get("/api/health").json()["workspace"] == str((root / "bbb").resolve())
+        assert (root / "aaa" / "pipelines").is_dir()
+
+
+def test_removing_the_last_workspace_leaves_the_list_empty(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "only")
+    (root / "only" / "pipelines" / "p.yaml").write_text("name: p\ntasks: []\n")
+    with root_client(root, tmp_path) as c:
+        assert len(c.get("/api/pipelines").json()) == 1
+        r = c.delete("/api/workspaces", params={"path": str(root / "only")})
+        assert r.status_code == 200
+        assert r.json()["active"] is None and r.json()["workspaces"] == []
+        assert c.get("/api/pipelines").json() == []
+        assert (root / "only" / "pipelines" / "p.yaml").is_file()
+    # empty after a restart too, and no workspace was created
+    with root_client(root, tmp_path) as c:
+        assert c.get("/api/workspaces").json()["workspaces"] == []
+    assert sorted(d.name for d in root.iterdir()) == [".no-workspace", "only"]
+
+
+def _b64(text: str) -> str:
+    import base64
+
+    return base64.b64encode(text.encode()).decode()
+
+
+def test_import_workspace_creates_lists_and_activates_it(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    files = [
+        {"path": "pipelines/hello.yaml", "content_base64": _b64("name: Hello\ntasks:\n  - key: a\n    type: shell\n    command: echo hi\n")},
+        {"path": "README.md", "content_base64": _b64("# bundle\n")},
+    ]
+    with root_client(root, tmp_path) as c:
+        r = c.post("/api/workspaces/import", json={"name": "bundle", "files": files})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["written"] == 2 and body["pipelines"] == ["hello"]
+        assert body["workspace"]["name"] == "bundle" and body["workspace"]["active"] is True
+        assert (root / "bundle" / "src").is_dir()  # created when missing
+        assert [p["id"] for p in c.get("/api/pipelines").json()] == ["hello"]
+        # the same name again is refused, and nothing is written
+        r = c.post("/api/workspaces/import", json={"name": "bundle", "files": files})
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert detail["exists"] and detail["workspace"] and not detail["removed"]
+        assert detail["path"] == str((root / "bundle").resolve())
+        # without activate it is only listed
+        r = c.post("/api/workspaces/import", json={"name": "other", "files": files, "activate": False})
+        assert r.json()["workspace"]["active"] is False
+        assert c.get("/api/workspaces").json()["active"] == str((root / "bundle").resolve())
+
+
+@pytest.mark.parametrize(
+    "path, name, code",
+    [("../evil.txt", "x", 400), (".git/config", "x", 400), ("a.txt", "../x", 400), ("a.txt", ".hidden", 400)],
+)
+def test_import_workspace_rejects_bad_paths_and_names(tmp_path, path, name, code):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    with root_client(root, tmp_path) as c:
+        r = c.post("/api/workspaces/import", json={"name": name, "files": [{"path": path, "content_base64": _b64("x")}]})
+        assert r.status_code == code
+    assert sorted(d.name for d in root.iterdir()) == ["main"]
+
+
+def test_import_again_after_removing_updates_the_existing_workspace(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    v1 = [
+        {"path": "pipelines/a.yaml", "content_base64": _b64("name: A\ntasks:\n  - key: t\n    type: shell\n    command: echo 1\n")},
+        {"path": "notes.txt", "content_base64": _b64("v1")},
+    ]
+    with root_client(root, tmp_path) as c:
+        c.post("/api/workspaces/import", json={"name": "bundle", "files": v1, "activate": False})
+        (root / "bundle" / "local.txt").write_text("kept")
+        c.delete("/api/workspaces", params={"path": str(root / "bundle")})
+        # importing it again tells the client it exists and was removed
+        r = c.post("/api/workspaces/import", json={"name": "bundle", "files": v1})
+        assert r.status_code == 409 and r.json()["detail"]["removed"] is True
+        # overwrite updates it, lists it again and makes it active
+        v2 = [{"path": "notes.txt", "content_base64": _b64("v2")}]
+        r = c.post("/api/workspaces/import", json={"name": "bundle", "files": v2, "overwrite": True})
+        assert r.status_code == 201, r.text
+        assert r.json()["workspace"]["active"] is True
+        assert (root / "bundle" / "notes.txt").read_text() == "v2"
+        assert (root / "bundle" / "local.txt").read_text() == "kept"  # the rest is kept
+        assert (root / "bundle" / "pipelines" / "a.yaml").is_file()
+        assert [w["name"] for w in c.get("/api/workspaces").json()["workspaces"]] == ["bundle", "main"]
+
+
+def test_import_never_overwrites_a_folder_that_is_not_a_workspace(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    (root / "stuff").mkdir()
+    (root / "stuff" / "f.txt").write_text("mine")
+    with root_client(root, tmp_path) as c:
+        r = c.post(
+            "/api/workspaces/import",
+            json={"name": "stuff", "files": [{"path": "f.txt", "content_base64": _b64("x")}], "overwrite": True},
+        )
+        assert r.status_code == 409 and r.json()["detail"]["workspace"] is False
+    assert (root / "stuff" / "f.txt").read_text() == "mine"
+

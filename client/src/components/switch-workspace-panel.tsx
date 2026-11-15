@@ -10,12 +10,21 @@ import { useActivateWorkspace, useForgetWorkspace, useWorkspaces } from "@/lib/a
 import { cn } from "@/lib/utils"
 
 /** Choose the active workspace: the one pipelines, runs and schedules come from. */
-export function SwitchWorkspacePanel({ onClose, onSwitched }: { onClose: () => void; onSwitched: () => void }) {
+export function SwitchWorkspacePanel({
+  onClose,
+  onSwitched,
+  openFolder = false,
+}: {
+  onClose: () => void
+  onSwitched: () => void
+  /** start with the "Open another folder" picker shown */
+  openFolder?: boolean
+}) {
   const workspaces = useWorkspaces()
   const activator = useActivateWorkspace()
   const forgetter = useForgetWorkspace()
   const [other, setOther] = useState("")
-  const [showOther, setShowOther] = useState(false)
+  const [showOther, setShowOther] = useState(openFolder)
 
   const activate = (path: string) => activator.mutate(path, { onSuccess: onSwitched })
   const busy = activator.isPending
@@ -54,7 +63,7 @@ export function SwitchWorkspacePanel({ onClose, onSwitched }: { onClose: () => v
               </div>
               {!w.active && (
                 <div className="ml-auto flex gap-2 pl-6">
-                  {!w.default && !w.in_root && (
+                  {(
                     <Button
                       variant="ghost"
                       size="sm"

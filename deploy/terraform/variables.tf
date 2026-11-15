@@ -63,6 +63,54 @@ variable "storage_class" {
   default     = ""
 }
 
+variable "source_data_path" {
+  description = "Source data folder in the pod (PROOFLIX_SOURCE_DATA: the raw files pipelines read); empty uses the source data volume's mount path, or each workspace's source/"
+  type        = string
+  default     = ""
+}
+
+variable "source_data_volume_enabled" {
+  description = "Mount a volume holding the source files at /source-data (read-only)"
+  type        = bool
+  default     = false
+}
+
+variable "source_data_volume_size" {
+  description = "Size of the source data volume, when the chart creates it"
+  type        = string
+  default     = "100Gi"
+}
+
+variable "source_data_existing_claim" {
+  description = "Use this existing PVC (usually one already holding the files) for the source data volume"
+  type        = string
+  default     = ""
+}
+
+variable "data_lake_path" {
+  description = "Data lake folder in the pod (PROOFLIX_DATA_LAKE: bronze, gold, checkpoints); empty uses the data lake volume's mount path, or each workspace's data/"
+  type        = string
+  default     = ""
+}
+
+variable "data_lake_volume_enabled" {
+  description = "Mount a separate volume for the data lake at /datalake"
+  type        = bool
+  default     = false
+}
+
+variable "data_lake_volume_size" {
+  description = "Size of the data lake volume"
+  type        = string
+  default     = "100Gi"
+}
+
+variable "data_lake_existing_claim" {
+  description = "Use this existing PVC for the data lake volume instead of creating one"
+  type        = string
+  default     = ""
+}
+
 variable "extra_values" {
   description = "More chart values (see deploy/helm/prooflix/values.yaml), merged last"
   type        = any

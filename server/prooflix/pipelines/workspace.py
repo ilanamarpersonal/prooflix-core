@@ -73,7 +73,7 @@ class Workspace:
                 for d in self.root.iterdir()
                 if d.is_dir()
                 and not d.name.startswith((".", "_"))
-                and d.name not in ("pipelines", "src", "data")
+                and d.name not in ("pipelines", "src", "data", "source")
                 and (d / "pipelines").is_dir()
             )
         return found
