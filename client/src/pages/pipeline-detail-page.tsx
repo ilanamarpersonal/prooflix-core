@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
-import { ArrowUpRight, FileCode2, List, PanelRightOpen, Trash2, Workflow, X } from "lucide-react"
+import { ArrowUpRight, FileCode2, List, Loader2, PanelRightOpen, Trash2, Workflow, X } from "lucide-react"
 
 import { ErrorAlert, ValidationErrors } from "@/components/error-alert"
 import { KeyValues } from "@/components/key-values"
@@ -13,6 +13,7 @@ import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu
 import { StatusBadge } from "@/components/status-badge"
 import { TaskTypeIcon } from "@/components/task-type-icon"
 import { RunningBadge, isRunActive } from "@/components/running-badge"
+import { StopButton } from "@/components/stop-button"
 import { TaskCodeView } from "@/components/task-code-view"
 import { TriggerCard } from "@/components/trigger-card"
 import { YamlEditor } from "@/components/yaml-editor"
@@ -22,6 +23,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, useDeletePipeline, usePipeline, useRuns } from "@/lib/api"
+import type { RunStatus } from "@/lib/types"
 import { cn, formatDateTime } from "@/lib/utils"
 
 export function PipelineDetailPage() {
@@ -45,6 +47,15 @@ export function PipelineDetailPage() {
   const activeRuns = runs.data?.filter((r) => r.pipeline === pipeline.id && isRunActive(r)) ?? []
   const running = activeRuns[0]
   const shown = running ?? latest // the run the card shows
+  // while a run is going, the graph shows each task's live status (the runs list polls every second)
+  const liveStatuses = running
+    ? (Object.fromEntries(Object.entries(running.tasks).map(([k, t]) => [k, t.status])) as Record<string, RunStatus>)
+    : undefined
+  const runningTasks = running
+    ? Object.entries(running.tasks)
+        .filter(([, t]) => t.status === "RUNNING")
+        .map(([k]) => k)
+    : []
   const tasks = (pipeline.spec?.tasks as Record<string, unknown>[] | undefined) ?? []
   const selectedTask = tasks.find((t) => t.key === selected)
 
@@ -104,6 +115,7 @@ export function PipelineDetailPage() {
                 </Link>
               </Button>
             )}
+            <StopButton runs={activeRuns} />
             <RunButton pipeline={pipeline} onNeedsParameters={() => setShowRunForm((v) => !v)} />
           </>
         }
@@ -126,6 +138,12 @@ export function PipelineDetailPage() {
                 {formatDateTime(shown.started_at ?? shown.created_at)}
                 {running && running.depth > 0 && " · as a sub-pipeline"}
               </span>
+              {runningTasks.length > 0 && (
+                <span className="text-status-running flex items-center gap-1.5 font-medium">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  now: <span className="font-mono">{runningTasks.join(", ")}</span>
+                </span>
+              )}
               <Button variant="outline" size="sm" className="ml-auto" asChild>
                 <Link to={`/runs/${shown.id}`}>
                   Open tasks and printout <ArrowUpRight />
@@ -156,6 +174,7 @@ export function PipelineDetailPage() {
               <PipelineGraph
                 nodes={pipeline.graph.nodes}
                 edges={pipeline.graph.edges}
+                statuses={liveStatuses}
                 selected={selected}
                 onSelect={setSelected}
                 actions={(n) => [

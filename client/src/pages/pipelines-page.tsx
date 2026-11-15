@@ -6,6 +6,7 @@ import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
 import { RunButton } from "@/components/run-button"
 import { RunningBadge, activeRunsByPipeline } from "@/components/running-badge"
+import { StopButton } from "@/components/stop-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -209,12 +210,15 @@ export function PipelinesPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <RunButton
-                            pipeline={p}
-                            size="sm"
-                            variant="outline"
-                            onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
-                          />
+                          <div className="flex flex-wrap items-center gap-1">
+                            <RunButton
+                              pipeline={p}
+                              size="sm"
+                              variant="outline"
+                              onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
+                            />
+                            <StopButton runs={activeRuns.get(p.id)} size="sm" />
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}

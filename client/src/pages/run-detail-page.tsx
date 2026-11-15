@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
-import { ArrowUpRight, Ban, FileCode2, List, PanelRightOpen, RotateCw, ScrollText, Workflow } from "lucide-react"
+import { ArrowUpRight, FileCode2, List, PanelRightOpen, RotateCw, ScrollText, Square, Workflow } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { KeyValues } from "@/components/key-values"
@@ -132,8 +132,14 @@ export function RunDetailPage() {
               </Link>
             </Button>
             {active ? (
-              <Button variant="outline" onClick={() => cancel.mutate(run.id)} disabled={cancel.isPending}>
-                <Ban /> Cancel
+              <Button
+                variant="outline"
+                onClick={() => cancel.mutate(run.id)}
+                disabled={cancel.isPending}
+                className="text-destructive hover:text-destructive"
+                title="Stop this run and its sub-pipeline runs"
+              >
+                <Square /> Stop
               </Button>
             ) : (
               run.depth === 0 && (
@@ -156,7 +162,7 @@ export function RunDetailPage() {
       />
 
       <div className="mb-4 grid gap-4">
-        {cancel.error && <ErrorAlert title="Could not cancel" error={cancel.error} />}
+        {cancel.error && <ErrorAlert title="Could not stop" error={cancel.error} />}
         {rerun.error && <ErrorAlert title="Could not start the run" error={rerun.error} />}
         {run.error && run.status !== "SUCCEEDED" && (
           <ErrorAlert title="Run error" error={new Error(run.error)} />

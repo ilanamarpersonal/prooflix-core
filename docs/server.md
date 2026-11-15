@@ -204,7 +204,7 @@ flowchart TD
 |---|---|
 | Task raises, retries left | Error is logged, `attempt` increases, task runs again |
 | `timeout_seconds` exceeded | The attempt fails with "Timed out after Ns". A timed-out *thread* cannot be killed and finishes in the background; shell processes are killed. |
-| Cancel a top-level run | Its asyncio task is cancelled. Running tasks and child runs become `CANCELLED`, and shell processes are killed. |
+| Cancel a top-level run (**Stop** in the client) | Its asyncio task is cancelled. Running tasks and child runs become `CANCELLED`, and shell processes are killed. A Python task's thread cannot be killed: its code runs on to the end in the background (and can still write files). |
 | Cancel a child run only | The child becomes `CANCELLED`. The parent task fails with "was cancelled" and its downstream tasks are skipped. |
 | Server restarts mid-run | On startup `RunStore.recover_interrupted()` marks leftover `RUNNING`/`PENDING` runs as `FAILED`. |
 
