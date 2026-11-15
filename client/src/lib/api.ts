@@ -134,6 +134,11 @@ export const api = {
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
   systemParameters: () => request<SystemParameter[]>("/system/parameters"),
+  setSystemParameter: (name: string, value: string | null) =>
+    request<SystemParameter[]>(`/system/parameters/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    }),
 }
 
 const isActive = (r?: { status: Run["status"] }) => !!r && !TERMINAL_STATUSES.includes(r.status)
@@ -249,6 +254,14 @@ export const useWorkspaceFile = (path: string | null) =>
 
 export const useSystemParameters = () =>
   useQuery({ queryKey: ["system", "parameters"], queryFn: api.systemParameters })
+
+export function useSetSystemParameter() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, value }: { name: string; value: string | null }) => api.setSystemParameter(name, value),
+    onSuccess: (data) => qc.setQueryData(["system", "parameters"], data),
+  })
+}
 
 export const useWorkspaces = () => useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces })
 

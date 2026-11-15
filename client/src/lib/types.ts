@@ -260,6 +260,12 @@ export interface SystemParameter {
   value: string | null
   /** what is used when the variable is not set */
   default: string
-  source: "environment" | "default"
+  /** where the value in use comes from */
+  source: "saved" | "environment" | "default"
   description: string
+  editable: boolean
+  /** the value edited in the System tab, if any (used from the next start) */
+  saved: string | null
+  /** the saved value changed since the server started */
+  restart_needed: boolean
 }

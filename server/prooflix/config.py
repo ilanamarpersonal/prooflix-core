@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,6 +12,26 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_WORKSPACES = REPO_ROOT / "workspaces"
 DEFAULT_CLIENT_DIST = REPO_ROOT / "client" / "dist"
+PARAMETERS_FILE = "parameters.json"  # in PROOFLIX_HOME: values edited in the System tab
+
+
+def load_saved_parameters(home: Path | None) -> dict[str, str]:
+    """Parameter values edited in the web client ({"PROOFLIX_MAX_DEPTH": "4", ...})."""
+    if home is None:
+        return {}
+    try:
+        data = json.loads((home / PARAMETERS_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(data, dict) else {}
+
+
+def save_parameters(home: Path, values: dict[str, str]) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=home, prefix=f".{PARAMETERS_FILE}.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(dict(sorted(values.items())), f, indent=2)
+    os.replace(tmp, home / PARAMETERS_FILE)
 
 
 @dataclass(frozen=True)
@@ -34,6 +56,9 @@ class Settings:
                            (default for both: the workspace's own folder; a workspace
                            can choose its own, see linked_folders.py)
 
+    A value edited in the System tab is saved to ``PROOFLIX_HOME/parameters.json``
+    and wins over the environment variable from the next start on.
+
     ``workspace`` is the default workspace; ``None`` means the first one in
     ``workspaces_root``. The one the server uses is the active workspace chosen
     in the web client, when it still exists (see ``workspaces.py``).
@@ -51,6 +76,8 @@ class Settings:
     home: Path | None = None  # None: the workspace list is kept in memory only
     source_data: Path | None = None  # None: each workspace's own source/ folder
     data_lake: Path | None = None  # None: each workspace's own data/ folder
+    # the values from PROOFLIX_HOME/parameters.json this server started with
+    saved_parameters: dict[str, str] = field(default_factory=dict, compare=False)
 
     @property
     def folder_defaults(self) -> dict:
@@ -89,24 +116,33 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        home = Path(os.environ.get("PROOFLIX_HOME") or "~/.prooflix").expanduser().resolve()
+        saved = load_saved_parameters(home)
+        # a value saved in the System tab wins over the environment variable
+        env = {**os.environ, **saved}
         kwargs: dict = {
-            "home": Path(os.environ.get("PROOFLIX_HOME") or "~/.prooflix").expanduser().resolve(),
-            "workspaces_root": Path(os.environ.get("PROOFLIX_WORKSPACES") or DEFAULT_WORKSPACES)
+            "home": home,
+            "saved_parameters": saved,
+            "workspaces_root": Path(env.get("PROOFLIX_WORKSPACES") or DEFAULT_WORKSPACES)
             .expanduser()
             .resolve(),
         }
-        if ws := os.environ.get("PROOFLIX_WORKSPACE"):
+        if ws := env.get("PROOFLIX_WORKSPACE"):
             kwargs["workspace"] = Path(ws).expanduser().resolve()
-        if catalog := os.environ.get("PROOFLIX_CATALOG"):
+        if catalog := env.get("PROOFLIX_CATALOG"):
             kwargs["catalog"] = Path(catalog).expanduser().resolve()
-        if (sched := os.environ.get("PROOFLIX_SCHEDULER")) is not None:
-            kwargs["scheduler"] = sched.strip().lower() not in ("0", "false", "no", "off")
-        if depth := os.environ.get("PROOFLIX_MAX_DEPTH"):
+        if (sched := env.get("PROOFLIX_SCHEDULER")) is not None:
+            kwargs["scheduler"] = parse_flag(sched)
+        if depth := env.get("PROOFLIX_MAX_DEPTH"):
             kwargs["max_depth"] = int(depth)
-        if source := os.environ.get("PROOFLIX_SOURCE_DATA"):
+        if source := env.get("PROOFLIX_SOURCE_DATA"):
             kwargs["source_data"] = Path(source).expanduser().resolve()
-        if lake := os.environ.get("PROOFLIX_DATA_LAKE"):
+        if lake := env.get("PROOFLIX_DATA_LAKE"):
             kwargs["data_lake"] = Path(lake).expanduser().resolve()
-        if cors := os.environ.get("PROOFLIX_CORS"):
+        if cors := env.get("PROOFLIX_CORS"):
             kwargs["cors_origins"] = tuple(o.strip() for o in cors.split(",") if o.strip())
         return cls(**kwargs)
+
+
+def parse_flag(value: str) -> bool:
+    return value.strip().lower() not in ("0", "false", "no", "off")
