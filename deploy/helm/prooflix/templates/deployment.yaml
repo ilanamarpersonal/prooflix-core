@@ -55,6 +55,11 @@ spec:
               value: /data/.prooflix
             - name: PROOFLIX_SCHEDULER
               value: {{ ternary "1" "0" .Values.prooflix.scheduler | quote }}
+            {{- if .Values.ingress.enabled }}
+            # trust the ingress's X-Forwarded-Proto, so the session cookie is Secure behind TLS
+            - name: FORWARDED_ALLOW_IPS
+              value: {{ .Values.ingress.forwardedAllowIps | default "*" | quote }}
+            {{- end }}
             - name: PROOFLIX_MAX_DEPTH
               value: {{ .Values.prooflix.maxDepth | quote }}
             {{- with .Values.prooflix.startDate }}

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
-from ..auth import COOKIE, SESSION_SECONDS, TABS, AuthError, User, UserStore, password_problems
+from ..auth import COOKIE, SESSION_SECONDS, TABS, AuthError, LockedOut, SetupDone, User, UserStore, UsersFileError
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 users_router = APIRouter(prefix="/api/users", tags=["users"])
@@ -72,14 +72,21 @@ def _sign_in(response: Response, request: Request, user: User) -> None:
     )
 
 
+def _users_file_error(e: UsersFileError) -> HTTPException:
+    return HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
+
+
 @router.get("/status", response_model=AuthStatus)
 def auth_status(request: Request) -> AuthStatus:
     store = get_users(request)
     if not auth_enabled(request):
         return AuthStatus(enabled=False, setup_needed=False, user=None, tabs=list(TABS))
-    user = current_user(request)
-    return AuthStatus(enabled=True, setup_needed=store.setup_needed, user=user.public() if user else None,
-                      tabs=list(TABS))
+    try:
+        user = current_user(request)
+        setup_needed = store.setup_needed
+    except UsersFileError as e:
+        raise _users_file_error(e) from None
+    return AuthStatus(enabled=True, setup_needed=setup_needed, user=user.public() if user else None, tabs=list(TABS))
 
 
 @router.post("/setup", response_model=AuthStatus)
@@ -88,11 +95,13 @@ def setup(body: Credentials, request: Request, response: Response) -> AuthStatus
     store = get_users(request)
     if not auth_enabled(request):
         raise HTTPException(status.HTTP_409_CONFLICT, "Users are off (PROOFLIX_AUTH)")
-    if not store.setup_needed:
-        raise HTTPException(status.HTTP_409_CONFLICT, "The first admin exists already; sign in")
     try:
-        store.create(body.username, body.password, role="admin")
+        store.create_first_admin(body.username, body.password)  # refused once any user exists
         user = store.authenticate(body.username, body.password)  # records the first sign-in
+    except UsersFileError as e:
+        raise _users_file_error(e) from None
+    except SetupDone as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
     except AuthError as e:
         raise _bad(e) from None
     _sign_in(response, request, user)
@@ -103,6 +112,11 @@ def setup(body: Credentials, request: Request, response: Response) -> AuthStatus
 def login(body: Credentials, request: Request, response: Response) -> AuthStatus:
     try:
         user = get_users(request).authenticate(body.username, body.password)
+    except LockedOut as e:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(e),
+                            headers={"Retry-After": str(e.retry_after)}) from None
+    except UsersFileError as e:
+        raise _users_file_error(e) from None
     except AuthError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e)) from None
     _sign_in(response, request, user)
@@ -126,12 +140,6 @@ def change_password(body: PasswordChange, request: Request, response: Response) 
         raise _bad(e) from None
     _sign_in(response, request, user)
     return AuthStatus(enabled=True, setup_needed=False, user=user.public(), tabs=list(TABS))
-
-
-@router.post("/check-password")
-def check_password(body: dict) -> dict:
-    """What a password lacks ({"problems": [...]}), for the forms."""
-    return {"problems": password_problems(str(body.get("password", "")))}
 
 
 # ------------------------------------------------------------ users (admins)
@@ -164,11 +172,14 @@ def create_user(body: NewUser, store: UserStore = Depends(get_users),
 
 
 @users_router.put("/{username}")
-def update_user(username: str, body: UserChange, store: UserStore = Depends(get_users),
-                admin: User = Depends(require_admin)) -> dict:
+def update_user(username: str, body: UserChange, request: Request, response: Response,
+                store: UserStore = Depends(get_users), admin: User = Depends(require_admin)) -> dict:
     try:
-        return store.update(username, actor=admin.username, role=body.role, tabs=body.tabs,
-                            password=body.password or None, disabled=body.disabled).public()
+        user = store.update(username, actor=admin.username, role=body.role, tabs=body.tabs,
+                            password=body.password or None, disabled=body.disabled)
+        if user.username == admin.username and body.password:
+            _sign_in(response, request, user)  # your own new password: stay signed in here
+        return user.public()
     except KeyError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No user {username}") from None
     except AuthError as e:

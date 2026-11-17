@@ -14,26 +14,63 @@ import {
 
 export type SectionId = "pipelines" | "ingestion" | "sql" | "workspace" | "catalog" | "clickhouse" | "system" | "users"
 
+/** Menu groups, in order: building pipelines, working with data, running the server. */
+export const GROUPS = [
+  { id: "build", label: "Build" },
+  { id: "data", label: "Data" },
+  { id: "admin", label: "Admin" },
+] as const
+export type GroupId = (typeof GROUPS)[number]["id"]
+
 export interface Section {
   id: SectionId
   label: string
   icon: LucideIcon
+  group: GroupId
   /** where the tab starts */
   home: string
   /** URL prefixes that belong to this tab */
   prefixes: string[]
 }
 
-/** The left menu and the tabs, in order. The first one is selected by default. */
+/** The menu, grouped and in order. The first one a user has is their start page. */
 export const SECTIONS: Section[] = [
-  { id: "pipelines", label: "Pipelines", icon: Workflow, home: "/pipelines", prefixes: ["/pipelines", "/runs"] },
-  { id: "ingestion", label: "Ingestion", icon: ArrowDownToLine, home: "/ingestion", prefixes: ["/ingestion"] },
-  { id: "sql", label: "SQL Editor", icon: Database, home: "/sql", prefixes: ["/sql"] },
-  { id: "catalog", label: "Catalog", icon: Library, home: "/catalog", prefixes: ["/catalog"] },
-  { id: "workspace", label: "Workspace", icon: FolderTree, home: "/workspace", prefixes: ["/workspace"] },
-  { id: "clickhouse", label: "ClickHouse", icon: DatabaseZap, home: "/clickhouse", prefixes: ["/clickhouse"] },
-  { id: "system", label: "System", icon: SlidersHorizontal, home: "/system", prefixes: ["/system"] },
-  { id: "users", label: "Users", icon: UsersRound, home: "/users", prefixes: ["/users"] },
+  {
+    id: "pipelines",
+    label: "Pipelines",
+    icon: Workflow,
+    group: "build",
+    home: "/pipelines",
+    prefixes: ["/pipelines", "/runs"],
+  },
+  {
+    id: "ingestion",
+    label: "Ingestion",
+    icon: ArrowDownToLine,
+    group: "build",
+    home: "/ingestion",
+    prefixes: ["/ingestion"],
+  },
+  {
+    id: "workspace",
+    label: "Workspace",
+    icon: FolderTree,
+    group: "build",
+    home: "/workspace",
+    prefixes: ["/workspace"],
+  },
+  { id: "sql", label: "SQL Editor", icon: Database, group: "data", home: "/sql", prefixes: ["/sql"] },
+  { id: "catalog", label: "Catalog", icon: Library, group: "data", home: "/catalog", prefixes: ["/catalog"] },
+  {
+    id: "clickhouse",
+    label: "ClickHouse",
+    icon: DatabaseZap,
+    group: "data",
+    home: "/clickhouse",
+    prefixes: ["/clickhouse"],
+  },
+  { id: "system", label: "System", icon: SlidersHorizontal, group: "admin", home: "/system", prefixes: ["/system"] },
+  { id: "users", label: "Users", icon: UsersRound, group: "admin", home: "/users", prefixes: ["/users"] },
 ]
 
 /** The sections a user sees: their tabs when sign-in is on, else every tab but Users. */

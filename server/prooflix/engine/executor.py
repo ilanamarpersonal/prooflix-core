@@ -24,7 +24,7 @@ from typing import Any
 
 from ..pipelines.errors import PipelineNotFound, PipelineValidationError
 from ..pipelines.models import PipelineSpec, PipelineTask, PythonTask, ShellTask
-from ..pipelines.templating import resolve
+from ..pipelines.templating import resolve, resolve_shell
 from ..pipelines.workspace import Workspace
 from ..runs.models import Run, RunStatus, TaskRun, utcnow
 from ..runs.store import RunStore
@@ -322,11 +322,15 @@ class PipelineExecutor:
             return await run_python(func, params, ctx)
 
         if isinstance(task, ShellTask):
-            command = resolve(task.command, scope)
-            env = {k: str(v) for k, v in resolve(task.env, scope).items()}
+            # references reach the shell as variables, so a parameter can't inject commands
+            command, refs = resolve_shell(task.command, scope)
+            env = {**refs, **{k: str(v) for k, v in resolve(task.env, scope).items()}}
             if self.start_date:  # the task's own env wins
                 env = {"PROOFLIX_START_DATE": self.start_date, **env}
-            tr.log(f"$ {command}")
+            shown = command
+            for k, v in refs.items():  # the log shows the command with the values filled in
+                shown = shown.replace("${" + k + "}", v)
+            tr.log(f"$ {shown}")
             return await run_shell(command, env, self.workspace.project_dir_for(run.pipeline), logger)
 
         if isinstance(task, PipelineTask):

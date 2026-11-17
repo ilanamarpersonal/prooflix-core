@@ -307,7 +307,7 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 |---|---|---|---|
 | GET | `/api/auth/status` | | `{enabled, setup_needed, user, tabs}`: whether sign-in is on, whether the first admin is still to be created, and the signed-in user (`{username, role, tabs, visible_tabs, disabled, created_at, last_login}`) |
 | POST | `/api/auth/setup` | `{username, password}` | Creates the first admin and signs in; `409` once a user exists |
-| POST | `/api/auth/login` | `{username, password}` | Sets the session cookie (HttpOnly, SameSite=Lax, 12 hours); `401` for a wrong password, a disabled account, or after 5 wrong passwords (locked for a minute) |
+| POST | `/api/auth/login` | `{username, password}` | Sets the session cookie (HttpOnly, SameSite=Lax, Secure behind TLS, 12 hours); `401` for a wrong password or a disabled account, `429` with `Retry-After` after 5 wrong passwords (locked for a minute). `500` when `users.json` exists but can't be read: the server fails closed |
 | POST | `/api/auth/logout` | | `204`, cookie removed |
 | POST | `/api/auth/password` | `{current, new}` | Changes your own password; other sessions end |
 | GET | `/api/users` | | Every user (admins only) |
@@ -315,7 +315,7 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | PUT | `/api/users/{name}` | `{role, tabs, password, disabled}` | The user; a new password or disabling ends their sessions. The last admin can't be demoted, disabled or deleted, nor can you disable or delete yourself |
 | DELETE | `/api/users/{name}` | | `204` |
 
-Each API path belongs to the tabs that use it (`TAB_PATHS` in `auth.py`): for example `/api/sql` to the SQL Editor and the Catalog, `/api/runs` to Pipelines and Ingestion.
+Each API path belongs to the tabs that use it (`TAB_PATHS` in `auth.py`): for example `/api/sql` to the SQL Editor and the Catalog, `/api/runs` to Pipelines and Ingestion; a test fails when a new route belongs to none. Ingestion runs its jobs through `/api/ingestion/jobs/{id}/runs`, not `/api/pipelines`. Only admins can save a pipeline with a shell task (`403`), Python tasks may only call functions defined in the workspace's `src/`, and no workspace route or linked folder reaches `PROOFLIX_HOME`.
 
 **Ingestion** (database connections and the jobs that copy their tables into bronze)
 
@@ -329,10 +329,10 @@ Each API path belongs to the tabs that use it (`TAB_PATHS` in `auth.py`): for ex
 | GET | `/api/ingestion/connections/{name}/tables` | | `[{schema, name, columns: [{name, type, watermark}]}]`; `watermark` marks date, timestamp and integer columns. `502` when the database can't be reached |
 | GET | `/api/ingestion/jobs` | | `{jobs: [{id, name, connection, start_date, tables, schedule, errors}], task_ready, task_module}` |
 | PUT | `/api/ingestion/jobs/{id}[?create_only=true]` | `{name, connection, start_date, schedule, tables: [{source, target, columns, watermark}]}` | The job; writes `pipelines/<id>.yaml` (in the project that has `src/bronze/jdbc_ingest.py`). `409` when the id is another pipeline's |
-| POST | `/api/ingestion/jobs/{id}/runs` | `{from_date, to_date}` | `202 Run` for the rows between two dates (`YYYY-MM-DD`, both included; leave one out for an open side). Each table with a date watermark copies that range and overwrites what bronze has of it: by key columns, else by replacing the range. A job saved before this existed is written again with the `from_date` / `to_date` parameters first. `422` for no dates or a backwards range |
+| POST | `/api/ingestion/jobs/{id}/runs` | `{from_date, to_date}` | `202 Run`: a normal run with no dates, or one for the rows between two dates (`YYYY-MM-DD`, both included; leave one out for an open side). Each table with a date watermark copies that range and overwrites what bronze has of it: by key columns, else by replacing the range. A job saved before this existed is written again with the `from_date` / `to_date` parameters first. `422` for a backwards range |
 | DELETE | `/api/ingestion/jobs/{id}` | | `204` (bronze tables and run history stay) |
 
-Running a job normally is `POST /api/pipelines/{id}/runs`. Tables list `primary_key` (from the database) and job tables take `keys`: the columns that identify a row, so rows already in bronze are overwritten (Delta MERGE) instead of appended.
+The Ingestion tab runs jobs through `POST /api/ingestion/jobs/{id}/runs` (no dates: a normal run). Tables list `primary_key` (from the database) and job tables take `keys`: the columns that identify a row, so rows already in bronze are overwritten (Delta MERGE) instead of appended.
 
 **System parameters** (see [Configuration](#configuration))
 

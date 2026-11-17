@@ -68,7 +68,8 @@ the rest keep their defaults (see [server.md](server.md#configuration)):
 | `PROOFLIX_CATALOG` | `/data/catalog` (fixed) |
 | `PROOFLIX_HOME` | `/data/.prooflix` (fixed, on the volume) |
 | `PROOFLIX_SCHEDULER` | `prooflix.scheduler` |
-| `PROOFLIX_AUTH` | on (set `prooflix.extraEnv` to turn it off) |
+| `PROOFLIX_AUTH` | on (set `prooflix.extraEnv` to turn it off; deliberately not a value) |
+| `FORWARDED_ALLOW_IPS` | `ingress.forwardedAllowIps` (default `*`) when the Ingress is on, so the session cookie is `Secure` behind TLS |
 | `PROOFLIX_MAX_DEPTH` | `prooflix.maxDepth` |
 | `PROOFLIX_START_DATE` | `prooflix.startDate`, when not empty |
 | `PROOFLIX_SOURCE_DATA` | `sourceData.path`, or its volume's mount path |

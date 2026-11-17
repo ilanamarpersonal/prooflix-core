@@ -67,7 +67,7 @@ client/
 
 ## Sections, routes and screens
 
-The sidebar and the tabs show up to eight sections (a user sees the ones an admin gave them; Users is for admins); each remembers the last page you
+The sidebar is the one menu, grouped into **Build** (Pipelines, Ingestion, Workspace), **Data** (SQL Editor, Catalog, ClickHouse) and **Admin** (System, Users); a user sees the sections an admin gave them. **Collapse** shrinks it to an icon rail (remembered in the browser). The top bar has the search box: **Ctrl+K / ⌘K** opens the command palette, which jumps to any page, pipeline, ingestion job, table (open in the Catalog or query in the SQL Editor) or recent run, and runs actions (run a pipeline or an ingestion job, new pipeline, new query, add user, dark mode, sign out), offering only what the user's tabs allow. On small screens the menu is a row of icons in the top bar. Each section remembers the last page you
 opened in it.
 
 ```mermaid

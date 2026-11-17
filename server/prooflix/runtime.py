@@ -41,7 +41,7 @@ class Services:
 
 def build_services(settings: Settings) -> Services:
     # <workspace>/source and data link to the source data and data lake folders
-    linked_folders.apply(settings.workspace, settings.folder_defaults)
+    linked_folders.apply(settings.workspace, settings.folder_defaults, protected=settings.home)
     workspace = Workspace(settings.workspace)
     store = RunStore(settings.runs_dir)
     recovered = store.recover_interrupted()

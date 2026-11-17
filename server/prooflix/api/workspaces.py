@@ -188,7 +188,7 @@ async def import_workspace(body: ImportWorkspaceIn, request: Request) -> ImportW
     total = 0
     for f in body.files:
         rel = _clean_import_path(f.path)
-        resolve_inside(target, rel)
+        resolve_inside(target, rel, request.app.state.settings.home)
         try:
             data = base64.b64decode(f.content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:

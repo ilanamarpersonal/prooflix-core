@@ -114,7 +114,10 @@ users and choose for each one:
 * **Role:** an admin sees every tab and manages users; a user sees only their tabs.
 * **Tabs:** which of Pipelines, Ingestion, SQL Editor, Catalog, Workspace,
   ClickHouse and System the user sees. The server enforces it too: a user can't
-  call the API of a tab they don't have.
+  call the API of a tab they don't have. Workspace (it changes the code pipelines
+  run) and System (it changes the server's configuration) are as powerful as an
+  admin, so give them only to trusted people; only admins save pipelines with shell
+  tasks.
 * **Password:** at least 8 characters with a capital letter and a number. Admins
   can set a new one; everyone can change their own from the user menu (top right).
   Disabling a user, or changing their password, signs them out.

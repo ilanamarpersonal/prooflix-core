@@ -126,11 +126,30 @@ def _is_empty_dir(path: Path) -> bool:
     return path.is_dir() and all(c.name == ".DS_Store" for c in path.iterdir())
 
 
-def link(workspace: Path, kind: Kind, folder: Path) -> None:
+def _same(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)  # also on case-insensitive file systems (.PROOFLIX = .prooflix)
+    except OSError:
+        return a == b
+
+
+def inside(target: Path, folder: Path) -> bool:
+    """target is folder or inside it (by path, and by file identity)."""
+    return any(_same(p, folder) for p in (target, *target.parents))
+
+
+def _overlaps(folder: Path, protected: Path) -> bool:
+    """folder is protected, inside it, or contains it."""
+    return inside(folder, protected) or inside(protected, folder)
+
+
+def link(workspace: Path, kind: Kind, folder: Path, protected: Path | None = None) -> None:
     """Make ``<workspace>/<link>`` point at ``folder`` (or be a plain folder when it is that folder).
 
     Raises FolderError when the folder is missing or inside the workspace, or a
-    real folder with files is in the way.
+    real folder with files is in the way, or it overlaps ``protected`` (the server's
+    PROOFLIX_HOME, with users, keys and passwords: a link to it would expose them
+    through the workspace's file routes).
     """
     workspace = Path(workspace).resolve()
     spec = KINDS[kind]
@@ -143,6 +162,11 @@ def link(workspace: Path, kind: Kind, folder: Path) -> None:
         raise FolderError(f"The {spec.label} '{folder}' does not exist")
     if folder == workspace or workspace in folder.parents:
         raise FolderError(f"The {spec.label} can't be inside the workspace; leave it as the default instead")
+    if protected is not None and _overlaps(folder.resolve(), Path(protected).resolve()):
+        raise FolderError(
+            f"The {spec.label} can't be '{folder}': it holds or is inside the server's private folder "
+            "(PROOFLIX_HOME, with users and passwords)"
+        )
     if here.is_symlink():
         if here.resolve() == folder:
             return
@@ -159,18 +183,24 @@ def link(workspace: Path, kind: Kind, folder: Path) -> None:
     log.info("The %s of %s is %s", spec.label, workspace, folder)
 
 
-def apply(workspace: Path, defaults: Defaults) -> None:
+def apply(workspace: Path, defaults: Defaults, protected: Path | None = None) -> None:
     """Link both folders as the settings say; a problem is logged, not raised
     (the server still starts, on the workspace's own folder)."""
     for kind in KINDS:
         resolved = resolve(workspace, kind, defaults.get(kind))
         try:
-            link(workspace, kind, resolved.path)
+            link(workspace, kind, resolved.path, protected)
         except (FolderError, OSError) as exc:
             log.warning("Not using the %s for %s: %s", KINDS[kind].label, workspace, exc)
+            here = Path(workspace).resolve() / KINDS[kind].link
+            if protected is not None and here.is_symlink() and _overlaps(here.resolve(), Path(protected).resolve()):
+                here.unlink()  # an older link to the private folder: never leave it reachable
+                log.warning("Removed %s: it led to the server's private folder", here)
 
 
-def set_workspace_setting(workspace: Path, kind: Kind, folder: Path | None, server_default: Path | None) -> Resolved:
+def set_workspace_setting(
+    workspace: Path, kind: Kind, folder: Path | None, server_default: Path | None, protected: Path | None = None
+) -> Resolved:
     """Choose the workspace's folder for ``kind`` (None: back to the server default or its own folder).
 
     The link is changed first, so nothing is saved when the folder can't be used.
@@ -183,6 +213,6 @@ def set_workspace_setting(workspace: Path, kind: Kind, folder: Path | None, serv
         target = Path(server_default).expanduser().resolve()
     else:
         target = workspace / KINDS[kind].link
-    link(workspace, kind, target)
+    link(workspace, kind, target, protected)
     _write_setting(workspace, kind, chosen)
     return resolve(workspace, kind, server_default)

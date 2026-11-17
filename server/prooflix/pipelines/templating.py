@@ -56,6 +56,25 @@ def resolve(value: Any, scope: dict[str, Any]) -> Any:
     return value
 
 
+def resolve_shell(command: str, scope: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    """A shell command whose references become environment variables, never code.
+
+    ``echo "Hello, ${params.who}!"`` runs as ``echo "Hello, ${PROOFLIX_REF_1}!"`` with
+    ``PROOFLIX_REF_1`` set to the value, so a value such as ``"; rm -rf ~; "`` is only
+    ever text: the shell expands a variable but never runs its contents. In double
+    quotes (or alone) a reference reads as before; inside single quotes it stays
+    literal, as shell variables do.
+    """
+    env: dict[str, str] = {}
+
+    def to_var(m: re.Match) -> str:
+        name = f"PROOFLIX_REF_{len(env) + 1}"
+        env[name] = _to_text(lookup(m.group(1), scope))
+        return "${" + name + "}"
+
+    return _REF_RE.sub(to_var, command), env
+
+
 def lookup(path: str, scope: dict[str, Any]) -> Any:
     current: Any = scope
     for part in path.split("."):

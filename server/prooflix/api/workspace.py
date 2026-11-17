@@ -59,14 +59,17 @@ def _node(root: Path, p: Path) -> WorkspaceNode:
     return WorkspaceNode(name=p.name, path=rel, type="file", size=p.stat().st_size)
 
 
-def resolve_inside(root: Path, rel: str) -> Path:
+def resolve_inside(root: Path, rel: str, protected: Path | None = None) -> Path:
     """Resolve ``rel`` under ``root``, refusing paths that escape it.
 
     ``source/`` and ``data/`` may be links to folders elsewhere (see
-    linked_folders.py): paths through them resolve there.
+    linked_folders.py): paths through them resolve there. Nothing inside
+    ``protected`` (PROOFLIX_HOME: users, keys, passwords) is ever reachable.
     """
     root = root.resolve()
     target = (root / rel).resolve()
+    if protected is not None and linked_folders.inside(target, Path(protected).resolve()):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Path is outside the workspace")
     inside = lambda base: target == base or base in target.parents  # noqa: E731
     lexical = Path(os.path.normpath(root / rel))
     if inside(root):
@@ -108,7 +111,7 @@ def _clean_import_path(raw: str) -> str:
 
 
 @router.post("/import", response_model=ImportResult)
-def import_files(body: ImportIn, ws: Workspace = Depends(get_workspace)) -> ImportResult:
+def import_files(body: ImportIn, request: Request, ws: Workspace = Depends(get_workspace)) -> ImportResult:
     """Write uploaded files into the workspace (e.g. a folder of pipelines and code).
 
     Nothing is written when any path is invalid, when the upload is too large,
@@ -119,7 +122,7 @@ def import_files(body: ImportIn, ws: Workspace = Depends(get_workspace)) -> Impo
     total = 0
     for f in body.files:
         rel = _clean_import_path(f.path)
-        resolve_inside(root, rel)
+        resolve_inside(root, rel, request.app.state.settings.home)
         try:
             data = base64.b64decode(f.content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
@@ -171,7 +174,7 @@ class RemoveResult(BaseModel):
 
 @router.delete("/item", response_model=RemoveResult)
 def remove_item(
-    path: str = Query(..., min_length=1), ws: Workspace = Depends(get_workspace)
+    request: Request, path: str = Query(..., min_length=1), ws: Workspace = Depends(get_workspace)
 ) -> RemoveResult:
     """Remove a file or folder (for example an imported project) from the workspace.
 
@@ -180,7 +183,7 @@ def remove_item(
     """
     root = ws.root.resolve()
     rel = _clean_import_path(path)
-    target = resolve_inside(root, rel)
+    target = resolve_inside(root, rel, request.app.state.settings.home)
     if target == root or not target.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{path}' not found")
     kind: Literal["dir", "file"] = "dir" if target.is_dir() else "file"
@@ -213,9 +216,9 @@ async def tree(ws: Workspace = Depends(get_workspace)) -> WorkspaceNode:
 
 @router.get("/file", response_model=WorkspaceFile)
 async def read_file(
-    path: str = Query(..., min_length=1), ws: Workspace = Depends(get_workspace)
+    request: Request, path: str = Query(..., min_length=1), ws: Workspace = Depends(get_workspace)
 ) -> WorkspaceFile:
-    target = resolve_inside(ws.root, path)
+    target = resolve_inside(ws.root, path, request.app.state.settings.home)
     # as asked for: a file in a linked data lake is outside the workspace folder itself
     parts = Path(os.path.normpath(path)).parts
     hidden = any(part.startswith(".") or part in HIDDEN_NAMES for part in parts)
@@ -294,7 +297,8 @@ def set_linked_folder(
         if not path.is_absolute():
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{body.path}' is not an absolute path")
     try:
-        r = linked_folders.set_workspace_setting(ws.root, kind, path, request.app.state.settings.folder_defaults[kind])
+        settings = request.app.state.settings
+        r = linked_folders.set_workspace_setting(ws.root, kind, path, settings.folder_defaults[kind], settings.home)
     except (FolderError, OSError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return _folder_out(ws, r)

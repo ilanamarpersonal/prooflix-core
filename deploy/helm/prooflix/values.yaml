@@ -136,10 +136,15 @@ service:
   type: ClusterIP
   port: 8000
 
-# Prooflix has no login: anyone who reaches it can import and run code.
-# Keep the Ingress internal, or use `kubectl port-forward`.
+# Everyone signs in (the first start creates the first admin; PROOFLIX_AUTH=0 in
+# prooflix.extraEnv turns it off, deliberately not a value). Users with the Workspace
+# or System tab can change code or configuration that runs on the server: give
+# those tabs only to trusted people, and keep the Ingress internal.
 ingress:
   enabled: false
+  # addresses whose X-Forwarded-Proto/For the server trusts (the ingress controller);
+  # "*" is fine when only the ingress can reach the pod
+  forwardedAllowIps: "*"
   className: ""
   annotations: {}
   hosts:

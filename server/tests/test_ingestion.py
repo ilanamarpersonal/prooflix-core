@@ -169,7 +169,6 @@ def test_jobs_take_keys_and_a_date_range(client):
     assert c.put("/api/ingestion/jobs/ingest_bank", json=bad).status_code == 422
 
     B = "/api/ingestion/jobs/ingest_bank/runs"
-    assert c.post(B, json={}).status_code == 422  # no dates
     assert c.post(B, json={"from_date": "2024-05-01", "to_date": "2024-04-01"}).status_code == 422
     assert c.post(B, json={"from_date": "May 1"}).status_code == 422
     assert c.post("/api/ingestion/jobs/nope/runs", json={"from_date": "2024-01-01"}).status_code == 404

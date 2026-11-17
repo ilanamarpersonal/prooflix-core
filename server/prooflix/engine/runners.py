@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import importlib
+import importlib.machinery
 import inspect
 import json
 import os
@@ -61,6 +62,14 @@ def load_callable(src_dir: Path, entrypoint: str) -> Callable[..., Any]:
     project whose task is running.
     """
     module_name, func_name = entrypoint.split(":", 1)
+    # before importing or forgetting anything: the module must be found in this project's
+    # src/, so "json:x" or "prooflix.auth:x" never evicts or reloads a module of the server
+    spec = importlib.machinery.PathFinder.find_spec(module_name.split(".", 1)[0], [str(src_dir)])
+    origin = (spec.origin if spec and spec.origin and spec.origin != "namespace" else None) or (
+        next(iter(spec.submodule_search_locations), None) if spec and spec.submodule_search_locations else None
+    )
+    if origin is None or not Path(origin).resolve().is_relative_to(Path(src_dir).resolve()):
+        raise AttributeError(f"'{entrypoint}' is not in the workspace src directory; tasks only call workspace code")
     with _import_lock:
         src = str(src_dir)
         if src in sys.path:
@@ -76,9 +85,16 @@ def load_callable(src_dir: Path, entrypoint: str) -> Callable[..., Any]:
         elif _mtime(module) != _loaded_mtimes.get(module_name):
             module = importlib.reload(module)
         _loaded_mtimes[module_name] = _mtime(module)
+    # only code of the workspace: never os.system, subprocess, builtins, or a library
+    path = getattr(module, "__file__", None)
+    if not path or not Path(path).resolve().is_relative_to(Path(src_dir).resolve()):
+        raise AttributeError(f"'{entrypoint}' is not in the workspace src directory; tasks only call workspace code")
     func = getattr(module, func_name, None)
-    if not callable(func):
-        raise AttributeError(f"'{entrypoint}' is not a callable in the workspace src directory")
+    home = sys.modules.get(getattr(func, "__module__", "") or "")
+    home_file = getattr(home, "__file__", None)
+    if not callable(func) or not home_file or not Path(home_file).resolve().is_relative_to(Path(src_dir).resolve()):
+        # e.g. "jobs:system" after "from os import system" in a workspace module
+        raise AttributeError(f"'{entrypoint}' is not a function defined in the workspace src directory")
     return func
 
 

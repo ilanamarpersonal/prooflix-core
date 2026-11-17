@@ -13,7 +13,7 @@ read, verify, and report.
 
 ## Context to read first
 
-- `docs/architecture-principles.md`, especially the **Security** section (principles 6–10).
+- `docs/architecture-principles.md`, especially the **Security** section (principles 6–14).
 - `server/prooflix/auth.py` and `server/prooflix/api/auth.py`: users, scrypt hashes,
   signed session cookies, lockout, and `TAB_PATHS` (which API paths each tab opens). Also
   the sign-in check in `server/prooflix/main.py`.

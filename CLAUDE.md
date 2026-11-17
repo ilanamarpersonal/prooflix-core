@@ -5,24 +5,16 @@ The platform: `server/` (FastAPI, Python, uv), `client/` (React, shadcn/ui, Vite
 workspace repository `../prooflix-assets-bundle`. Read
 `docs/architecture-principles.md` before designing a change.
 
-## Reviews on every change
+## Reviews on request
 
-Two reviewer agents check all development:
+Two reviewer agents are available:
 
 - `architect` (`.claude/agents/architect.md`): design against `docs/architecture-principles.md`.
 - `security-reviewer` (`.claude/agents/security-reviewer.md`): vulnerabilities.
 
-After every change that touches code, configuration or deployment, in either
-repository, and before reporting the work done or committing it:
-
-1. Run both agents on the change, in parallel (they review the uncommitted work in both
-   repositories by default; say so if the change is something else, like a commit range).
-2. Fix every `blocker` (architect) and every `critical` or `high` (security) finding,
-   then run the agent that raised it again until they are gone.
-3. Tell the user the verdicts and the findings left (`major` and below, `medium` and
-   below), with what you fixed. Don't hide or soften findings.
-
-Skip the reviews only for changes that are just documentation or wording, and say so.
+Run them only when the user asks for a review (not after every change). When asked:
+run both on the change in parallel, fix every `blocker` (architect) and `critical` or
+`high` (security) finding, and report the verdicts and remaining findings plainly.
 
 ## Working conventions
 
@@ -32,4 +24,4 @@ Skip the reviews only for changes that are just documentation or wording, and sa
 - Client style: no semicolons, 120-character lines (`npx prettier --no-semi --print-width 120`).
 - Both repositories work on `main` (no feature branches). The bundle pushes over SSH:
   `git push git@github.com:ilanamarpersonal/prooflix-assets-bundle.git main`.
-- Secrets never go in the repositories (see principles 6–10).
+- Secrets never go in the repositories (see principles 6–14).

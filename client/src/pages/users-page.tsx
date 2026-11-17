@@ -1,5 +1,17 @@
 import { useState } from "react"
-import { Ban, CheckCircle2, KeyRound, Loader2, Pencil, Plus, ShieldCheck, Trash2, UserRound, X } from "lucide-react"
+import {
+  Ban,
+  CheckCircle2,
+  KeyRound,
+  Loader2,
+  Pencil,
+  Plus,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
+  UserRound,
+  X,
+} from "lucide-react"
 
 import { PasswordRules, passwordOk } from "@/components/auth/password-rules"
 import { ErrorAlert } from "@/components/error-alert"
@@ -18,6 +30,11 @@ import { cn, formatDateTime } from "@/lib/utils"
 const NEW = "\u0000new"
 // the tabs a user can be given, in menu order (Users is for admins only)
 const GIVABLE = SECTIONS.filter((s) => s.id !== "users")
+// tabs that change code or configuration running on the server: as powerful as an admin
+const TRUSTED: Record<string, string> = {
+  workspace: "can change the code pipelines run on the server",
+  system: "can change the server's configuration",
+}
 
 /** Admins add users, set their role and the tabs they see, reset passwords, disable or remove them. */
 export function UsersPage() {
@@ -296,6 +313,9 @@ function UserForm({ user, me, onDone }: { user: AppUser | null; me: string; onDo
                         onChange={() => toggleTab(id)}
                       />
                       <Icon className="size-4" /> {label}
+                      {TRUSTED[id] && (
+                        <ShieldAlert className="text-status-failed size-3.5" aria-label={`Trusted: ${TRUSTED[id]}`} />
+                      )}
                     </label>
                   )
                 })}
@@ -308,6 +328,14 @@ function UserForm({ user, me, onDone }: { user: AppUser | null; me: string; onDo
                   none
                 </button>
                 {tabs.size === 0 && <span className="text-destructive">With no tabs the user sees nothing.</span>}
+              </div>
+              <div className="text-muted-foreground flex items-start gap-1.5 text-xs">
+                <ShieldAlert className="text-status-failed mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  Give Workspace and System only to people you'd trust as an admin: Workspace can change the code
+                  pipelines run on the server, and System its configuration. Only admins can save pipelines with shell
+                  tasks.
+                </span>
               </div>
             </>
           )}

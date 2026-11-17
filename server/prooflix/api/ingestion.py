@@ -1,7 +1,7 @@
 """``/api/ingestion`` routes: database connections and ingestion jobs (the Ingestion tab).
 
 Connections live in ``PROOFLIX_HOME/connections.json``; jobs are pipelines (see
-``ingestion.py``), so running one now uses ``POST /api/pipelines/{id}/runs`` and its
+``ingestion.py``), run through ``POST /api/ingestion/jobs/{id}/runs``, and their
 cron schedule is part of the job form.
 """
 
@@ -230,15 +230,14 @@ class RangeRun(BaseModel):
 @router.post("/jobs/{job_id}/runs", response_model=Run, status_code=status.HTTP_202_ACCEPTED)
 async def run_job_for_dates(job_id: str, body: RangeRun, ws: Workspace = Depends(get_workspace),
                       executor: PipelineExecutor = Depends(get_executor)) -> Run:
-    """Run a job for the rows between two dates only: each table with a date or timestamp
-    watermark copies that range and replaces it in bronze."""
+    """Run a job: normally (no dates), or for the rows between two dates only (each
+    table with a date or timestamp watermark copies that range and overwrites it in
+    bronze). The Ingestion tab runs its jobs here, not through /api/pipelines."""
     try:
         low = date.fromisoformat(body.from_date) if body.from_date else None
         high = date.fromisoformat(body.to_date) if body.to_date else None
     except ValueError:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Dates are YYYY-MM-DD") from None
-    if low is None and high is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Choose a from date, a to date, or both")
     if low and high and high < low:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "The to date is before the from date")
     if not ws.exists(job_id) or (job := job_of(definition := ws.load(job_id))) is None:

@@ -46,41 +46,60 @@ changing one is fine, but on purpose: update this file in the same change and sa
    ingestion, a read-only ClickHouse user for outside queries, internal services
    not exposed by default.
 10. **Safety switches can't be turned off from the UI**, for example `PROOFLIX_AUTH`.
+11. **Fail closed on security state.** If a security file in `PROOFLIX_HOME`
+    (`users.json`, `session.key`, `connections.json`) exists but can't be read or
+    parsed, the server refuses the request. It never treats the file as empty, and
+    never writes over a file it failed to read.
+12. **Read-modify-write under one lock.** Every change to a `PROOFLIX_HOME` JSON file
+    happens under its store's lock, from the read to the atomic rename; a record read
+    outside the lock is never written back.
+13. **Session cookies are `Secure` behind TLS.** The server trusts `X-Forwarded-Proto`
+    only from the ingress (`FORWARDED_ALLOW_IPS`, set by the Helm chart).
+14. **Code execution is an admin power.** Python tasks only call functions defined in
+    the workspace's `src/`, never the standard library or packages. Only admins save
+    pipelines with shell tasks. The Workspace tab (it changes code) and the System tab
+    (it changes configuration) are as powerful as an admin, and the Users tab says so.
+    An entrypoint is checked against `src/` before anything is imported. Values reach
+    shell commands as environment variables, never as code, and task folder parameters
+    stay inside the workspace. File routes (workspace files, imports, linked folders)
+    never reach a path inside or above `PROOFLIX_HOME`; a route changes a
+    `PROOFLIX_HOME` file only through that file's store, which follows 11 and 12.
+    Connection hosts and database names can't carry JDBC URL options.
 
 ## Data and pipelines
 
-11. **Ingestion is idempotent.** Re-running a job or a date range never duplicates
+15. **Ingestion is idempotent.** Re-running a job or a date range never duplicates
     rows: key columns merge (Delta MERGE), ranges replace exactly their range,
     streams use checkpoints, full copies overwrite.
-12. **Times are UTC end to end:** the Spark session time zone, the JVM time zone
+16. **Times are UTC end to end:** the Spark session time zone, the JVM time zone
     (`-Duser.timezone=UTC`), epoch milliseconds in raw files, and ISO 8601 with an
     offset in APIs.
-13. **The system start date** (`PROOFLIX_START_DATE`) is where a first run starts
+17. **The system start date** (`PROOFLIX_START_DATE`) is where a first run starts
     when nothing more specific is given. It reaches tasks as `ctx.start_date` and
     `${system.start_date}`.
-14. **Swaps are atomic:** a ClickHouse copy loads a staging table and swaps it in
+18. **Swaps are atomic:** a ClickHouse copy loads a staging table and swaps it in
     (`EXCHANGE TABLES`); files are written to a temporary file and renamed.
 
 ## Code and API
 
-15. **REST stays plain:** JSON in and out, `4xx` with a readable `detail`,
+19. **REST stays plain:** JSON in and out, `4xx` with a readable `detail`,
     `422` for invalid input, `409` for conflicts, `202` for started runs. Errors
     shown to users say what to do next.
-16. **Blocking work stays off the event loop.** Database, Spark and file work run in
+20. **Blocking work stays off the event loop.** Database, Spark and file work run in
     threads (`asyncio.to_thread`, sync FastAPI routes); anything that starts a run
     (`executor.start`) runs on the loop (`async def`).
-17. **Dependencies are few and free.** Prefer the standard library and existing
+21. **Dependencies are few and free.** Prefer the standard library and existing
     dependencies; any new one must be free for commercial use (check the license),
     pure Python where possible, and pinned. Spark packages are listed in one place
     per layer (`infra/config.py`, the `Dockerfile` `SPARK_PACKAGES`, Helm values) and
     kept in sync.
-18. **Everything installable is in the Helm chart and the image** (Java, Spark
+22. **Everything installable is in the Helm chart and the image** (Java, Spark
     packages, JDBC drivers, Unity Catalog, ClickHouse); a pod starts without
     downloading anything.
-19. **Tests and docs change with the code.** Every API route has tests (sign-in on
+23. **Tests and docs change with the code.** Every API route has tests (sign-in on
     and off where it matters); `README.md`, `docs/server.md` (routes and
     configuration), `docs/client.md` (screens) and this file are updated in the same
     change. Every `PROOFLIX_*` parameter appears in the System tab and in the docs.
-20. **The client follows the existing patterns:** shadcn/ui components, TanStack
+24. **The client follows the existing patterns:** shadcn/ui components, TanStack
     Query hooks in `lib/api.ts`, types in `lib/types.ts`, sections in `lib/tabs.ts`,
     no semicolons, 120-character lines, light and dark themes, usable at narrow widths.

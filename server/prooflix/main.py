@@ -20,7 +20,8 @@ from . import __version__
 from .api import clickhouse as clickhouse_api, ingestion as ingestion_api, pipelines, runs, schedules, sql, system, workspace as workspace_api
 from .api import auth as auth_api
 from .api import workspaces as workspaces_api
-from .auth import COOKIE, PUBLIC_PATHS, UserStore, can_access
+from .auth import COOKIE, PUBLIC_PATHS, UserStore, UsersFileError, can_access
+from .connections import ConnectionsFileError
 from .config import Settings
 from .runtime import build_services, install
 from .workspaces import WorkspaceRegistry
@@ -54,6 +55,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install(app, build_services(settings))
     app.state.users = UserStore(settings.home)  # PROOFLIX_HOME/users.json
 
+    @app.exception_handler(ConnectionsFileError)
+    async def connections_file_error(request, exc):  # fail closed (principle 11)
+        log.error("%s", exc.__cause__ or exc)
+        return JSONResponse({"detail": str(exc)}, status_code=500)
+
     @app.middleware("http")
     async def require_sign_in(request, call_next):
         """With PROOFLIX_AUTH on, /api needs a signed-in user who has the tab the path belongs to."""
@@ -63,11 +69,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and path.startswith("/api/")
             and not any(path == p or (p.endswith("/") and path.startswith(p)) for p in PUBLIC_PATHS)
         ):
-            user = app.state.users.user_for(request.cookies.get(COOKIE))
+            try:
+                user = app.state.users.user_for(request.cookies.get(COOKIE))
+            except UsersFileError as exc:  # fail closed: never treat an unreadable file as "no users"
+                return JSONResponse({"detail": str(exc)}, status_code=500)
             if user is None:
                 return JSONResponse({"detail": "Sign in first"}, status_code=401)
             if not can_access(user, path):
                 return JSONResponse({"detail": "You don't have access to this tab; ask an admin"}, status_code=403)
+            request.state.user = user
         return await call_next(request)
 
     app.add_middleware(

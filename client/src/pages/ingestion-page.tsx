@@ -31,7 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   api,
   useDbConnections,
@@ -43,7 +43,7 @@ import {
   useSaveDbConnection,
   useSaveIngestionJob,
   useSourceTables,
-  useStartRun,
+  useAuthStatus,
 } from "@/lib/api"
 import { describeCron } from "@/lib/schedule"
 import type { DbConnection, DbKind, IngestionJob, JobTable, SourceTable } from "@/lib/types"
@@ -229,6 +229,7 @@ function DateRangePanel({
 }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const canOpenRuns = useCanOpenRuns()
   const [from, setFrom] = useState("")
   const [to, setTo] = useState("")
   const [pending, setPending] = useState(false)
@@ -250,7 +251,7 @@ function DateRangePanel({
     const failed = results
       .map((r, i) => (r.status === "rejected" ? `${runnable[i].id}: ${(r.reason as Error).message}` : null))
       .filter(Boolean)
-    if (ok.length === 1 && !failed.length) return navigate(`/runs/${ok[0].id}`)
+    if (ok.length === 1 && !failed.length && canOpenRuns) return navigate(`/runs/${ok[0].id}`)
     setResult(
       failed.length
         ? { ok: false, text: `Started ${ok.length}; not started: ${failed.join("; ")}` }
@@ -342,7 +343,7 @@ function RunJobsButton({
     if (!window.confirm(`Run ${startable.length} ingestion job${startable.length === 1 ? "" : "s"} now?${note}`)) return
     setPending(true)
     setResult(null)
-    const results = await Promise.allSettled(startable.map((j) => api.startRun(j.id, {})))
+    const results = await Promise.allSettled(startable.map((j) => api.runJobForDates(j.id, null, null)))
     setPending(false)
     void qc.invalidateQueries({ queryKey: ["runs"] })
     const failed = results
@@ -400,7 +401,12 @@ function JobRow({
 }) {
   const navigate = useNavigate()
   const runs = useRuns({ pipeline: job.id, limit: 5 })
-  const start = useStartRun()
+  const qc = useQueryClient()
+  const canOpenRuns = useCanOpenRuns()
+  const start = useMutation({
+    mutationFn: (id: string) => api.runJobForDates(id, null, null),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  })
   const remove = useDeleteIngestionJob()
   const last = runs.data?.[0]
   const active = runs.data?.filter((r) => !TERMINAL_STATUSES.includes(r.status))
@@ -418,9 +424,13 @@ function JobRow({
         />
       </TableCell>
       <TableCell>
-        <Link to={`/pipelines/${job.id}`} className="font-medium hover:underline">
-          {job.name}
-        </Link>
+        {canOpenRuns ? (
+          <Link to={`/pipelines/${job.id}`} className="font-medium hover:underline">
+            {job.name}
+          </Link>
+        ) : (
+          <span className="font-medium">{job.name}</span>
+        )}
         <div className="text-muted-foreground font-mono text-xs">{job.id}</div>
         {job.errors.map((e) => (
           <p key={e} className="text-destructive text-xs">
@@ -465,7 +475,11 @@ function JobRow({
       </TableCell>
       <TableCell className="text-sm">
         {last ? (
-          <Link to={`/runs/${last.id}`} className="flex flex-col gap-0.5 hover:underline">
+          <Link
+            to={canOpenRuns ? `/runs/${last.id}` : "#"}
+            onClick={(e) => !canOpenRuns && e.preventDefault()}
+            className={cn("flex flex-col gap-0.5", canOpenRuns && "hover:underline")}
+          >
             <StatusBadge status={last.status} />
             <span className="text-muted-foreground text-xs">{formatDateTime(last.started_at ?? last.created_at)}</span>
           </Link>
@@ -480,9 +494,7 @@ function JobRow({
           ) : (
             <Button
               size="sm"
-              onClick={() =>
-                start.mutate({ id: job.id, parameters: {} }, { onSuccess: (run) => navigate(`/runs/${run.id}`) })
-              }
+              onClick={() => start.mutate(job.id, { onSuccess: (run) => canOpenRuns && navigate(`/runs/${run.id}`) })}
               disabled={start.isPending || job.errors.length > 0}
             >
               {start.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run now
@@ -1238,4 +1250,10 @@ function Field({ label, help, children }: { label: string; help?: string | null;
       {children}
     </div>
   )
+}
+
+/** Run pages belong to the Pipelines tab: open them only for users who have it. */
+function useCanOpenRuns(): boolean {
+  const auth = useAuthStatus().data
+  return !auth?.enabled || !!auth.user?.visible_tabs.includes("pipelines")
 }

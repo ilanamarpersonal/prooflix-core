@@ -21,6 +21,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -29,6 +30,10 @@ CONNECTIONS_FILE = "connections.json"
 NAME_PATTERN = r"^[a-z][a-z0-9_]*$"
 MASK = "********"
 TIMEOUT = 10  # seconds to connect
+
+
+class ConnectionsFileError(RuntimeError):
+    """connections.json exists but can't be read: refuse rather than treat it as empty."""
 
 
 class DatabaseUnreachable(RuntimeError):
@@ -125,6 +130,20 @@ KINDS: dict[str, Kind] = {
 OPTION_KEYS = {"connect_by", "encrypt", "trust_server_certificate"}
 
 
+# what a host and a database / service name may contain: nothing that adds JDBC URL
+# options (?, ;, &, =, /), which could turn on driver features such as MySQL's
+# allowLoadLocalInfile and make the server send its files to a database it is pointed at
+HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})|\[[0-9A-Fa-f:.]+\])$")
+DATABASE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.$#-]{0,127}$")
+
+
+def check_address(host: str, database: str) -> None:
+    if not HOST_PATTERN.match(host or ""):
+        raise ValueError("host: a host name or IP address only (no port, path or options)")
+    if not DATABASE_PATTERN.match(database or ""):
+        raise ValueError("database: letters, digits and _ . $ # - only (no options)")
+
+
 @dataclass
 class Connection:
     name: str
@@ -142,6 +161,7 @@ class Connection:
 
     @property
     def jdbc_url(self) -> str:
+        check_address(self.host, self.database)  # also for connections saved before the check
         return KINDS[self.kind].jdbc_url(self)
 
     def for_task(self) -> dict:
@@ -162,15 +182,22 @@ class ConnectionStore:
     def __init__(self, home: Path | None):
         self.file = home / CONNECTIONS_FILE if home is not None else None
         self._memory: dict[str, dict] = {}
+        self._lock = threading.RLock()  # every read-modify-write of the file
 
     def _read(self) -> dict[str, dict]:
+        """The saved connections; {} only when there is no file. A file that exists but
+        can't be read raises (fail closed): saving then never writes over the passwords in it."""
         if self.file is None:
             return dict(self._memory)
         try:
             data = json.loads(self.file.read_text())
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return {}
-        return data if isinstance(data, dict) else {}
+        except (OSError, ValueError) as e:
+            raise ConnectionsFileError("The connections file can't be read; fix or restore it (see the server log)") from e
+        if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
+            raise ConnectionsFileError("The connections file isn't valid; fix or restore it (see the server log)")
+        return data
 
     def _write(self, data: dict[str, dict]) -> None:
         if self.file is None:
@@ -201,23 +228,28 @@ class ConnectionStore:
             raise ValueError("name: lowercase letters, digits and _, starting with a letter")
         if conn.kind not in KINDS:
             raise ValueError(f"type: one of {', '.join(KINDS)}")
+        check_address(conn.host, conn.database)
+        if not 0 < int(conn.port) < 65536:
+            raise ValueError("port: 1 to 65535")
         allowed = {f.key for f in KINDS[conn.kind].fields} & OPTION_KEYS
         conn.options = {k: v for k, v in conn.options.items() if k in allowed}
-        data = self._read()
-        if conn.password == MASK:
-            conn.password = data.get(conn.name, {}).get("password", "")
-        values = asdict(conn)
-        values.pop("name")
-        data[conn.name] = values
-        self._write(data)
-        return conn
+        with self._lock:
+            data = self._read()
+            if conn.password == MASK:
+                conn.password = data.get(conn.name, {}).get("password", "")
+            values = asdict(conn)
+            values.pop("name")
+            data[conn.name] = values
+            self._write(data)
+            return conn
 
     def delete(self, name: str) -> bool:
-        data = self._read()
-        if data.pop(name, None) is None:
-            return False
-        self._write(data)
-        return True
+        with self._lock:
+            data = self._read()
+            if data.pop(name, None) is None:
+                return False
+            self._write(data)
+            return True
 
 
 # ------------------------------------------------------------ browsing

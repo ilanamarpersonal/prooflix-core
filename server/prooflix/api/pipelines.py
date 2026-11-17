@@ -10,11 +10,12 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from ..engine import PipelineExecutor, Scheduler
 from ..pipelines import PipelineNotFound, PipelineValidationError, Workspace
+from ..pipelines.workspace import parse_pipeline
 from ..pipelines.models import PIPELINE_ID_PATTERN, PipelineTask, ShellTask
 from ..pipelines.schedule_yaml import set_schedule
 from ..runs import Run
@@ -69,13 +70,22 @@ async def save_pipeline(
     pipeline_id: PipelineId,
     body: PipelineSourceIn,
     response: Response,
+    request: Request,
     create_only: bool = False,
     ws: Workspace = Depends(get_workspace),
     scheduler: Scheduler = Depends(get_scheduler),
 ):
-    """Create or replace a pipeline file. ``create_only=true`` refuses to overwrite."""
+    """Create or replace a pipeline file. ``create_only=true`` refuses to overwrite.
+
+    With sign-in on, only an admin may save a pipeline with a shell task: a shell
+    command runs as the server, with access to its private files."""
     if not re.match(PIPELINE_ID_PATTERN, pipeline_id):
         raise _invalid([f"Invalid pipeline id '{pipeline_id}'"])
+    user = getattr(request.state, "user", None)
+    if user is not None and user.role != "admin":
+        spec = parse_pipeline(pipeline_id, body.source).spec
+        if spec is not None and any(isinstance(t, ShellTask) for t in spec.tasks):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only an admin can save a pipeline with a shell task")
     created = not ws.exists(pipeline_id)
     if create_only and not created:
         raise HTTPException(

@@ -24,6 +24,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -46,7 +47,7 @@ TABS = ("pipelines", "ingestion", "sql", "catalog", "workspace", "clickhouse", "
 
 # API path prefix -> the tabs that use it (any one of them gives access). Longest prefix wins.
 TAB_PATHS: dict[str, tuple[str, ...]] = {
-    "/api/pipelines": ("pipelines", "ingestion"),  # Ingestion starts job runs and checks crons
+    "/api/pipelines": ("pipelines",),  # Ingestion runs its jobs through /api/ingestion
     "/api/runs": ("pipelines", "ingestion"),
     "/api/schedules": ("pipelines", "ingestion"),
     "/api/ingestion": ("ingestion",),
@@ -65,13 +66,38 @@ MAX_FAILURES = 5
 LOCK_SECONDS = 60
 
 
+MAX_PASSWORD = 1024  # scrypt on megabytes of input would be a cheap denial of service
+
+
 class AuthError(ValueError):
     """A refused request; the message says why."""
+
+
+class SetupDone(AuthError):
+    """The first admin exists already."""
+
+
+class LockedOut(AuthError):
+    """Too many wrong passwords for this name; ``retry_after`` seconds to wait."""
+
+    def __init__(self, retry_after: int):
+        super().__init__(f"Too many wrong passwords; try again in {retry_after} seconds")
+        self.retry_after = retry_after
+
+
+USERS_FILE_BROKEN = "The users file can't be read; an operator must fix or restore it (see the server log)"
+log = logging.getLogger(__name__)
+
+
+class UsersFileError(RuntimeError):
+    """users.json exists but can't be read: refuse everything rather than treat it as empty."""
 
 
 def password_problems(password: str) -> list[str]:
     """What the password lacks: [] when it is acceptable."""
     problems = []
+    if len(password) > MAX_PASSWORD:
+        return [f"at most {MAX_PASSWORD} characters"]
     if len(password) < 8:
         problems.append("at least 8 characters")
     if not re.search(r"[A-Z]", password):
@@ -95,6 +121,8 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
+    if len(password) > MAX_PASSWORD:
+        return False
     try:
         algo, n, r, p, salt, digest = stored.split("$")
         if algo != "scrypt":
@@ -152,33 +180,61 @@ class UserStore:
         self.file = home / USERS_FILE if home is not None else None
         self.key_file = home / KEY_FILE if home is not None else None
         self._memory: dict[str, dict] = {}
-        self._lock = threading.Lock()
+        # one lock for every read-modify-write of users.json and for the failure counts
+        self._lock = threading.RLock()
         self._failures: dict[str, tuple[int, float]] = {}
+        self._cache: tuple[tuple[int, int], dict[str, dict]] | None = None  # ((mtime_ns, size), users)
+        self._dummy = hash_password(secrets.token_urlsafe(16))  # same work for unknown names
         self._key = self._load_key()
 
     # ------------------------------------------------------------ storage
     def _load_key(self) -> bytes:
-        if self.key_file is not None and self.key_file.is_file():
-            return bytes.fromhex(self.key_file.read_text().strip())
+        if self.key_file is not None and self.key_file.exists():
+            try:
+                key = bytes.fromhex(self.key_file.read_text().strip())
+            except (OSError, ValueError):
+                key = b""
+            if len(key) != 32:  # fail closed: never sign sessions with an empty or short key
+                raise UsersFileError(f"{self.key_file} is not a 32-byte key; restore it or delete it to start over")
+            return key
         key = secrets.token_bytes(32)
         if self.key_file is not None:
             _write_private(self.key_file, key.hex())
         return key
 
     def _read(self) -> dict[str, dict]:
+        """The users; {} only when there is no file. A file that exists but can't be read or
+        parsed raises UsersFileError (fail closed: never reopen first-admin setup, never
+        write over it). Parsed once per change of the file, not on every request."""
         if self.file is None:
             return dict(self._memory)
         try:
-            data = json.loads(self.file.read_text())
-        except (OSError, ValueError):
+            st = self.file.stat()
+        except FileNotFoundError:
             return {}
-        return data.get("users", {}) if isinstance(data, dict) else {}
+        except OSError as e:
+            log.error("%s can't be read: %s", self.file, e)
+            raise UsersFileError(USERS_FILE_BROKEN) from None
+        stamp = (st.st_mtime_ns, st.st_size)
+        if self._cache is not None and self._cache[0] == stamp:
+            return dict(self._cache[1])
+        try:
+            data = json.loads(self.file.read_text())
+            users = data["users"]
+            if not isinstance(users, dict) or not all(isinstance(v, dict) for v in users.values()):
+                raise ValueError("'users' is not a map of users")
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            log.error("%s can't be read: %s", self.file, e)  # details for the operator, not for callers
+            raise UsersFileError(USERS_FILE_BROKEN) from None
+        self._cache = (stamp, users)
+        return dict(users)
 
     def _write(self, users: dict[str, dict]) -> None:
         if self.file is None:
             self._memory = dict(users)
         else:
             _write_private(self.file, json.dumps({"users": dict(sorted(users.items()))}, indent=2))
+            self._cache = None
 
     def list(self) -> list[User]:
         out = []
@@ -193,12 +249,13 @@ class UserStore:
         return next((u for u in self.list() if u.username == username.strip().lower()), None)
 
     def _save(self, user: User) -> User:
-        users = self._read()
-        values = asdict(user)
-        values.pop("username")
-        users[user.username] = values
-        self._write(users)
-        return user
+        with self._lock:
+            users = self._read()  # raises rather than return {} for a bad file: nothing is lost
+            values = asdict(user)
+            values.pop("username")
+            users[user.username] = values
+            self._write(users)
+            return user
 
     @property
     def setup_needed(self) -> bool:
@@ -208,6 +265,14 @@ class UserStore:
         return [u for u in self.list() if u.role == "admin" and not u.disabled]
 
     # ------------------------------------------------------------ changes
+    def create_first_admin(self, username: str, password: str) -> User:
+        """The first admin, only while there are no users (checked under the lock, so two
+        requests at once can't both create one)."""
+        with self._lock:
+            if not self.setup_needed:
+                raise SetupDone("The first admin exists already; sign in")
+            return self.create(username, password, role="admin")
+
     def create(self, username: str, password: str, role: str = "user", tabs: list[str] | None = None) -> User:
         username = username.strip().lower()
         if not re.match(USERNAME_PATTERN, username):
@@ -270,21 +335,31 @@ class UserStore:
 
     # ------------------------------------------------------------ sign-in
     def authenticate(self, username: str, password: str) -> User:
-        name = username.strip().lower()
-        count, until = self._failures.get(name, (0, 0.0))
-        if until > time.time():
-            raise AuthError(f"Too many wrong passwords; try again in {int(until - time.time()) + 1} seconds")
+        name = username.strip().lower()[:64]
+        with self._lock:
+            count, until = self._failures.get(name, (0, 0.0))
+            if until > time.time():
+                raise LockedOut(int(until - time.time()) + 1)
         user = self.get(name)
-        ok = user is not None and verify_password(password, user.password)
-        if not ok or user.disabled:
-            count += 1
-            self._failures[name] = (count, time.time() + LOCK_SECONDS if count >= MAX_FAILURES else 0.0)
-            if ok and user.disabled:
-                raise AuthError("This account is disabled")
-            raise AuthError("Wrong user name or password")
-        self._failures.pop(name, None)
-        user.last_login = _now()
-        return self._save(user)
+        # scrypt runs outside the lock, and for unknown names too, so timing doesn't tell them apart
+        ok = verify_password(password, user.password if user is not None else self._dummy) and user is not None
+        with self._lock:
+            if not ok or user.disabled:
+                count = self._failures.get(name, (0, 0.0))[0] + 1
+                self._failures[name] = (count, time.time() + LOCK_SECONDS if count >= MAX_FAILURES else 0.0)
+                if len(self._failures) > 10_000:  # bound the memory any caller can make it use
+                    now = time.time()
+                    self._failures = {k: v for k, v in self._failures.items() if v[1] > now}
+                if ok and user.disabled:
+                    raise AuthError("This account is disabled")
+                raise AuthError("Wrong user name or password")
+            self._failures.pop(name, None)
+            # re-read: an admin may have changed the user during scrypt; never write back an old copy
+            fresh = self.get(name)
+            if fresh is None or fresh.disabled or fresh.password != user.password:
+                raise AuthError("Wrong user name or password")
+            fresh.last_login = _now()
+            return self._save(fresh)
 
     def issue(self, user: User) -> str:
         payload = {"u": user.username, "exp": int(time.time()) + SESSION_SECONDS, "s": user.stamp}
