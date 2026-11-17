@@ -55,12 +55,19 @@ class _Parent:
 
 class PipelineExecutor:
     def __init__(
-        self, workspace: Workspace, store: RunStore, *, max_depth: int = 10, start_date: str | None = None
+        self,
+        workspace: Workspace,
+        store: RunStore,
+        *,
+        max_depth: int = 10,
+        start_date: str | None = None,
+        connections: Callable[[str], dict | None] | None = None,
     ):
         self.workspace = workspace
         self.store = store
         self.max_depth = max_depth
         self.start_date = start_date  # PROOFLIX_START_DATE, ISO 8601 (UTC); None: all data
+        self.connections = connections  # name -> connection details, for ctx.connection()
         self._active: dict[str, asyncio.Task[Run]] = {}
         install_print_capture()  # print() inside python tasks goes to the task log
 
@@ -309,6 +316,7 @@ class PipelineExecutor:
                 parameters=params,
                 start_date=datetime.fromisoformat(self.start_date) if self.start_date else None,
                 _log=logger,
+                _connections=self.connections,
             )
             tr.log(f"Calling {task.entrypoint}")
             return await run_python(func, params, ctx)

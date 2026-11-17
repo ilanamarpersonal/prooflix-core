@@ -20,7 +20,8 @@ flowchart LR
 * **Spark**: Java 17 is copied in from `eclipse-temurin:17-jre` (OpenJDK, GPLv2
   with the Classpath Exception, free for commercial use; `JAVA_HOME=/opt/java/openjdk`).
   The Spark packages pipelines use (Delta Lake 4.3.1, the Unity Catalog connector
-  0.7.0, Avro; build argument `SPARK_PACKAGES`) are fetched at build time into
+  0.7.0, Avro, and the JDBC drivers the Ingestion tab's jobs use: Oracle ojdbc11,
+  SQL Server mssql-jdbc, MySQL Connector/J, PostgreSQL; build argument `SPARK_PACKAGES`) are fetched at build time into
   `/opt/spark-ivy` (`PROOFLIX_SPARK_IVY`, `PROOFLIX_SPARK_PACKAGES`), so pods
   start without downloading anything. Rebuild the image now and then for Java
   security updates. The repository layout is kept under `/app`

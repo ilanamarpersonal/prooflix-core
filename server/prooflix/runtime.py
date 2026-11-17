@@ -17,6 +17,7 @@ from fastapi import FastAPI
 
 from . import linked_folders
 from .config import Settings
+from .connections import ConnectionStore
 from .engine import PipelineExecutor, Scheduler
 from .pipelines import Workspace
 from .runs import RunStore
@@ -35,6 +36,7 @@ class Services:
     store: RunStore
     executor: PipelineExecutor
     scheduler: Scheduler
+    connections: ConnectionStore
 
 
 def build_services(settings: Settings) -> Services:
@@ -45,11 +47,17 @@ def build_services(settings: Settings) -> Services:
     recovered = store.recover_interrupted()
     if recovered:
         log.warning("Marked %d interrupted run(s) as FAILED", recovered)
+    connections = ConnectionStore(settings.home)  # PROOFLIX_HOME/connections.json
+
+    def connection(name: str) -> dict | None:
+        found = connections.get(name)
+        return found.for_task() if found is not None else None
+
     executor = PipelineExecutor(
-        workspace, store, max_depth=settings.max_depth, start_date=settings.start_date
+        workspace, store, max_depth=settings.max_depth, start_date=settings.start_date, connections=connection
     )
     scheduler = Scheduler(workspace, executor, store)
-    return Services(settings, workspace, store, executor, scheduler)
+    return Services(settings, workspace, store, executor, scheduler, connections)
 
 
 def install(app: FastAPI, services: Services) -> None:
@@ -58,6 +66,7 @@ def install(app: FastAPI, services: Services) -> None:
     app.state.store = services.store
     app.state.executor = services.executor
     app.state.scheduler = services.scheduler
+    app.state.connections = services.connections
 
 
 async def switch_workspace(app: FastAPI, root: Path) -> bool:

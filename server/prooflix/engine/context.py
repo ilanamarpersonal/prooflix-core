@@ -22,6 +22,10 @@ class TaskContext:
 
     ``start_date`` is the system's start date (``PROOFLIX_START_DATE``): where
     processing starts when there is no checkpoint yet. ``None`` means all data.
+
+    ``ctx.connection("bankdb")`` returns a database connection defined in the
+    Ingestion tab (kind, host, port, database, user, password, driver, jdbc_url),
+    so passwords never have to be written in pipeline YAML.
     """
 
     run_id: str
@@ -33,7 +37,15 @@ class TaskContext:
     parameters: dict[str, Any] = field(default_factory=dict)
     start_date: datetime | None = None
     _log: Callable[[str], None] = field(default=print, repr=False)
+    _connections: Callable[[str], dict | None] | None = field(default=None, repr=False)
 
     def log(self, message: object) -> None:
         """Append a line to the task log shown in the UI."""
         self._log(str(message))
+
+    def connection(self, name: str) -> dict:
+        """A database connection defined in the Ingestion tab, by name."""
+        found = self._connections(name) if self._connections is not None else None
+        if found is None:
+            raise KeyError(f"no database connection named '{name}' (define it in the Ingestion tab)")
+        return found

@@ -6,6 +6,13 @@ import {
   type SystemParameter,
   type ClickHouseImportResult,
   type ClickHouseStatus,
+  type DbConnection,
+  type DbConnectionIn,
+  type DbKind,
+  type IngestionJob,
+  type IngestionJobIn,
+  type IngestionJobs,
+  type SourceTable,
   type GoldTable,
   type PipelineSummary,
   type Run,
@@ -139,6 +146,35 @@ export const api = {
   systemParameters: () => request<SystemParameter[]>("/system/parameters"),
   clickhouseStatus: () => request<ClickHouseStatus>("/clickhouse/status"),
   goldTables: () => request<GoldTable[]>("/clickhouse/gold-tables"),
+  dbKinds: () => request<DbKind[]>("/ingestion/kinds"),
+  dbConnections: () => request<DbConnection[]>("/ingestion/connections"),
+  saveDbConnection: (name: string, body: DbConnectionIn) =>
+    request<DbConnection>(`/ingestion/connections/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteDbConnection: (name: string) =>
+    request<void>(`/ingestion/connections/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  testDbConnection: (name: string) =>
+    request<{ ok: boolean; tables: number | null; error: string | null }>(
+      `/ingestion/connections/${encodeURIComponent(name)}/test`,
+      { method: "POST" },
+    ),
+  sourceTables: (name: string) =>
+    request<SourceTable[]>(`/ingestion/connections/${encodeURIComponent(name)}/tables`),
+  ingestionJobs: () => request<IngestionJobs>("/ingestion/jobs"),
+  saveIngestionJob: (id: string, body: IngestionJobIn, createOnly: boolean) =>
+    request<IngestionJob>(`/ingestion/jobs/${encodeURIComponent(id)}${createOnly ? "?create_only=true" : ""}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  runJobForDates: (id: string, from_date: string | null, to_date: string | null) =>
+    request<Run>(`/ingestion/jobs/${encodeURIComponent(id)}/runs`, {
+      method: "POST",
+      body: JSON.stringify({ from_date, to_date }),
+    }),
+  deleteIngestionJob: (id: string) =>
+    request<void>(`/ingestion/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
   importToClickHouse: (tables: string[]) =>
     request<ClickHouseImportResult[]>("/clickhouse/import", { method: "POST", body: JSON.stringify({ tables }) }),
   restartServer: () => request<SystemParameter[]>("/system/restart", { method: "POST" }),
@@ -293,6 +329,63 @@ export function useImportToClickHouse() {
   return useMutation({
     mutationFn: (tables: string[]) => api.importToClickHouse(tables),
     onSettled: () => qc.invalidateQueries({ queryKey: ["clickhouse", "status"] }),
+  })
+}
+
+export const useDbKinds = () => useQuery({ queryKey: ["ingestion", "kinds"], queryFn: api.dbKinds, staleTime: Infinity })
+
+export const useDbConnections = () => useQuery({ queryKey: ["ingestion", "connections"], queryFn: api.dbConnections })
+
+export const useSourceTables = (name: string | null) =>
+  useQuery({
+    queryKey: ["ingestion", "tables", name],
+    queryFn: () => api.sourceTables(name!),
+    enabled: !!name,
+    retry: false,
+  })
+
+export const useIngestionJobs = () =>
+  useQuery({ queryKey: ["ingestion", "jobs"], queryFn: api.ingestionJobs, refetchInterval: 10_000 })
+
+export function useSaveDbConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, body }: { name: string; body: DbConnectionIn }) => api.saveDbConnection(name, body),
+    onSuccess: (_, { name }) => {
+      qc.invalidateQueries({ queryKey: ["ingestion", "connections"] })
+      qc.invalidateQueries({ queryKey: ["ingestion", "tables", name] })
+    },
+  })
+}
+
+export function useDeleteDbConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.deleteDbConnection(name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ingestion", "connections"] }),
+  })
+}
+
+export function useSaveIngestionJob() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body, createOnly }: { id: string; body: IngestionJobIn; createOnly: boolean }) =>
+      api.saveIngestionJob(id, body, createOnly),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ingestion", "jobs"] })
+      qc.invalidateQueries({ queryKey: ["pipelines"] })
+    },
+  })
+}
+
+export function useDeleteIngestionJob() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.deleteIngestionJob(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ingestion", "jobs"] })
+      qc.invalidateQueries({ queryKey: ["pipelines"] })
+    },
   })
 }
 

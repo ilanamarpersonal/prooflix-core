@@ -152,13 +152,16 @@ class Workspace:
         return self.load_all(overrides={pipeline_id: source})[pipeline_id].errors
 
     # ---------------------------------------------------------------- writing
-    def save(self, pipeline_id: str, source: str) -> PipelineDefinition:
-        """Validate and write a pipeline file. Raises ``PipelineValidationError``."""
+    def save(self, pipeline_id: str, source: str, project: Path | None = None) -> PipelineDefinition:
+        """Validate and write a pipeline file. Raises ``PipelineValidationError``.
+
+        A new pipeline goes to ``project``'s ``pipelines/`` (default: the root's)."""
         errors = self.validate_source(pipeline_id, source)
         if errors:
             raise PipelineValidationError(pipeline_id, errors)
-        self.pipelines_dir.mkdir(parents=True, exist_ok=True)
-        path = self.path_for(pipeline_id) or self.pipelines_dir / f"{pipeline_id}.yaml"
+        folder = (project or self.root) / "pipelines"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = self.path_for(pipeline_id) or folder / f"{pipeline_id}.yaml"
         _atomic_write(path, source)
         return self.load(pipeline_id)
 

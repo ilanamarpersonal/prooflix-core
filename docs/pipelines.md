@@ -107,6 +107,10 @@ def extract(source_file: str, ctx) -> dict:
   ```python
   since = read_checkpoint(path) or ctx.start_date or datetime(1970, 1, 1, tzinfo=timezone.utc)
   ```
+* `ctx.connection("bankdb")` returns a database connection defined in the
+  Ingestion tab: `kind`, `host`, `port`, `database`, `user`, `password`,
+  `options`, `driver` (JDBC class) and `jdbc_url`, so passwords never appear in
+  pipeline YAML. Ingestion jobs use it to read the database with Spark over JDBC.
 * Plain functions run in a worker thread; `async def` functions run on the
   event loop.
 * A module is re-imported when its file changes, so code edits apply to the

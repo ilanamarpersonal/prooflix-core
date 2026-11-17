@@ -55,6 +55,7 @@ client/
         ├── pipelines-page.tsx        /pipelines (pipelines + all runs)
         ├── new-pipeline-page.tsx     /pipelines/new
         ├── pipeline-detail-page.tsx  /pipelines/:pipelineId
+        ├── ingestion-page.tsx        /ingestion (database connections, ingestion jobs)
         ├── runs-page.tsx             /runs
         ├── run-detail-page.tsx       /runs/:runId
         ├── sql-editor-page.tsx       /sql
@@ -66,7 +67,7 @@ client/
 
 ## Sections, routes and screens
 
-The sidebar and the tabs show six sections; each remembers the last page you
+The sidebar and the tabs show seven sections; each remembers the last page you
 opened in it.
 
 ```mermaid
@@ -84,6 +85,7 @@ flowchart LR
         NEW -->|Save| PD
     end
 
+    ING["/ingestion<br/>connections, jobs"] -->|"job / last run"| PD
     SQL["/sql<br/>SQL Editor"]
     CAT["/catalog<br/>schemas and tables"] -->|"Query in SQL Editor"| SQL
     WSP["/workspace<br/>files, import,<br/>new / switch workspace"]
@@ -97,6 +99,7 @@ flowchart LR
 | **Pipelines** | Every pipeline of the active workspace: project, task count, sub-pipelines (links), trigger with next run, a valid / N errors badge, a **running** badge while a run is going, and Run (plus **Stop** while it is running). Below, all runs with search, split by a draggable divider. |
 | **Pipeline detail** | Header with a running badge and, while it runs, **Stop**; the **Trigger** card (schedule, next run, pause/resume, editor with presets or a cron of 5 or 6 fields and a preview of the next runs); a **Latest run** card that becomes **Running now** while a run is going. Tabs: **Graph** (clicking a task shows the code it runs and its definition), **YAML** (Validate / Save, Cmd/Ctrl+S), **Runs** (also runs started as a sub-pipeline). |
 | **Run detail** | The DAG colored by live task status, the run hierarchy, parameters and outputs. Below the graph, the **Output** panel: every task's printout in the order they ran (sub-pipeline tasks nested), updating live and following the newest line. Clicking a task shows only its printout. **Stop** while active, Run again when finished. |
+| **Ingestion** | **Database connections**: name, type (with its icon), JDBC URL, user and a **Test** result; the form asks for the fields of the chosen type (Oracle: service name or SID; SQL Server: encryption options). **Ingestion jobs**: connection, tables, start date, trigger, last run, and **Run now** (**Stop** while running), edit, delete. The job editor lists the database's tables (with a filter); each ticked table opens to choose its columns, bronze table name and watermark column (or a full copy), the **key columns** (default: the primary key; rows already in bronze are overwritten by key, none: appended), and the trigger is the same editor as a pipeline's. Checkboxes select jobs for **Run selected**; **Run all** starts every job; **Ingest dates** (per job, or for the selected / all jobs) opens a panel to ingest the rows between two dates. The list is paged. |
 | **SQL Editor** | Query tabs saved in the browser, completion of table and column names, results grid, Save SQL / Load SQL (`.sql` files), schema list beside the editor. |
 | **Catalog** | Catalogs, schemas and their tables with columns and row counts: the data lake's Delta tables (`tenant1.bronze.*` and so on, at their current version), Parquet folders, and datasets in `catalog/`. Import CSV/JSON as tables; Export as CSV or Parquet ZIP. A draggable divider sets the tree's width (double-click resets it). |
 | **Workspace** | The list of workspaces (the active one in bold) above the active workspace's file tree; a file or folder viewer (the top folder has **Remove workspace**); **Import Workspace** (upload a folder from this computer as a new workspace), **New workspace** (folder picker on the server, creates `pipelines/` and `src/`), **Switch workspace** (make another active, open another folder, remove from list). Removing a workspace only takes it off the list. |

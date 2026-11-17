@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
-import { Database, DatabaseZap, FolderTree, Library, SlidersHorizontal, Workflow, type LucideIcon } from "lucide-react"
+import { ArrowDownToLine, Database, DatabaseZap, FolderTree, Library, SlidersHorizontal, Workflow, type LucideIcon } from "lucide-react"
 
-export type SectionId = "pipelines" | "sql" | "workspace" | "catalog" | "clickhouse" | "system"
+export type SectionId = "pipelines" | "ingestion" | "sql" | "workspace" | "catalog" | "clickhouse" | "system"
 
 export interface Section {
   id: SectionId
@@ -17,6 +17,7 @@ export interface Section {
 /** The left menu and the tabs, in order. The first one is selected by default. */
 export const SECTIONS: Section[] = [
   { id: "pipelines", label: "Pipelines", icon: Workflow, home: "/pipelines", prefixes: ["/pipelines", "/runs"] },
+  { id: "ingestion", label: "Ingestion", icon: ArrowDownToLine, home: "/ingestion", prefixes: ["/ingestion"] },
   { id: "sql", label: "SQL Editor", icon: Database, home: "/sql", prefixes: ["/sql"] },
   { id: "catalog", label: "Catalog", icon: Library, home: "/catalog", prefixes: ["/catalog"] },
   { id: "workspace", label: "Workspace", icon: FolderTree, home: "/workspace", prefixes: ["/workspace"] },

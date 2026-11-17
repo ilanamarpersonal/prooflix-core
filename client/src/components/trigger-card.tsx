@@ -91,15 +91,12 @@ export function TriggerCard({ pipeline }: { pipeline: PipelineDetail }) {
   )
 }
 
-function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone: () => void }) {
-  const current = pipeline.schedule
+/** The state of a trigger form: the chosen option, time zone, pause, and the server's check. */
+export function useTrigger(current: { cron: string; timezone: string; enabled: boolean } | null | undefined) {
   const [form, setForm] = useState<TriggerForm>(() => fromCron(current?.cron))
   const [tz, setTz] = useState(current?.timezone ?? "UTC")
   const [enabled, setEnabled] = useState(current?.enabled ?? true)
-  const setSchedule = useSetSchedule()
-  const zones = timeZones()
   const cron = toCron(form)
-  const update = (change: Partial<TriggerForm>) => setForm((f) => ({ ...f, ...change }))
 
   // the next run times, checked by the server (also validates a custom cron)
   const [debounced, setDebounced] = useState(cron)
@@ -115,16 +112,28 @@ function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone:
   // only show times that belong to the cron on screen, never the previous one's
   const upToDate = debounced === cron && !previewQuery.isPlaceholderData
   const preview = { data: upToDate ? previewQuery.data : undefined, isFetching: !upToDate || previewQuery.isFetching }
-  const invalid = !!cron && preview.data && !preview.data.valid
+  const invalid = !!cron && !!preview.data && !preview.data.valid
+  const blocked = invalid || (form.kind === "weekly" && !form.days.length)
+  /** what to save: null for "Manual only" */
+  const schedule = cron ? { cron, timezone: tz, enabled } : null
+  return { form, setForm, tz, setTz, enabled, setEnabled, cron, preview, invalid, blocked, schedule }
+}
 
-  const save = () =>
-    setSchedule.mutate(
-      { id: pipeline.id, schedule: cron ? { cron, timezone: tz, enabled } : null },
-      { onSuccess: onDone },
-    )
+export type TriggerState = ReturnType<typeof useTrigger>
 
+/** The trigger options (manual, every N minutes, daily, ..., custom cron) and the next run times. */
+export function TriggerFields({
+  trigger,
+  manualText = "The pipeline runs only when you start it (or when another pipeline calls it).",
+}: {
+  trigger: TriggerState
+  manualText?: string
+}) {
+  const { form, setForm, tz, setTz, enabled, setEnabled, cron, preview, invalid } = trigger
+  const zones = timeZones()
+  const update = (change: Partial<TriggerForm>) => setForm((f) => ({ ...f, ...change }))
   return (
-    <div className="grid gap-4 border-t px-4 py-4 text-sm">
+    <>
       <div role="radiogroup" aria-label="Trigger" className="flex flex-wrap gap-1.5">
         {TRIGGER_KINDS.map(({ kind, label }) => (
           <button
@@ -264,7 +273,7 @@ function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone:
 
       {form.kind === "manual" ? (
         <p className="text-muted-foreground">
-          The pipeline runs only when you start it (or when another pipeline calls it).
+          {manualText}
         </p>
       ) : (
         <div className="text-muted-foreground flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -281,11 +290,24 @@ function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone:
         </div>
       )}
 
+    </>
+  )
+}
+
+function TriggerEditor({ pipeline, onDone }: { pipeline: PipelineDetail; onDone: () => void }) {
+  const trigger = useTrigger(pipeline.schedule)
+  const setSchedule = useSetSchedule()
+
+  const save = () => setSchedule.mutate({ id: pipeline.id, schedule: trigger.schedule }, { onSuccess: onDone })
+
+  return (
+    <div className="grid gap-4 border-t px-4 py-4 text-sm">
+      <TriggerFields trigger={trigger} />
       {setSchedule.error && <ErrorAlert title="Could not save the trigger" error={setSchedule.error} />}
       <div className="flex gap-2">
         <Button
           onClick={save}
-          disabled={setSchedule.isPending || !!invalid || (form.kind === "weekly" && !form.days.length)}
+          disabled={setSchedule.isPending || trigger.blocked}
         >
           {setSchedule.isPending && <Loader2 className="animate-spin" />} Save trigger
         </Button>

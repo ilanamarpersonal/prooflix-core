@@ -9,7 +9,8 @@
 #
 # Spark is the execution engine of pipeline tasks, so the image also has Java 17
 # (Eclipse Temurin, OpenJDK), PySpark (the server's "spark" extra) and the Spark
-# packages pipelines use (Delta Lake, the Unity Catalog connector, Avro), fetched
+# packages pipelines use (Delta Lake, the Unity Catalog connector, Avro, and the
+# JDBC drivers for Oracle, SQL Server, MySQL and PostgreSQL ingestion), fetched
 # at build time so pods start without downloading anything.
 
 # --- Stage 1: build the React client ------------------------------------------
@@ -28,7 +29,7 @@ COPY --from=eclipse-temurin:17-jre /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk
 
 # Keep in step with workspaces' infra/config.py (the Spark 4.0 line)
-ARG SPARK_PACKAGES="io.delta:delta-spark_4.0_2.13:4.3.1,io.unitycatalog:unitycatalog-spark_4.0_2.13:0.7.0,org.apache.spark:spark-avro_2.13:4.0.5"
+ARG SPARK_PACKAGES="io.delta:delta-spark_4.0_2.13:4.3.1,io.unitycatalog:unitycatalog-spark_4.0_2.13:0.7.0,org.apache.spark:spark-avro_2.13:4.0.5,com.oracle.database.jdbc:ojdbc11:23.5.0.24.07,com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11,com.mysql:mysql-connector-j:9.1.0,org.postgresql:postgresql:42.7.4"
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \

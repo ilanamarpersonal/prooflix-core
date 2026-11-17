@@ -311,3 +311,93 @@ export interface ClickHouseImportResult {
   seconds: number | null
   error: string | null
 }
+
+// ------------------------------------------------------------ ingestion
+export interface DbField {
+  key: string
+  label: string
+  type: "text" | "number" | "password" | "select" | "bool"
+  default: string | number | boolean | null
+  required: boolean
+  options: [string, string][]
+  help: string | null
+}
+
+export interface DbKind {
+  kind: string
+  label: string
+  fields: DbField[]
+}
+
+export interface DbConnection {
+  name: string
+  kind: string
+  host: string
+  port: number
+  database: string
+  user: string
+  /** "********" when one is saved */
+  password: string
+  options: Record<string, unknown>
+  jdbc_url: string
+}
+
+export interface DbConnectionIn {
+  kind: string
+  host: string
+  port: number | null
+  database: string
+  user: string
+  password: string
+  options: Record<string, unknown>
+}
+
+export interface SourceColumn {
+  name: string
+  type: string
+  /** a date, timestamp or integer column: can tell which rows are new */
+  watermark: boolean
+}
+
+export interface SourceTable {
+  schema: string
+  name: string
+  /** the source table's primary key columns, in order */
+  primary_key: string[]
+  columns: SourceColumn[]
+}
+
+export interface JobTable {
+  /** "schema.table" in the database */
+  source: string
+  /** bronze table name */
+  target: string
+  /** [] = every column */
+  columns: string[]
+  /** null = full copy each run */
+  watermark: string | null
+  /** columns identifying a row: rows already in bronze are overwritten; [] = append. Missing in jobs saved before keys existed */
+  keys?: string[]
+}
+
+export interface IngestionJobIn {
+  name: string | null
+  /** null: runs only when started */
+  schedule: { cron: string; timezone: string; enabled: boolean } | null
+  connection: string
+  start_date: string | null
+  tables: JobTable[]
+}
+
+export interface IngestionJob extends Omit<IngestionJobIn, "schedule"> {
+  id: string
+  name: string
+  schedule: { cron: string; timezone: string; enabled: boolean; next_run: string | null } | null
+  errors: string[]
+}
+
+export interface IngestionJobs {
+  jobs: IngestionJob[]
+  task_ready: boolean
+  task_module: string
+}

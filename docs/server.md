@@ -106,6 +106,9 @@ flowchart TB
 | `engine/scheduler.py` | Starts runs on their cron schedules: ticks every second, no catch-up, no overlap |
 | `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB. Delta tables (a folder with `_delta_log`) are tables of the schema named after their parent folder, read at their current version |
 | `clickhouse.py` | Copies a catalog table into ClickHouse over its HTTP interface: maps the columns to ClickHouse types (`Int64`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, ..., each `Nullable`), loads the rows as Parquet into a staging table and swaps it in (`EXCHANGE TABLES`) |
+| `connections.py` | Database connections (Oracle, SQL Server, MySQL, PostgreSQL): the fields of each type, the JDBC URL and driver, the store in `PROOFLIX_HOME/connections.json` (mode 600), and listing a database's tables and columns with pure-Python drivers (pg8000, PyMySQL, python-oracledb thin, python-tds) |
+| `ingestion.py` | Ingestion jobs: a job (connection, tables, columns, watermarks, start date, schedule) as a generated pipeline calling `bronze.jdbc_ingest:run`, and back |
+| `api/ingestion.py` | The Ingestion tab: connections (save, test, list tables) and jobs |
 | `api/clickhouse.py` | The ClickHouse tab: connection status, the gold tables with their ClickHouse columns, and the import |
 | `delta_log.py` | Replays a Delta table's `_delta_log` (newest checkpoint, then later commits) to list the Parquet files of its current version, so overwritten rows aren't read twice. Refuses deletion vectors and column mapping. |
 | `api/workspace.py` | The active workspace's files: tree, file content, import of uploaded folders, removal to trash |
@@ -295,6 +298,23 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/clickhouse/status` | | `{configured, reachable, url, public_url, reader, version, error, tables: [{database, name, rows, bytes}]}` |
 | GET | `/api/clickhouse/gold-tables` | | `[{table, target, rows, columns: [{name, clickhouse_type}], error}]`: every table of a `gold` schema and the ClickHouse table it becomes (`tenant1.gold.x` -> `tenant1.x`) |
 | POST | `/api/clickhouse/import` | `{tables: ["tenant1.gold.x", ...]}` | One result per table: `{table, target, ok, rows, columns, replaced, seconds, error}`. Each table is replaced as a whole; one failing leaves its old copy and doesn't stop the others. `409` when ClickHouse isn't configured. |
+
+**Ingestion** (database connections and the jobs that copy their tables into bronze)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/ingestion/kinds` | | `[{kind, label, fields: [{key, label, type, default, required, options, help}]}]`: the database types (`oracle`, `sqlserver`, `mysql`, `postgresql`) and the fields each one's connection form asks for |
+| GET | `/api/ingestion/connections` | | `[{name, kind, host, port, database, user, password, options, jdbc_url}]`; `password` is `********` when set |
+| PUT | `/api/ingestion/connections/{name}` | `{kind, host, port, database, user, password, options}` | The connection. `password: "********"` keeps the saved one; `options` holds `connect_by` (Oracle) or `encrypt` / `trust_server_certificate` (SQL Server) |
+| DELETE | `/api/ingestion/connections/{name}` | | `204`; `409` while a job uses it |
+| POST | `/api/ingestion/connections/{name}/test` | | `{ok, tables, error}` (the password is never in `error`) |
+| GET | `/api/ingestion/connections/{name}/tables` | | `[{schema, name, columns: [{name, type, watermark}]}]`; `watermark` marks date, timestamp and integer columns. `502` when the database can't be reached |
+| GET | `/api/ingestion/jobs` | | `{jobs: [{id, name, connection, start_date, tables, schedule, errors}], task_ready, task_module}` |
+| PUT | `/api/ingestion/jobs/{id}[?create_only=true]` | `{name, connection, start_date, schedule, tables: [{source, target, columns, watermark}]}` | The job; writes `pipelines/<id>.yaml` (in the project that has `src/bronze/jdbc_ingest.py`). `409` when the id is another pipeline's |
+| POST | `/api/ingestion/jobs/{id}/runs` | `{from_date, to_date}` | `202 Run` for the rows between two dates (`YYYY-MM-DD`, both included; leave one out for an open side). Each table with a date watermark copies that range and overwrites what bronze has of it: by key columns, else by replacing the range. A job saved before this existed is written again with the `from_date` / `to_date` parameters first. `422` for no dates or a backwards range |
+| DELETE | `/api/ingestion/jobs/{id}` | | `204` (bronze tables and run history stay) |
+
+Running a job normally is `POST /api/pipelines/{id}/runs`. Tables list `primary_key` (from the database) and job tables take `keys`: the columns that identify a row, so rows already in bronze are overwritten (Delta MERGE) instead of appended.
 
 **System parameters** (see [Configuration](#configuration))
 

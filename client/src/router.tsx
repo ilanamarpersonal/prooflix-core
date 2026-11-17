@@ -3,6 +3,7 @@ import { createBrowserRouter } from "react-router"
 import { AppShell } from "@/components/layout/app-shell"
 import { CatalogPage } from "@/pages/catalog-page"
 import { ClickHousePage } from "@/pages/clickhouse-page"
+import { IngestionPage } from "@/pages/ingestion-page"
 import { NewPipelinePage } from "@/pages/new-pipeline-page"
 import { PipelineDetailPage } from "@/pages/pipeline-detail-page"
 import { PipelinesPage } from "@/pages/pipelines-page"
@@ -24,6 +25,7 @@ export const router = createBrowserRouter([
       { path: "pipelines/:pipelineId", element: <PipelineDetailPage /> },
       { path: "runs", element: <RunsPage /> },
       { path: "runs/:runId", element: <RunDetailPage /> },
+      { path: "ingestion", element: <IngestionPage /> },
       { path: "sql", element: <SqlEditorPage /> },
       { path: "workspace", element: <WorkspacePage /> },
       { path: "catalog", element: <CatalogPage /> },
