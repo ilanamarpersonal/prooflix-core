@@ -14,11 +14,13 @@ from dataclasses import replace
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import __version__
 from .api import clickhouse as clickhouse_api, ingestion as ingestion_api, pipelines, runs, schedules, sql, system, workspace as workspace_api
+from .api import auth as auth_api
 from .api import workspaces as workspaces_api
+from .auth import COOKIE, PUBLIC_PATHS, UserStore, can_access
 from .config import Settings
 from .runtime import build_services, install
 from .workspaces import WorkspaceRegistry
@@ -50,6 +52,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.boot_parameters = dict(settings.saved_parameters)
     app.state.switch_lock = asyncio.Lock()
     install(app, build_services(settings))
+    app.state.users = UserStore(settings.home)  # PROOFLIX_HOME/users.json
+
+    @app.middleware("http")
+    async def require_sign_in(request, call_next):
+        """With PROOFLIX_AUTH on, /api needs a signed-in user who has the tab the path belongs to."""
+        path = request.url.path
+        if (
+            app.state.settings.auth
+            and path.startswith("/api/")
+            and not any(path == p or (p.endswith("/") and path.startswith(p)) for p in PUBLIC_PATHS)
+        ):
+            user = app.state.users.user_for(request.cookies.get(COOKIE))
+            if user is None:
+                return JSONResponse({"detail": "Sign in first"}, status_code=401)
+            if not can_access(user, path):
+                return JSONResponse({"detail": "You don't have access to this tab; ask an admin"}, status_code=403)
+        return await call_next(request)
 
     app.add_middleware(
         CORSMiddleware,
@@ -68,6 +87,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(clickhouse_api.router)
     app.include_router(ingestion_api.router)
+    app.include_router(auth_api.router)
+    app.include_router(auth_api.users_router)
 
     @app.get("/api/health", tags=["meta"])
     async def health() -> dict:

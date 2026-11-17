@@ -106,6 +106,8 @@ flowchart TB
 | `engine/scheduler.py` | Starts runs on their cron schedules: ticks every second, no catch-up, no overlap |
 | `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB. Delta tables (a folder with `_delta_log`) are tables of the schema named after their parent folder, read at their current version |
 | `clickhouse.py` | Copies a catalog table into ClickHouse over its HTTP interface: maps the columns to ClickHouse types (`Int64`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, ..., each `Nullable`), loads the rows as Parquet into a staging table and swaps it in (`EXCHANGE TABLES`) |
+| `auth.py` | Users (`PROOFLIX_HOME/users.json`, scrypt hashes), the password rules, signed session cookies, the lockout after wrong passwords, and which API paths each tab opens |
+| `api/auth.py` | Sign in and out, the first admin, changing your password, and the Users tab's routes |
 | `connections.py` | Database connections (Oracle, SQL Server, MySQL, PostgreSQL): the fields of each type, the JDBC URL and driver, the store in `PROOFLIX_HOME/connections.json` (mode 600), and listing a database's tables and columns with pure-Python drivers (pg8000, PyMySQL, python-oracledb thin, python-tds) |
 | `ingestion.py` | Ingestion jobs: a job (connection, tables, columns, watermarks, start date, schedule) as a generated pipeline calling `bronze.jdbc_ingest:run`, and back |
 | `api/ingestion.py` | The Ingestion tab: connections (save, test, list tables) and jobs |
@@ -299,6 +301,22 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/clickhouse/gold-tables` | | `[{table, target, rows, columns: [{name, clickhouse_type}], error}]`: every table of a `gold` schema and the ClickHouse table it becomes (`tenant1.gold.x` -> `tenant1.x`) |
 | POST | `/api/clickhouse/import` | `{tables: ["tenant1.gold.x", ...]}` | One result per table: `{table, target, ok, rows, columns, replaced, seconds, error}`. Each table is replaced as a whole; one failing leaves its old copy and doesn't stop the others. `409` when ClickHouse isn't configured. |
 
+**Sign-in and users** (with `PROOFLIX_AUTH` on, every other `/api` route answers `401` without a session and `403` for a tab the user doesn't have)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/auth/status` | | `{enabled, setup_needed, user, tabs}`: whether sign-in is on, whether the first admin is still to be created, and the signed-in user (`{username, role, tabs, visible_tabs, disabled, created_at, last_login}`) |
+| POST | `/api/auth/setup` | `{username, password}` | Creates the first admin and signs in; `409` once a user exists |
+| POST | `/api/auth/login` | `{username, password}` | Sets the session cookie (HttpOnly, SameSite=Lax, 12 hours); `401` for a wrong password, a disabled account, or after 5 wrong passwords (locked for a minute) |
+| POST | `/api/auth/logout` | | `204`, cookie removed |
+| POST | `/api/auth/password` | `{current, new}` | Changes your own password; other sessions end |
+| GET | `/api/users` | | Every user (admins only) |
+| POST | `/api/users` | `{username, password, role, tabs}` | `201` the user; `422` when the password lacks 8 characters, a capital letter or a number |
+| PUT | `/api/users/{name}` | `{role, tabs, password, disabled}` | The user; a new password or disabling ends their sessions. The last admin can't be demoted, disabled or deleted, nor can you disable or delete yourself |
+| DELETE | `/api/users/{name}` | | `204` |
+
+Each API path belongs to the tabs that use it (`TAB_PATHS` in `auth.py`): for example `/api/sql` to the SQL Editor and the Catalog, `/api/runs` to Pipelines and Ingestion.
+
 **Ingestion** (database connections and the jobs that copy their tables into bronze)
 
 | Method | Path | Body | Response |
@@ -387,6 +405,7 @@ default and where it comes from, and edits them:
 | `PROOFLIX_CORS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed browser origins, comma-separated |
 | `PROOFLIX_CATALOG` | `<workspaces>/../catalog` | Catalog folder for datasets outside projects |
 | `PROOFLIX_SCHEDULER` | `1` (on) | `0` / `off` stops pipelines running on their schedules |
+| `PROOFLIX_AUTH` | `1` (on) | Users and sign-in: every `/api` call needs a signed-in user, who reaches only the APIs of their tabs. `0` turns it off. Environment variable only (the System tab shows it but can't change it) |
 | `PROOFLIX_START_DATE` | unset (all data) | Where data processing starts when the system is initialized: a pipeline with no checkpoint yet processes data from this date on. ISO 8601 date (`2026-01-01`) or time, stored as UTC. Pipelines read it as `ctx.start_date`, `${system.start_date}` or, in shell tasks, `$PROOFLIX_START_DATE` (see [pipelines.md](pipelines.md#references-)) |
 | `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state: the workspace list, the active workspace (`workspaces.json`) and the edited parameters (`parameters.json`). Environment variable only. |
 | `PROOFLIX_SOURCE_DATA` | unset | Default source data folder (raw files pipelines read): every workspace's `source/` links there, unless the workspace chose its own (`<workspace>/.prooflix/settings.json`) |

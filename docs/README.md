@@ -25,6 +25,7 @@ Current capabilities:
 | Document | What it covers |
 |---|---|
 | [architecture.md](architecture.md) | System overview, repository layout, request flows, key design decisions |
+| [architecture-principles.md](architecture-principles.md) | The rules every change is reviewed against (by people and the `architect` and `security-reviewer` agents in `.claude/agents/`) |
 | [pipelines.md](pipelines.md) | The pipeline YAML format, sub-pipelines, `${...}` references, validation rules, schedules |
 | [server.md](server.md) | Python server structure, execution engine, scheduler, run model, workspaces, REST API, system parameters |
 | [client.md](client.md) | React + shadcn/ui client structure, sections and screens, data flow, components |

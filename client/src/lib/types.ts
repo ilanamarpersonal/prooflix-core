@@ -401,3 +401,26 @@ export interface IngestionJobs {
   task_ready: boolean
   task_module: string
 }
+
+// ------------------------------------------------------------ users and sign-in
+export interface AppUser {
+  username: string
+  role: "admin" | "user"
+  /** the tabs an admin gave a user (admins see every tab) */
+  tabs: string[]
+  /** the tabs this user sees: every tab plus "users" for an admin */
+  visible_tabs: string[]
+  disabled: boolean
+  created_at: string
+  last_login: string | null
+}
+
+export interface AuthStatus {
+  /** PROOFLIX_AUTH: false means no login and every tab */
+  enabled: boolean
+  /** no users yet: the login page creates the first admin */
+  setup_needed: boolean
+  user: AppUser | null
+  /** every tab a user can be given */
+  tabs: string[]
+}

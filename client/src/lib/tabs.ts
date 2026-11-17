@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
-import { ArrowDownToLine, Database, DatabaseZap, FolderTree, Library, SlidersHorizontal, Workflow, type LucideIcon } from "lucide-react"
+import {
+  ArrowDownToLine,
+  Database,
+  DatabaseZap,
+  FolderTree,
+  UsersRound,
+  Library,
+  SlidersHorizontal,
+  Workflow,
+  type LucideIcon,
+} from "lucide-react"
 
-export type SectionId = "pipelines" | "ingestion" | "sql" | "workspace" | "catalog" | "clickhouse" | "system"
+export type SectionId = "pipelines" | "ingestion" | "sql" | "workspace" | "catalog" | "clickhouse" | "system" | "users"
 
 export interface Section {
   id: SectionId
@@ -23,16 +33,20 @@ export const SECTIONS: Section[] = [
   { id: "workspace", label: "Workspace", icon: FolderTree, home: "/workspace", prefixes: ["/workspace"] },
   { id: "clickhouse", label: "ClickHouse", icon: DatabaseZap, home: "/clickhouse", prefixes: ["/clickhouse"] },
   { id: "system", label: "System", icon: SlidersHorizontal, home: "/system", prefixes: ["/system"] },
+  { id: "users", label: "Users", icon: UsersRound, home: "/users", prefixes: ["/users"] },
 ]
+
+/** The sections a user sees: their tabs when sign-in is on, else every tab but Users. */
+export function visibleSections(allowed: string[] | null): Section[] {
+  return allowed ? SECTIONS.filter((s) => allowed.includes(s.id)) : SECTIONS.filter((s) => s.id !== "users")
+}
 
 export const DEFAULT_SECTION: SectionId = SECTIONS[0].id
 
 export const sectionById = (id: SectionId) => SECTIONS.find((s) => s.id === id)!
 
 export function sectionFor(pathname: string): Section | undefined {
-  return SECTIONS.find((s) =>
-    s.prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`)),
-  )
+  return SECTIONS.find((s) => s.prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`)))
 }
 
 /** The page each tab was last showing, so switching back restores it. */

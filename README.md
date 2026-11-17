@@ -97,12 +97,30 @@ while runs are going).
 | `PROOFLIX_CORS` | `http://localhost:5173,http://127.0.0.1:5173` | Browser origins allowed to call the API (needs a process restart) |
 | `PROOFLIX_CATALOG` | `catalog/` next to the workspaces folder | Catalog schemas that are not part of a project |
 | `PROOFLIX_SCHEDULER` | on | Run pipelines on their cron schedules |
+| `PROOFLIX_AUTH` | on | Users and the login page; `0` turns them off. Environment variable only |
 | `PROOFLIX_START_DATE` | unset (all data) | Where data processing starts when the system is initialized: a pipeline with no checkpoint yet processes data from this date on (`ctx.start_date` in Python, `${system.start_date}` in YAML) |
 | `PROOFLIX_HOME` | `~/.prooflix` | Server-wide state; environment variable only |
 | `PROOFLIX_SOURCE_DATA` | each workspace's `source/` | Default source data folder |
 | `PROOFLIX_DATA_LAKE` | each workspace's `data/` | Default data lake folder |
 
 The full reference is in [docs/server.md](docs/server.md#configuration).
+
+## Users and sign-in
+
+Prooflix asks everyone to sign in. On the first start, the login page creates the
+first **admin** (there is no default account). In the **Users** tab, admins add
+users and choose for each one:
+
+* **Role:** an admin sees every tab and manages users; a user sees only their tabs.
+* **Tabs:** which of Pipelines, Ingestion, SQL Editor, Catalog, Workspace,
+  ClickHouse and System the user sees. The server enforces it too: a user can't
+  call the API of a tab they don't have.
+* **Password:** at least 8 characters with a capital letter and a number. Admins
+  can set a new one; everyone can change their own from the user menu (top right).
+  Disabling a user, or changing their password, signs them out.
+
+Users live in `PROOFLIX_HOME/users.json`, with salted scrypt password hashes (never
+the passwords). `PROOFLIX_AUTH=0` turns sign-in off, for example on a laptop.
 
 ## Ingestion from databases
 

@@ -157,6 +157,15 @@ PARAMS: tuple[_Param, ...] = (
         _parse_flag,
     ),
     _Param(
+        "PROOFLIX_AUTH",
+        "Users and the login page (\"0\" turns them off): every API call then needs a signed-in "
+        "user, who sees only the tabs an admin gave them. Set as an environment variable only.",
+        "on",
+        lambda s: "on" if s.auth else "off",
+        None,
+        live=False,
+    ),
+    _Param(
         "PROOFLIX_START_DATE",
         "Where data processing starts when the system is initialized: a pipeline with no "
         "checkpoint yet processes data from this date on (UTC). Pipelines read it as "

@@ -48,6 +48,9 @@ class Settings:
       PROOFLIX_CATALOG     folder holding catalog schemas that are not part of a
                            project (default: a "catalog" folder next to the workspaces folder)
       PROOFLIX_SCHEDULER   "0" turns off running pipelines on their schedules (default on)
+      PROOFLIX_AUTH        "0" turns off users and the login page (default on): with it on,
+                           every API call needs a signed-in user and users see only
+                           their tabs (see auth.py). Environment variable only
       PROOFLIX_HOME        folder for server-wide state: the list of workspaces and
                            which one is active (default ~/.prooflix)
       PROOFLIX_SOURCE_DATA default source data folder (the raw files pipelines read)
@@ -82,6 +85,7 @@ class Settings:
     workspaces_root: Path | None = None  # None: no folder of workspaces (tests)
     max_depth: int = 10
     scheduler: bool = True  # run pipelines on their cron schedules
+    auth: bool = False  # users and sign-in (PROOFLIX_AUTH; on unless set to 0 for the server)
     cors_origins: tuple[str, ...] = field(
         default=("http://localhost:5173", "http://127.0.0.1:5173")
     )
@@ -151,6 +155,8 @@ class Settings:
             kwargs["workspace"] = Path(ws).expanduser().resolve()
         if catalog := env.get("PROOFLIX_CATALOG"):
             kwargs["catalog"] = Path(catalog).expanduser().resolve()
+        # read from the environment only: the System tab can't turn sign-in off
+        kwargs["auth"] = parse_flag(os.environ.get("PROOFLIX_AUTH", "1"))
         if (sched := env.get("PROOFLIX_SCHEDULER")) is not None:
             kwargs["scheduler"] = parse_flag(sched)
         if depth := env.get("PROOFLIX_MAX_DEPTH"):

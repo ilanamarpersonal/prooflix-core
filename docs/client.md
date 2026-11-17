@@ -67,7 +67,7 @@ client/
 
 ## Sections, routes and screens
 
-The sidebar and the tabs show seven sections; each remembers the last page you
+The sidebar and the tabs show up to eight sections (a user sees the ones an admin gave them; Users is for admins); each remembers the last page you
 opened in it.
 
 ```mermaid
@@ -105,6 +105,8 @@ flowchart LR
 | **Workspace** | The list of workspaces (the active one in bold) above the active workspace's file tree; a file or folder viewer (the top folder has **Remove workspace**); **Import Workspace** (upload a folder from this computer as a new workspace), **New workspace** (folder picker on the server, creates `pipelines/` and `src/`), **Switch workspace** (make another active, open another folder, remove from list). Removing a workspace only takes it off the list. |
 | **ClickHouse** | The connection (where Prooflix writes, the address and read-only user for outside queries, an example query) and every gold table with a checkbox: rows, the ClickHouse table it becomes, rows already there, and its columns with their ClickHouse types. **Import to ClickHouse** copies the chosen tables and shows each one's result. |
 | **System** | Every system parameter (`PROOFLIX_*`, see [server.md](server.md#configuration)): its value in use, default and source (edited here, environment or default). The pencil edits a value in place (a folder browser for folders, a date picker for the start date, a text box otherwise); the arrow removes the edited value. Edited values show **Restart to apply** until **Restart server** (in the header and in the banner) applies them. |
+| **Users** (admins) | Every user with their role, tabs and last sign-in; **Add user** and edit (role, the tabs they see as checkboxes, set a new password with a live check of the rules), disable / enable, delete. |
+| **Login** | Shown when signed out: user name and password, or, with no users yet, creating the first admin. The signed-in user is in the top bar, with **Change password** and **Sign out**; the menu and tabs show only that user's tabs. |
 
 ## Component tree
 

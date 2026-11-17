@@ -5,6 +5,8 @@ import {
   type PipelineDetail,
   type SystemParameter,
   type ClickHouseImportResult,
+  type AppUser,
+  type AuthStatus,
   type ClickHouseStatus,
   type DbConnection,
   type DbConnectionIn,
@@ -36,6 +38,8 @@ import {
 } from "./types"
 
 const BASE = "/api"
+/** fired when an API call answers 401, so the app shows the login page */
+export const UNAUTHORIZED_EVENT = "prooflix:unauthorized"
 const POLL_MS = 1000
 
 export class ApiError extends Error {
@@ -58,6 +62,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
   })
   if (res.status === 204) return undefined as T
+  // the session ended (expired, signed out elsewhere, password changed): show the login page
+  if (res.status === 401 && !path.startsWith("/auth/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
   const body = await res.json().catch(() => null)
   if (!res.ok) {
     const detail = body?.detail
@@ -146,6 +152,22 @@ export const api = {
   systemParameters: () => request<SystemParameter[]>("/system/parameters"),
   clickhouseStatus: () => request<ClickHouseStatus>("/clickhouse/status"),
   goldTables: () => request<GoldTable[]>("/clickhouse/gold-tables"),
+  authStatus: () => request<AuthStatus>("/auth/status"),
+  login: (username: string, password: string) =>
+    request<AuthStatus>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  setupAdmin: (username: string, password: string) =>
+    request<AuthStatus>("/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) }),
+  logout: () => request<void>("/auth/logout", { method: "POST" }),
+  changePassword: (current: string, next: string) =>
+    request<AuthStatus>("/auth/password", { method: "POST", body: JSON.stringify({ current, new: next }) }),
+  users: () => request<AppUser[]>("/users"),
+  createUser: (body: { username: string; password: string; role: string; tabs: string[] }) =>
+    request<AppUser>("/users", { method: "POST", body: JSON.stringify(body) }),
+  updateUser: (
+    username: string,
+    body: { role?: string; tabs?: string[]; password?: string | null; disabled?: boolean },
+  ) => request<AppUser>(`/users/${encodeURIComponent(username)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteUser: (username: string) => request<void>(`/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
   dbKinds: () => request<DbKind[]>("/ingestion/kinds"),
   dbConnections: () => request<DbConnection[]>("/ingestion/connections"),
   saveDbConnection: (name: string, body: DbConnectionIn) =>
@@ -160,8 +182,7 @@ export const api = {
       `/ingestion/connections/${encodeURIComponent(name)}/test`,
       { method: "POST" },
     ),
-  sourceTables: (name: string) =>
-    request<SourceTable[]>(`/ingestion/connections/${encodeURIComponent(name)}/tables`),
+  sourceTables: (name: string) => request<SourceTable[]>(`/ingestion/connections/${encodeURIComponent(name)}/tables`),
   ingestionJobs: () => request<IngestionJobs>("/ingestion/jobs"),
   saveIngestionJob: (id: string, body: IngestionJobIn, createOnly: boolean) =>
     request<IngestionJob>(`/ingestion/jobs/${encodeURIComponent(id)}${createOnly ? "?create_only=true" : ""}`, {
@@ -173,8 +194,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ from_date, to_date }),
     }),
-  deleteIngestionJob: (id: string) =>
-    request<void>(`/ingestion/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  deleteIngestionJob: (id: string) => request<void>(`/ingestion/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
   importToClickHouse: (tables: string[]) =>
     request<ClickHouseImportResult[]>("/clickhouse/import", { method: "POST", body: JSON.stringify({ tables }) }),
   restartServer: () => request<SystemParameter[]>("/system/restart", { method: "POST" }),
@@ -296,8 +316,7 @@ export const useWorkspaceFile = (path: string | null) =>
     enabled: !!path,
   })
 
-export const useSystemParameters = () =>
-  useQuery({ queryKey: ["system", "parameters"], queryFn: api.systemParameters })
+export const useSystemParameters = () => useQuery({ queryKey: ["system", "parameters"], queryFn: api.systemParameters })
 
 export function useSetSystemParameter() {
   const qc = useQueryClient()
@@ -319,8 +338,7 @@ export function useRestartServer() {
   })
 }
 
-export const useClickHouseStatus = () =>
-  useQuery({ queryKey: ["clickhouse", "status"], queryFn: api.clickhouseStatus })
+export const useClickHouseStatus = () => useQuery({ queryKey: ["clickhouse", "status"], queryFn: api.clickhouseStatus })
 
 export const useGoldTables = () => useQuery({ queryKey: ["clickhouse", "gold"], queryFn: api.goldTables })
 
@@ -332,7 +350,49 @@ export function useImportToClickHouse() {
   })
 }
 
-export const useDbKinds = () => useQuery({ queryKey: ["ingestion", "kinds"], queryFn: api.dbKinds, staleTime: Infinity })
+export const useAuthStatus = () => useQuery({ queryKey: ["auth"], queryFn: api.authStatus, staleTime: 60_000 })
+
+/** After signing in, out, or changing the password: new status, and every query fetched again. */
+function useAuthChange<A>(fn: (a: A) => Promise<AuthStatus | void>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["auth"] })
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" })
+    },
+  })
+}
+
+export const useLogin = () =>
+  useAuthChange((c: { username: string; password: string }) => api.login(c.username, c.password))
+export const useSetupAdmin = () =>
+  useAuthChange((c: { username: string; password: string }) => api.setupAdmin(c.username, c.password))
+export const useLogout = () => useAuthChange(() => api.logout())
+
+export function useChangePassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ current, next }: { current: string; next: string }) => api.changePassword(current, next),
+    onSuccess: (data) => qc.setQueryData(["auth"], data),
+  })
+}
+
+export const useUsers = () => useQuery({ queryKey: ["users"], queryFn: api.users })
+
+export function useUserMutation<A>(fn: (a: A) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["users"] })
+      qc.invalidateQueries({ queryKey: ["auth"] })
+    },
+  })
+}
+
+export const useDbKinds = () =>
+  useQuery({ queryKey: ["ingestion", "kinds"], queryFn: api.dbKinds, staleTime: Infinity })
 
 export const useDbConnections = () => useQuery({ queryKey: ["ingestion", "connections"], queryFn: api.dbConnections })
 
@@ -392,7 +452,11 @@ export function useDeleteIngestionJob() {
 export const useWorkspaces = () => useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces })
 
 export const useDirs = (path: string | undefined) =>
-  useQuery({ queryKey: ["fs", "dirs", path ?? ""], queryFn: () => api.listDirs(path), placeholderData: keepPreviousData })
+  useQuery({
+    queryKey: ["fs", "dirs", path ?? ""],
+    queryFn: () => api.listDirs(path),
+    placeholderData: keepPreviousData,
+  })
 
 export function useCreateWorkspace() {
   const qc = useQueryClient()

@@ -70,3 +70,9 @@ def sample_workspace(tmp_path: Path) -> Path:
     dest = tmp_path / "sample"
     shutil.copytree(SAMPLE_WORKSPACE, dest, ignore=shutil.ignore_patterns(".prooflix", "output"))
     return dest
+
+
+@pytest.fixture(autouse=True)
+def _no_sign_in_by_default(monkeypatch):
+    """Settings.from_env() turns sign-in on unless PROOFLIX_AUTH=0; tests that want it set it."""
+    monkeypatch.setenv("PROOFLIX_AUTH", "0")

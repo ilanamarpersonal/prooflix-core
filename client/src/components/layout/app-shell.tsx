@@ -1,14 +1,49 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Navigate, Outlet } from "react-router"
-import { Moon, Sun } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
+import { Loader2, Moon, Sun } from "lucide-react"
 
 import prooflixLogo from "@/assets/prooflix-logo.svg"
 import prooflixLogoDark from "@/assets/prooflix-logo-dark.svg"
+import { LoginPage } from "@/components/auth/login-page"
+import { UserMenu } from "@/components/auth/user-menu"
+import { ErrorAlert } from "@/components/error-alert"
 import { Button } from "@/components/ui/button"
-import { DEFAULT_SECTION, SECTIONS, sectionById, useTabs, type Tabs } from "@/lib/tabs"
+import { UNAUTHORIZED_EVENT, useAuthStatus } from "@/lib/api"
+import { visibleSections, useTabs, type Section, type Tabs } from "@/lib/tabs"
+import type { AppUser } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+/** Signs the user in first when sign-in is on, then shows the app with their tabs. */
 export function AppShell() {
+  const qc = useQueryClient()
+  const auth = useAuthStatus()
+
+  // any API call answering 401: the session ended, so check again (shows the login page)
+  useEffect(() => {
+    const onUnauthorized = () => void qc.invalidateQueries({ queryKey: ["auth"] })
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+  }, [qc])
+
+  if (auth.isLoading)
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Loader2 className="text-muted-foreground size-6 animate-spin" />
+      </div>
+    )
+  if (auth.error || !auth.data)
+    return (
+      <div className="mx-auto max-w-lg p-6">
+        <ErrorAlert title="Prooflix server is not reachable" error={auth.error ?? new Error("no answer")} />
+      </div>
+    )
+  const { enabled, setup_needed, user } = auth.data
+  if (enabled && !user) return <LoginPage setup={setup_needed} />
+  return <Shell sections={visibleSections(enabled && user ? user.visible_tabs : null)} user={enabled ? user : null} />
+}
+
+function Shell({ sections, user }: { sections: Section[]; user: AppUser | null }) {
   const tabs = useTabs()
 
   return (
@@ -22,7 +57,7 @@ export function AppShell() {
         </div>
         {/* on small screens the menu sits in the top bar */}
         <nav className="flex items-center gap-1 md:hidden">
-          {SECTIONS.map(({ id, label, icon: Icon }) => (
+          {sections.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
@@ -38,8 +73,11 @@ export function AppShell() {
             </button>
           ))}
         </nav>
-        <div className="ml-auto md:hidden">
-          <ThemeToggle compact />
+        <div className="ml-auto flex items-center gap-1">
+          {user && <UserMenu user={user} />}
+          <div className="md:hidden">
+            <ThemeToggle compact />
+          </div>
         </div>
       </header>
 
@@ -47,7 +85,7 @@ export function AppShell() {
         <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-14 hidden h-[calc(100svh-3.5rem)] w-56 shrink-0 flex-col border-r pt-3 md:flex">
           <nav className="flex min-h-0 flex-col gap-1 overflow-y-auto px-2">
             {/* one plain item per section; the pipelines are listed in the Pipelines tab */}
-            {SECTIONS.map(({ id, label, icon: Icon }) => (
+            {sections.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
@@ -68,10 +106,18 @@ export function AppShell() {
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <TabBar tabs={tabs} />
+          <TabBar tabs={tabs} sections={sections} />
           <main className="w-full min-w-0 flex-1 p-4 md:p-6">
-            {/* the start page is always the pipelines list, like clicking the Pipelines tab */}
-            {tabs.active ? <Outlet /> : <Navigate to={sectionById(DEFAULT_SECTION).home} replace />}
+            {sections.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No tabs have been given to your account yet. Ask an admin to choose the tabs you can see.
+              </p>
+            ) : tabs.active && sections.some((s) => s.id === tabs.active) ? (
+              <Outlet />
+            ) : (
+              // the start page is the first tab the user has (Pipelines when they have it)
+              <Navigate to={sections[0].home} replace />
+            )}
           </main>
         </div>
       </div>
@@ -80,14 +126,14 @@ export function AppShell() {
 }
 
 /** All tabs, always shown above the content; the selected one is highlighted. */
-function TabBar({ tabs }: { tabs: Tabs }) {
+function TabBar({ tabs, sections }: { tabs: Tabs; sections: Section[] }) {
   return (
     <div
       role="tablist"
       aria-label="Sections"
       className="bg-muted/40 sticky top-14 z-10 flex h-10 shrink-0 items-end gap-px overflow-x-auto border-b px-2"
     >
-      {SECTIONS.map(({ id, label, icon: Icon }) => {
+      {sections.map(({ id, label, icon: Icon }) => {
         const active = tabs.active === id
         return (
           <button
