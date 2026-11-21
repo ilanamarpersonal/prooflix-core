@@ -108,6 +108,8 @@ flowchart TB
 | `clickhouse.py` | Copies a catalog table into ClickHouse over its HTTP interface: maps the columns to ClickHouse types (`Int64`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, ..., each `Nullable`), loads the rows as Parquet into a staging table and swaps it in (`EXCHANGE TABLES`) |
 | `auth.py` | Users (`PROOFLIX_HOME/users.json`, scrypt hashes), the password rules, signed session cookies, the lockout after wrong passwords, and which API paths each tab opens |
 | `api/auth.py` | Sign in and out, the first admin, changing your password, and the Users tab's routes |
+| `semantic.py` | The semantic model: entities (dimensions, measures, joins) and metrics, the `semantic/model.yaml` file, and the SQL a choice of measures and dimensions compiles to |
+| `api/semantic.py` | The Semantic tab's routes |
 | `alerts.py` | Alerts: message formats (`{field}` templates or regular expressions), channels (Email over SMTP, Slack, Teams, webhook) and rules in `PROOFLIX_HOME/alerts.json`, the engine that checks task log lines, cooldowns, delivery on background threads, and the history |
 | `api/alerts.py` | The Alerts tab's routes |
 | `connections.py` | Database connections (Oracle, SQL Server, MySQL, PostgreSQL): the fields of each type, the JDBC URL and driver, the store in `PROOFLIX_HOME/connections.json` (mode 600), and listing a database's tables and columns with pure-Python drivers (pg8000, PyMySQL, python-oracledb thin, python-tds) |
@@ -303,6 +305,19 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/clickhouse/status` | | `{configured, reachable, url, public_url, reader, version, error, tables: [{database, name, rows, bytes}]}` |
 | GET | `/api/clickhouse/gold-tables` | | `[{table, target, rows, columns: [{name, clickhouse_type}], error}]`: every table of a `gold` schema and the ClickHouse table it becomes (`tenant1.gold.x` -> `tenant1.x`) |
 | POST | `/api/clickhouse/import` | `{tables: ["tenant1.gold.x", ...]}` | One result per table: `{table, target, ok, rows, columns, replaced, seconds, error}`. Each table is replaced as a whole; one failing leaves its old copy and doesn't stop the others. `409` when ClickHouse isn't configured. |
+
+**Semantic model** (the Semantic tab; the model is `semantic/model.yaml` in the active workspace)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/semantic` | | `{path, exists, modified, model}`: the saved model (an empty one when there is no file) |
+| PUT | `/api/semantic` | `{model, modified}` | Saves the model (validated: names, unique entities and fields, joins to existing entities, metrics that use real measures). `409` when it changed since `modified`, `422` with the reasons when invalid |
+| GET | `/api/semantic/yaml` | | `{path, text, modified}`: the file as written, for editing by hand |
+| POST | `/api/semantic/yaml/validate` | `{text}` | `{ok, error, entities, metrics}` (nothing is saved) |
+| PUT | `/api/semantic/yaml` | `{text, modified}` | Saves the text exactly as written once it is a valid model; `422` with the reason, `409` when the file changed since `modified` |
+| GET | `/api/semantic/tables` | | `[{table, columns: [{name, type}]}]`: the catalog's tables, to choose from |
+| POST | `/api/semantic/check` | `{model}` | `{ok, problems: [{where, problem}]}`: each table, column, expression, key, join and metric run with no rows |
+| POST | `/api/semantic/query` | `{measures, dimensions, limit, model}` | `{sql, result}`: the SELECT the model writes (following joins between entities) and its rows; `model` is a draft, or the saved model when left out |
 
 **Alerts** (the Alerts tab; admins and users given the `alerts` tab)
 

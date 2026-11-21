@@ -20,6 +20,7 @@ from . import __version__
 from .api import clickhouse as clickhouse_api, ingestion as ingestion_api, pipelines, runs, schedules, sql, system, workspace as workspace_api
 from .alerts import AlertsFileError
 from .api import alerts as alerts_api
+from .api import semantic as semantic_api
 from .api import auth as auth_api
 from .api import workspaces as workspaces_api
 from .auth import COOKIE, PUBLIC_PATHS, UserStore, UsersFileError, can_access
@@ -104,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(clickhouse_api.router)
     app.include_router(ingestion_api.router)
     app.include_router(alerts_api.router)
+    app.include_router(semantic_api.router)
     app.include_router(auth_api.router)
     app.include_router(auth_api.users_router)
 

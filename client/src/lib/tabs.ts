@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router"
 import {
   ArrowDownToLine,
   BellRing,
+  Shapes,
   Database,
   DatabaseZap,
   FolderTree,
@@ -19,6 +20,7 @@ export type SectionId =
   | "sql"
   | "workspace"
   | "catalog"
+  | "semantic"
   | "clickhouse"
   | "alerts"
   | "system"
@@ -71,6 +73,7 @@ export const SECTIONS: Section[] = [
   },
   { id: "sql", label: "SQL Editor", icon: Database, group: "data", home: "/sql", prefixes: ["/sql"] },
   { id: "catalog", label: "Catalog", icon: Library, group: "data", home: "/catalog", prefixes: ["/catalog"] },
+  { id: "semantic", label: "Semantic model", icon: Shapes, group: "data", home: "/semantic", prefixes: ["/semantic"] },
   {
     id: "clickhouse",
     label: "ClickHouse",

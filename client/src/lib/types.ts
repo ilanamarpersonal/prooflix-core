@@ -474,3 +474,58 @@ export interface AlertEvent {
   note?: string
   deliveries: Record<string, { channel: string; kind: string; status: "sending" | "sent" | "failed"; error?: string | null }>
 }
+
+// ------------------------------------------------------------ semantic model
+export interface SemDimension {
+  name: string
+  column?: string | null
+  sql?: string | null
+  type: "category" | "time" | "number"
+  description?: string
+}
+
+export interface SemMeasure {
+  name: string
+  agg: "sum" | "count" | "count_distinct" | "avg" | "min" | "max"
+  column?: string | null
+  sql?: string | null
+  description?: string
+}
+
+export interface SemJoin {
+  entity: string
+  column: string
+  to_column: string
+  kind: "left" | "inner"
+}
+
+export interface SemEntity {
+  name: string
+  table: string
+  description?: string
+  primary_key?: string | null
+  dimensions: SemDimension[]
+  measures: SemMeasure[]
+  joins: SemJoin[]
+}
+
+export interface SemMetric {
+  name: string
+  /** a formula over {entity.measure} */
+  sql: string
+  description?: string
+}
+
+export interface SemanticModel {
+  name: string
+  description?: string
+  entities: SemEntity[]
+  metrics: SemMetric[]
+}
+
+export interface SemanticModelFile {
+  path: string
+  exists: boolean
+  modified: number | null
+  model: SemanticModel
+}

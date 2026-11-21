@@ -9,6 +9,7 @@ import { NewPipelinePage } from "@/pages/new-pipeline-page"
 import { PipelineDetailPage } from "@/pages/pipeline-detail-page"
 import { PipelinesPage } from "@/pages/pipelines-page"
 import { RunDetailPage } from "@/pages/run-detail-page"
+import { SemanticPage } from "@/pages/semantic-page"
 import { RunsPage } from "@/pages/runs-page"
 import { SqlEditorPage } from "@/pages/sql-editor-page"
 import { SystemPage } from "@/pages/system-page"
@@ -32,6 +33,7 @@ export const router = createBrowserRouter([
       { path: "workspace", element: <WorkspacePage /> },
       { path: "catalog", element: <CatalogPage /> },
       { path: "clickhouse", element: <ClickHousePage /> },
+      { path: "semantic", element: <SemanticPage /> },
       { path: "alerts", element: <AlertsPage /> },
       { path: "system", element: <SystemPage /> },
       { path: "users", element: <UsersPage /> },

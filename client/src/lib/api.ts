@@ -11,6 +11,8 @@ import {
   type AlertRule,
   type AlertRuleIn,
   type AppUser,
+  type SemanticModel,
+  type SemanticModelFile,
   type AuthStatus,
   type ClickHouseStatus,
   type DbConnection,
@@ -182,6 +184,28 @@ export const api = {
   alertHistory: () => request<AlertEvent[]>("/alerts/history"),
   deleteAlerts: (ids: string[] | null) =>
     request<{ deleted: number }>("/alerts/history/delete", { method: "POST", body: JSON.stringify({ ids }) }),
+  semanticModel: () => request<SemanticModelFile>("/semantic"),
+  saveSemanticModel: (model: SemanticModel, modified: number | null) =>
+    request<SemanticModelFile>("/semantic", { method: "PUT", body: JSON.stringify({ model, modified }) }),
+  semanticYaml: () => request<{ path: string; text: string; modified: number | null }>("/semantic/yaml"),
+  validateSemanticYaml: (text: string) =>
+    request<{ ok: boolean; error: string | null; entities?: number; metrics?: number }>("/semantic/yaml/validate", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  saveSemanticYaml: (text: string, modified: number | null) =>
+    request<SemanticModelFile>("/semantic/yaml", { method: "PUT", body: JSON.stringify({ text, modified }) }),
+  semanticTables: () => request<{ table: string; columns: { name: string; type: string }[] }[]>("/semantic/tables"),
+  checkSemanticModel: (model: SemanticModel) =>
+    request<{ ok: boolean; problems: { where: string; problem: string }[] }>("/semantic/check", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    }),
+  querySemantic: (model: SemanticModel, measures: string[], dimensions: string[], limit: number) =>
+    request<{ sql: string; result: SqlResult }>("/semantic/query", {
+      method: "POST",
+      body: JSON.stringify({ model, measures, dimensions, limit }),
+    }),
   authStatus: () => request<AuthStatus>("/auth/status"),
   login: (username: string, password: string) =>
     request<AuthStatus>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
@@ -404,6 +428,22 @@ export const useAlertHistory = () =>
 export function useAlertMutation<A, R = unknown>(fn: (a: A) => Promise<R>) {
   const qc = useQueryClient()
   return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }) })
+}
+
+export const useSemanticModel = () => useQuery({ queryKey: ["semantic", "model"], queryFn: api.semanticModel })
+export const useSemanticTables = () =>
+  useQuery({ queryKey: ["semantic", "tables"], queryFn: api.semanticTables, staleTime: 60_000 })
+
+export function useSaveSemanticModel() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ model, modified }: { model: SemanticModel; modified: number | null }) =>
+      api.saveSemanticModel(model, modified),
+    onSuccess: (data) => {
+      qc.setQueryData(["semantic", "model"], data)
+      qc.invalidateQueries({ queryKey: ["semantic", "yaml"] })
+    },
+  })
 }
 
 export const useAuthStatus = () => useQuery({ queryKey: ["auth"], queryFn: api.authStatus, staleTime: 60_000 })

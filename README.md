@@ -125,6 +125,25 @@ users and choose for each one:
 Users live in `PROOFLIX_HOME/users.json`, with salted scrypt password hashes (never
 the passwords). `PROOFLIX_AUTH=0` turns sign-in off, for example on a laptop.
 
+## Semantic model
+
+The **Semantic model** tab puts business meaning on top of the catalog's tables, and
+saves it in the workspace as `semantic/model.yaml` (so it is versioned with it):
+
+* **Entities:** a catalog table (such as `tenant1.silver.transactions`) with its
+  **dimensions** (what to group or filter by: a column or a SQL expression),
+  **measures** (sum, count, count distinct, average, min, max of a column or
+  expression) and **joins** to other entities.
+* **Metrics:** formulas over measures, such as
+  `{accounts.total_balance} / NULLIF({accounts.count}, 0)`.
+* **Check against the catalog** runs every table, column and expression and lists
+  what doesn't work.
+* **Explore:** pick measures and dimensions and run them; the model writes the SQL
+  (joins included), shows it, and can open it in the SQL Editor.
+
+The vanilla workspace comes with a starter banking model (transactions, accounts,
+customers, transaction types).
+
 ## Alerts
 
 The **Alerts** tab raises an alert when a task's log shows a line in a format you
