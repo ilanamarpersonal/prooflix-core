@@ -30,7 +30,7 @@ export function ImportProjectPanel({
   onUpload: () => void
 }) {
   const [path, setPath] = useState("")
-  const [mode, setMode] = useState<"in_place" | "copy">("in_place")
+  const [mode, setMode] = useState<"in_place" | "copy">("copy")
   const [name, setName] = useState("")
   const [nameTouched, setNameTouched] = useState(false)
   const [activate, setActivate] = useState(true)

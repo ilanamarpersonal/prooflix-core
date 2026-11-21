@@ -200,7 +200,8 @@ export function ImportWorkspacePanel({
         if (!current) return
         setFound(list)
         setPath(list[0]?.path ?? "")
-        setMode(list.length ? "in_place" : "copy")
+        // a copy by default; in place only when the folder is too large to upload and was found
+        setMode(tooBig && list.length ? "in_place" : "copy")
       })
       .catch(() => {
         if (!current) return
@@ -210,7 +211,7 @@ export function ImportWorkspacePanel({
     return () => {
       current = false
     }
-  }, [selection, empty])
+  }, [selection, empty, tooBig])
 
   const copy = async () => {
     if (!selection || empty || tooBig) return
