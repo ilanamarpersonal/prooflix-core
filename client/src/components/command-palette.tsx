@@ -145,7 +145,11 @@ export function CommandPalette({
         keywords: p.id,
         run: go(`/pipelines/${p.id}`),
       })
-      if (p.valid && Object.keys(p.parameters).length === 0)
+      // runs with the defaults, so not for a pipeline with a required parameter that has no default
+      const needsValues = Object.values(p.parameter_specs).some(
+        (s) => s.required && (s.default == null || s.default === ""),
+      )
+      if (p.valid && !needsValues)
         out.push({
           id: `run:${p.id}`,
           group: "Actions",

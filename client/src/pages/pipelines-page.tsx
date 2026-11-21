@@ -211,12 +211,7 @@ export function PipelinesPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap items-center gap-1">
-                            <RunButton
-                              pipeline={p}
-                              size="sm"
-                              variant="outline"
-                              onNeedsParameters={() => navigate(`/pipelines/${p.id}?run=1`)}
-                            />
+                            <RunButton pipeline={p} size="sm" variant="outline" />
                             <StopButton runs={activeRuns.get(p.id)} size="sm" />
                           </div>
                         </TableCell>

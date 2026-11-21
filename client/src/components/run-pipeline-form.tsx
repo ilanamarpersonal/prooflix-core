@@ -1,11 +1,10 @@
 import { useState } from "react"
 import { useNavigate } from "react-router"
-import { Play } from "lucide-react"
+import { Loader2, Play } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useStartRun } from "@/lib/api"
@@ -59,7 +58,10 @@ function toValue(spec: ParameterSpec, text: string): unknown {
   return text.trim()
 }
 
-/** The parameters of a run: one field per declared parameter, typed when the pipeline declares a type. */
+/**
+ * The content of the Run with parameters panel: one field per parameter the pipeline declares in its YAML
+ * (in the workspace bundle), defaults filled in, typed when the declaration has a type, and a Run button.
+ */
 export function RunPipelineForm({
   pipelineId,
   parameters,
@@ -101,97 +103,95 @@ export function RunPipelineForm({
   const set = (k: string, text: string) => setValues((v) => ({ ...v, [k]: text }))
   const keys = Object.keys(parameters)
   return (
-    <Card className="gap-4">
-      <CardHeader>
-        <CardTitle>Run with parameters</CardTitle>
-        <CardDescription>
+    <div className="grid gap-3">
+      <div className="grid gap-0.5">
+        <h3 className="text-sm font-semibold">Run with parameters</h3>
+        <p className="text-muted-foreground text-xs">
           {keys.length
-            ? "Each value is checked by the server before the run starts. The run shows the values it used."
+            ? "Declared in the pipeline's YAML. The server checks each value before the run starts."
             : "This pipeline declares no parameters."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={submit} className="grid gap-4" noValidate>
-          {keys.map((k) => {
-            const p = parameters[k]
-            const id = `param-${k}`
-            const error = touched ? problems[k] : null
-            const hint = p.description || HINT[p.type]
-            return (
-              <div key={k} className="grid gap-1.5">
-                <Label htmlFor={id} className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono">{k}</span>
-                  {p.required && <span className="text-status-failed">*</span>}
-                  {p.type !== "any" && (
-                    <Badge variant="outline" className="font-normal">
-                      {p.type}
-                    </Badge>
-                  )}
-                </Label>
-                {p.type === "boolean" ? (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      id={id}
-                      type="checkbox"
-                      className="accent-primary size-4"
-                      checked={values[k] === "true"}
-                      onChange={(e) => set(k, e.target.checked ? "true" : "false")}
-                    />
-                    {values[k] === "true" ? "true" : "false"}
-                  </label>
-                ) : p.choices ? (
-                  <select
+        </p>
+      </div>
+      <form onSubmit={submit} className="grid gap-3" noValidate>
+        {keys.map((k) => {
+          const p = parameters[k]
+          const id = `param-${k}`
+          const error = touched ? problems[k] : null
+          const hint = p.description || HINT[p.type]
+          return (
+            <div key={k} className="grid gap-1.5">
+              <Label htmlFor={id} className="flex flex-wrap items-center gap-2">
+                <span className="font-mono">{k}</span>
+                {p.required && <span className="text-status-failed">*</span>}
+                {p.type !== "any" && (
+                  <Badge variant="outline" className="font-normal">
+                    {p.type}
+                  </Badge>
+                )}
+              </Label>
+              {p.type === "boolean" ? (
+                <label className="flex items-center gap-2 text-sm">
+                  <input
                     id={id}
-                    className={selectClass}
-                    value={values[k] ?? ""}
-                    onChange={(e) => set(k, e.target.value)}
-                  >
-                    {!p.required && <option value="">(none)</option>}
-                    {p.choices.map((c) => (
-                      <option key={toText(c)} value={toText(c)}>
-                        {toText(c)}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <Input
-                    id={id}
-                    type={INPUT_TYPE[p.type] ?? "text"}
-                    value={values[k] ?? ""}
-                    placeholder={p.default == null ? (p.required ? "required" : "optional") : toText(p.default)}
-                    onChange={(e) => set(k, e.target.value)}
-                    aria-invalid={!!error}
-                    aria-describedby={hint ? `${id}-hint` : undefined}
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="font-mono"
+                    type="checkbox"
+                    className="accent-primary size-4"
+                    checked={values[k] === "true"}
+                    onChange={(e) => set(k, e.target.checked ? "true" : "false")}
                   />
-                )}
-                {error ? (
-                  <p className="text-status-failed text-xs">{error}</p>
-                ) : (
-                  hint && (
-                    <p id={`${id}-hint`} className="text-muted-foreground text-xs">
-                      {hint}
-                    </p>
-                  )
-                )}
-              </div>
-            )
-          })}
-          {start.error && <ErrorAlert title="Could not start the run" error={start.error} />}
-          <div className="flex gap-2">
-            <Button type="submit" disabled={start.isPending}>
-              <Play /> {start.isPending ? "Starting…" : "Start run"}
+                  {values[k] === "true" ? "true" : "false"}
+                </label>
+              ) : p.choices ? (
+                <select
+                  id={id}
+                  className={selectClass}
+                  value={values[k] ?? ""}
+                  onChange={(e) => set(k, e.target.value)}
+                >
+                  {!p.required && <option value="">(none)</option>}
+                  {p.choices.map((c) => (
+                    <option key={toText(c)} value={toText(c)}>
+                      {toText(c)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  id={id}
+                  type={INPUT_TYPE[p.type] ?? "text"}
+                  value={values[k] ?? ""}
+                  placeholder={p.default == null ? (p.required ? "required" : "optional") : toText(p.default)}
+                  onChange={(e) => set(k, e.target.value)}
+                  aria-invalid={!!error}
+                  aria-describedby={hint ? `${id}-hint` : undefined}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="font-mono"
+                />
+              )}
+              {error ? (
+                <p className="text-status-failed text-xs">{error}</p>
+              ) : (
+                hint && (
+                  <p id={`${id}-hint`} className="text-muted-foreground text-xs">
+                    {hint}
+                  </p>
+                )
+              )}
+            </div>
+          )
+        })}
+        {start.error && <ErrorAlert title="Could not start the run" error={start.error} />}
+        <div className="flex justify-end gap-2">
+          {onDone && (
+            <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+              Cancel
             </Button>
-            {onDone && (
-              <Button type="button" variant="ghost" onClick={onDone}>
-                Cancel
-              </Button>
-            )}
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+          )}
+          <Button type="submit" size="sm" disabled={start.isPending}>
+            {start.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run
+          </Button>
+        </div>
+      </form>
+    </div>
   )
 }

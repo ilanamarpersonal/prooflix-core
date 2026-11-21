@@ -7,7 +7,6 @@ import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
 import { RunButton } from "@/components/run-button"
-import { RunPipelineForm } from "@/components/run-pipeline-form"
 import { RunsTable } from "@/components/runs-table"
 import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
 import { StatusBadge } from "@/components/status-badge"
@@ -33,7 +32,6 @@ export function PipelineDetailPage() {
   const runs = useRuns({ pipeline: pipelineId, rootOnly: false })
   const del = useDeletePipeline()
   const [params] = useSearchParams()
-  const [showRunForm, setShowRunForm] = useState(params.get("run") === "1")
   const [selected, setSelected] = useState<string | null>(null)
 
   if (isLoading) return <Skeleton className="h-96 w-full" />
@@ -116,7 +114,7 @@ export function PipelineDetailPage() {
               </Button>
             )}
             <StopButton runs={activeRuns} />
-            <RunButton pipeline={pipeline} onNeedsParameters={() => setShowRunForm((v) => !v)} />
+            <RunButton pipeline={pipeline} openParameters={params.get("run") === "1"} />
           </>
         }
       />
@@ -154,13 +152,6 @@ export function PipelineDetailPage() {
               </Button>
             </CardContent>
           </Card>
-        )}
-        {showRunForm && (
-          <RunPipelineForm
-            pipelineId={pipeline.id}
-            parameters={pipeline.parameter_specs}
-            onDone={() => setShowRunForm(false)}
-          />
         )}
       </div>
 

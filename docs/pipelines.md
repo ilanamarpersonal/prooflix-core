@@ -200,9 +200,11 @@ declared type (`"12"` becomes `12` for an integer, since forms send text), and a
 problem is a `422` that lists every invalid value, so nothing runs with a bad
 value. The run records the values it used (`parameters`), defaults included.
 
-In the UI, **Run** on a pipeline with parameters opens the **Run with parameters**
-form: one field per parameter, with its type, default and description, a
-required mark, and a preview check of identifiers, whole numbers and patterns.
+In the UI, **Run** starts a run with the defaults. The arrow on the right of Run
+opens a menu with **Run with parameters…**: a small panel with one field per
+parameter (its type, default and description, a required mark, and a preview
+check of identifiers, whole numbers and patterns) and its own **Run**. A pipeline
+with a required parameter that has no default opens the panel on Run.
 
 ## References: `${...}`
 
