@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Link } from "react-router"
+import { Link, useSearchParams } from "react-router"
 import { useQuery } from "@tanstack/react-query"
 import {
   BellRing,
@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   Send,
+  Settings2,
   Trash2,
   Users,
   Webhook,
@@ -27,6 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   api,
   useAlertChannels,
@@ -71,6 +73,11 @@ export function AlertsPage() {
   const [editingRule, setEditingRule] = useState<string | null>(null)
   const channels = useAlertChannels()
   const rules = useAlertRules()
+  const history = useAlertHistory()
+  // the tab is in the URL (?tab=definitions), so a link or reload keeps it
+  const [params, setParams] = useSearchParams()
+  const tab = params.get("tab") === "definitions" ? "definitions" : "alerts"
+  const setTab = (t: string) => setParams(t === "alerts" ? {} : { tab: t }, { replace: true })
 
   return (
     <div>
@@ -78,24 +85,43 @@ export function AlertsPage() {
         title="Alerts"
         description="Raise an alert when a pipeline's log shows a line in a format you define, and send it to Email, Slack, Microsoft Teams or a webhook: to one channel, some, or all of them."
         actions={
-          <Button onClick={() => setEditingRule(NEW)} disabled={editingRule !== null}>
-            <Plus /> New alert rule
-          </Button>
+          tab === "definitions" && (
+            <Button onClick={() => setEditingRule(NEW)} disabled={editingRule !== null}>
+              <Plus /> New alert rule
+            </Button>
+          )
         }
       />
-      <div className="grid gap-4">
-        {editingRule !== null && (
-          <RuleForm
-            key={editingRule}
-            rule={editingRule === NEW ? null : (rules.data?.find((r) => r.id === editingRule) ?? null)}
-            channels={channels.data ?? []}
-            onDone={() => setEditingRule(null)}
-          />
-        )}
-        <RulesCard rules={rules} channels={channels.data ?? []} onEdit={setEditingRule} editing={editingRule} />
-        <ChannelsCard channels={channels} editing={editingChannel} setEditing={setEditingChannel} />
-        <HistoryCard />
-      </div>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="alerts">
+            <BellRing /> Alerts
+            {!!history.data?.length && (
+              <Badge variant="secondary" className="ml-1 px-1.5 font-normal">
+                {history.data.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="definitions">
+            <Settings2 /> Definitions
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="alerts" className="mt-4">
+          <HistoryCard />
+        </TabsContent>
+        <TabsContent value="definitions" className="mt-4 grid gap-4">
+          {editingRule !== null && (
+            <RuleForm
+              key={editingRule}
+              rule={editingRule === NEW ? null : (rules.data?.find((r) => r.id === editingRule) ?? null)}
+              channels={channels.data ?? []}
+              onDone={() => setEditingRule(null)}
+            />
+          )}
+          <RulesCard rules={rules} channels={channels.data ?? []} onEdit={setEditingRule} editing={editingRule} />
+          <ChannelsCard channels={channels} editing={editingChannel} setEditing={setEditingChannel} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -822,7 +848,9 @@ function HistoryCard() {
         </div>
       )}
       {!all.length ? (
-        <p className="text-muted-foreground p-4 text-sm">No alerts raised yet.</p>
+        <p className="text-muted-foreground p-4 text-sm">
+          No alerts raised yet. Alerts appear here when a log line matches a rule in Definitions.
+        </p>
       ) : (
         <>
           <Table>
