@@ -390,6 +390,24 @@ The Ingestion tab runs jobs through `POST /api/ingestion/jobs/{id}/runs` (no dat
 | POST | `/api/catalog/import` | `{schema, files, overwrite}` | Adds CSV or JSON files as Parquet tables |
 | GET | `/api/catalog/export?table=&schema=&format=` | | A table as CSV, or a ZIP (Parquet) of a table, a schema or the whole catalog |
 
+### AI Assist
+
+Claude helps where something failed, and only after the user agrees. The Claude account (API key, model,
+effort) is in `PROOFLIX_HOME/ai_assist.json` (mode 600); with no key saved, the server's `ANTHROPIC_API_KEY`
+is used. The key never leaves the server: responses carry only its kind and last four characters.
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/ai-assist/status` | | `{ready, enabled, model}`, for any signed-in user |
+| GET | `/api/ai-assist/settings` | | The settings without the key: `key_source`, `key_hint`, `key_prefix`, `key_saved_at`, and the models with their prices per million tokens (admins only) |
+| PUT | `/api/ai-assist/settings` | `{enabled, model, effort, api_key, remove_key}` | The settings; an empty `api_key` keeps the saved one (admins only) |
+| POST | `/api/ai-assist/settings/test` | | `{ok, model, display_name}`: the key can see the model; uses no tokens (admins only) |
+| POST | `/api/ai-assist/sql/fix` | `{sql, error}` | `{diagnosis, explanation, fixed_sql, confidence, runnable, problem, model}`. Sends the query, the error and the catalog's table and column names (no rows); the fix is checked to be one read-only `SELECT` and is never run here (SQL Editor users) |
+| POST | `/api/ai-assist/runs/{id}/explain` | | `{diagnosis, failed_task, steps, confidence, model}` for a failed run (`409` otherwise). Sends the run and its sub-runs: parameters, each task's status and error, and the last 40 lines each task printed, with values that look like passwords, tokens or keys masked. Nothing is changed or re-run (Pipelines and Ingestion users) |
+
+Claude's errors become readable ones: a rejected key (`400`), an account out of credit (`402`), the rate
+limit (`429`), Claude unreachable (`502`), or AI Assist off or without a key (`409`).
+
 ### Workspaces
 
 Workspaces live in the workspaces folder (`PROOFLIX_WORKSPACES`, default

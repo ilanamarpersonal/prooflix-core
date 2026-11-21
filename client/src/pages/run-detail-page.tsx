@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
 import { ArrowUpRight, FileCode2, List, PanelRightOpen, RotateCw, ScrollText, Square, Workflow } from "lucide-react"
 
+import { AiAssistRunPanel } from "@/components/ai-assist-run-panel"
 import { ErrorAlert } from "@/components/error-alert"
 import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
@@ -14,7 +15,15 @@ import { TaskRunPanel } from "@/components/task-run-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useCancelRun, usePipeline, usePipelines, useRunTree, useStartRun } from "@/lib/api"
+import {
+  useAiAssistStatus,
+  useAuthStatus,
+  useCancelRun,
+  usePipeline,
+  usePipelines,
+  useRunTree,
+  useStartRun,
+} from "@/lib/api"
 import { TERMINAL_STATUSES, type GraphEdge, type GraphNode, type RunStatus } from "@/lib/types"
 import { formatDateTime, formatDuration } from "@/lib/utils"
 
@@ -28,6 +37,11 @@ export function RunDetailPage() {
   const pipelines = usePipelines()
   // the pipeline's definition, for each python task's source file
   const definition = usePipeline(run?.pipeline ?? "")
+  // AI Assist offers to explain a failed run: shown on its own, hidden with its arrow or "Not now"
+  const aiAssist = useAiAssistStatus()
+  const auth = useAuthStatus()
+  const canSetUp = auth.data ? !auth.data.enabled || auth.data.user?.role === "admin" : false
+  const [assistHiddenFor, setAssistHiddenFor] = useState<string | null>(null)
 
   const graph = useMemo(() => {
     const tasks = Object.values(run?.tasks ?? {})
@@ -53,9 +67,7 @@ export function RunDetailPage() {
   // Highlighted in the graph: the task you picked, else the running task, else the
   // first failed one, else the task that started last. Until you pick one, the
   // output of every task is shown below (live while the run is going).
-  const lastStarted = [...tasks]
-    .filter((t) => t.started_at)
-    .sort((a, b) => (a.started_at! < b.started_at! ? 1 : -1))[0]
+  const lastStarted = [...tasks].filter((t) => t.started_at).sort((a, b) => (a.started_at! < b.started_at! ? 1 : -1))[0]
   const selectedKey =
     picked ??
     tasks.find((t) => t.status === "RUNNING")?.key ??
@@ -64,6 +76,11 @@ export function RunDetailPage() {
     tasks[0]?.key ??
     null
   const selected = picked ? run.tasks[picked] : undefined
+  const aiAssistReady = !!aiAssist.data?.ready
+  const showAssist =
+    run.status === "FAILED" &&
+    assistHiddenFor !== run.id &&
+    (aiAssistReady || (canSetUp && aiAssist.data?.enabled !== false))
 
   // A task's links: its source code, its sub-run and the pipeline it calls.
   const taskLinks = (key: string): TaskAction[] => {
@@ -164,9 +181,7 @@ export function RunDetailPage() {
       <div className="mb-4 grid gap-4">
         {cancel.error && <ErrorAlert title="Could not stop" error={cancel.error} />}
         {rerun.error && <ErrorAlert title="Could not start the run" error={rerun.error} />}
-        {run.error && run.status !== "SUCCEEDED" && (
-          <ErrorAlert title="Run error" error={new Error(run.error)} />
-        )}
+        {run.error && run.status !== "SUCCEEDED" && <ErrorAlert title="Run error" error={new Error(run.error)} />}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -208,6 +223,15 @@ export function RunDetailPage() {
         </div>
 
         <div className="grid min-w-0 content-start gap-4">
+          {showAssist && (
+            <AiAssistRunPanel
+              key={run.id}
+              runId={run.id}
+              ready={aiAssistReady}
+              canSetUp={canSetUp}
+              onClose={() => setAssistHiddenFor(run.id)}
+            />
+          )}
           <Card className="gap-3">
             <CardHeader>
               <CardTitle className="text-sm">Run hierarchy</CardTitle>

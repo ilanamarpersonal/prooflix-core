@@ -596,6 +596,16 @@ export interface AiAssistStatus {
   model: string
 }
 
+/** AI Assist's answer about a failed pipeline run */
+export interface AiAssistRunHelp {
+  diagnosis: string
+  /** where the failure started, "task (pipeline)"; empty when unclear */
+  failed_task: string
+  steps: string[]
+  confidence: "high" | "medium" | "low"
+  model: string
+}
+
 /** AI Assist's answer about a failed SQL query */
 export interface AiAssistSqlFix {
   diagnosis: string

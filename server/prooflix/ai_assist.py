@@ -16,6 +16,7 @@ browser: the client only sees its last four characters.
 from __future__ import annotations
 
 import json
+import re
 import logging
 import threading
 from datetime import datetime, timezone
@@ -261,6 +262,31 @@ def check_select(sql: str) -> str | None:
     return None
 
 
+def _ask(client: anthropic.Anthropic, s: Settings, system: str, prompt: str, output_format: type[BaseModel]):
+    """One request to Claude whose answer must match ``output_format``; errors become AiAssistError."""
+    extra: dict = {}
+    if s.model in FALLBACK_MODELS:
+        extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"}
+    try:
+        response = client.beta.messages.parse(
+            model=s.model,
+            max_tokens=16000,
+            system=system,
+            output_config={"effort": s.effort},
+            messages=[{"role": "user", "content": prompt}],
+            output_format=output_format,
+            **extra,
+        )
+    except anthropic.APIError as e:
+        log.warning("AI Assist request failed: %s", type(e).__name__)
+        raise _api_error(e) from None
+    if response.stop_reason == "refusal":
+        raise AiAssistError("Claude declined to answer this one", 422)
+    if response.stop_reason == "max_tokens" or response.parsed_output is None:
+        raise AiAssistError("Claude's answer was cut off; try again", 502)
+    return response
+
+
 def suggest_sql_fix(s: Settings, sql: str, error: str, tables: list[dict]) -> dict:
     """Ask Claude why the query failed and for a corrected one."""
     if not sql.strip():
@@ -273,26 +299,7 @@ def suggest_sql_fix(s: Settings, sql: str, error: str, tables: list[dict]) -> di
         f"<query>\n{sql}\n</query>\n\n"
         f"<error>\n{error.strip() or '(no error text)'}\n</error>"
     )
-    extra: dict = {}
-    if s.model in FALLBACK_MODELS:
-        extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"}
-    try:
-        response = client.beta.messages.parse(
-            model=s.model,
-            max_tokens=16000,
-            system=SQL_SYSTEM,
-            output_config={"effort": s.effort},
-            messages=[{"role": "user", "content": prompt}],
-            output_format=SqlFix,
-            **extra,
-        )
-    except anthropic.APIError as e:
-        log.warning("AI Assist request failed: %s", type(e).__name__)
-        raise _api_error(e) from None
-    if response.stop_reason == "refusal":
-        raise AiAssistError("Claude declined to answer this one", 422)
-    if response.stop_reason == "max_tokens" or response.parsed_output is None:
-        raise AiAssistError("Claude's answer was cut off; try again", 502)
+    response = _ask(client, s, SQL_SYSTEM, prompt, SqlFix)
     fix: SqlFix = response.parsed_output
     fixed = fix.fixed_sql.strip().rstrip(";").strip()
     problem = check_select(fixed) if fixed else None
@@ -303,5 +310,89 @@ def suggest_sql_fix(s: Settings, sql: str, error: str, tables: list[dict]) -> di
         "confidence": fix.confidence,
         "runnable": bool(fixed) and problem is None,
         "problem": problem,
+        "model": response.model,
+    }
+
+
+# ------------------------------------------------------------------ failed runs
+class RunHelp(BaseModel):
+    """Claude's answer about a failed pipeline run."""
+
+    diagnosis: str = Field(description="What went wrong, in one to three plain sentences for the user.")
+    failed_task: str = Field(description="The task where the failure started, as task (pipeline). Empty if unclear.")
+    steps: list[str] = Field(description="What the user should do to fix it, in order; short imperative sentences.")
+    confidence: Literal["high", "medium", "low"]
+
+
+RUN_SYSTEM = """You are AI Assist, the assistant built into Prooflix, a data platform. \
+Prooflix orchestrates pipelines: each pipeline is a DAG of tasks (Python functions in \
+the workspace, shell commands, or sub-pipelines), and the data work runs in Spark, \
+with Delta tables registered in Unity Catalog. A run can start sub-pipeline runs.
+
+A pipeline run just failed. You get the run, its parameters, and for every task its \
+status, error and the last lines it printed, including the runs of its sub-pipelines. \
+Find where the failure started (later tasks are often only skipped because of it) and \
+tell the user how to fix it:
+- Separate the root cause from its consequences.
+- Name concrete actions: a service to start, a setting or parameter to change, a \
+file or task to fix. Say where in Prooflix to do it when you can tell (Pipelines, \
+Workspace, System, Ingestion tabs). Don't invent settings, files or commands you can't \
+see evidence for; when unsure, say what to check.
+- If the cause can't be found from what you're given, say so and say what to look at next.
+Write for a data engineer: short and plain, no preamble."""
+
+MAX_LOG_LINES = 40  # last lines of each task's printout sent to Claude
+MAX_LINE = 500  # characters per printed line
+_SECRET = re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key)(\s*[=:]\s*)(\S+)")
+_ANTHROPIC_KEY = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
+
+
+def _redact(text: str) -> str:
+    """Hide values that look like secrets before anything is sent (task printouts can contain anything)."""
+    return _ANTHROPIC_KEY.sub("sk-ant-********", _SECRET.sub(r"\1\2********", text))
+
+
+def _run_text(node: dict, indent: str = "") -> list[str]:
+    """A run tree (``RunStore.tree``) as plain text: the run, then each task, then its sub-run nested."""
+    lines = [f"{indent}Run {node['id']} of pipeline {node['pipeline']}: {node['status']}"]
+    if node.get("parameters"):
+        lines.append(f"{indent}  parameters: {json.dumps(node['parameters'], default=str)}")
+    if node.get("error"):
+        lines.append(f"{indent}  error: {node['error']}")
+    children = {c["id"]: c for c in node.get("children", []) if c}
+    for key, task in node.get("tasks", {}).items():
+        head = f"{indent}  - task {key} ({task['type']}): {task['status']}"
+        if task.get("max_attempts", 1) > 1:
+            head += f", attempt {task.get('attempt')} of {task['max_attempts']}"
+        if task.get("depends_on"):
+            head += f", after {', '.join(task['depends_on'])}"
+        lines.append(head)
+        if task.get("error"):
+            lines.append(f"{indent}      error: {task['error']}")
+        printed = task.get("logs") or []
+        if printed:
+            lines.append(f"{indent}      printed (last {min(len(printed), MAX_LOG_LINES)} of {len(printed)} lines):")
+            lines += [f"{indent}        {line[:MAX_LINE]}" for line in printed[-MAX_LOG_LINES:]]
+        child = children.get(task.get("child_run_id") or "")
+        if child:
+            lines += _run_text(child, indent + "      ")
+    return lines
+
+
+def explain_run(s: Settings, tree: dict) -> dict:
+    """Ask Claude why the run failed and what to do about it. Nothing is changed or re-run here."""
+    if tree.get("status") != "FAILED":
+        raise AiAssistError("Only a failed run can be looked at", 409)
+    text = _redact("\n".join(_run_text(tree)))
+    if len(text) > MAX_TEXT:
+        text = text[:MAX_TEXT] + "\n(cut off: the run is too long to send in full)"
+    client = _client(s)
+    response = _ask(client, s, RUN_SYSTEM, f"<run>\n{text}\n</run>", RunHelp)
+    help_: RunHelp = response.parsed_output
+    return {
+        "diagnosis": help_.diagnosis,
+        "failed_task": help_.failed_task,
+        "steps": [step for step in help_.steps if step.strip()],
+        "confidence": help_.confidence,
         "model": response.model,
     }

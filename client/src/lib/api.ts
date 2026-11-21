@@ -8,6 +8,7 @@ import {
   type AlertChannel,
   type AiAssistSettings,
   type AiAssistSettingsIn,
+  type AiAssistRunHelp,
   type AiAssistSqlFix,
   type AiAssistStatus,
   type AlertChannelKind,
@@ -178,6 +179,8 @@ export const api = {
     request<AiAssistSettings>("/ai-assist/settings", { method: "PUT", body: JSON.stringify(body) }),
   testAiAssist: () =>
     request<{ ok: boolean; model: string; display_name: string }>("/ai-assist/settings/test", { method: "POST" }),
+  aiAssistRunHelp: (runId: string) =>
+    request<AiAssistRunHelp>(`/ai-assist/runs/${encodeURIComponent(runId)}/explain`, { method: "POST" }),
   aiAssistSqlFix: (sql: string, error: string) =>
     request<AiAssistSqlFix>("/ai-assist/sql/fix", { method: "POST", body: JSON.stringify({ sql, error }) }),
   alertChannels: () => request<AlertChannel[]>("/alerts/channels"),
@@ -459,6 +462,7 @@ export function useSaveAiAssistSettings() {
   })
 }
 export const useTestAiAssist = () => useMutation({ mutationFn: api.testAiAssist })
+export const useAiAssistRunHelp = () => useMutation({ mutationFn: api.aiAssistRunHelp })
 export const useAiAssistSqlFix = () =>
   useMutation({ mutationFn: ({ sql, error }: { sql: string; error: string }) => api.aiAssistSqlFix(sql, error) })
 

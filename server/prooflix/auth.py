@@ -64,6 +64,7 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/system": ("system",),
     "/api/ai-assist/status": TABS,  # whether AI Assist can answer: any signed-in user
     "/api/ai-assist/sql": ("sql",),  # ask AI Assist about a failed query
+    "/api/ai-assist/runs": ("pipelines", "ingestion"),  # ask AI Assist about a failed run
 }
 PUBLIC_PATHS = ("/api/health", "/api/auth/")
 ADMIN_PATHS = ("/api/users", "/api/ai-assist/settings")  # AI Assist's Claude account: admins only

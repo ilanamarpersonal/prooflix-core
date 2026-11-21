@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from prooflix import ai_assist
-from prooflix.ai_assist import AiAssistStore, SqlFix
+from prooflix.ai_assist import AiAssistStore, RunHelp, SqlFix
 from prooflix.config import Settings
 from prooflix.main import create_app
 
@@ -164,3 +164,58 @@ def test_suggestions_must_be_one_read_only_select(client, fake):
 
     c.put("/api/ai-assist/settings", json={"enabled": False, "model": "claude-haiku-5-5"})
     assert c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1", "error": "x"}).status_code == 409
+
+
+def _failed_run(store):
+    """A failed E2E run whose bronze sub-run failed (Unity Catalog down), with a secret in the printout."""
+    from prooflix.runs import Run, RunStatus, TaskRun
+
+    child = Run(pipeline="bronze", status=RunStatus.FAILED, error="Task 'ingest' failed: Unity Catalog down")
+    child.tasks["ingest"] = TaskRun(
+        key="ingest", type="python", status=RunStatus.FAILED,
+        error="RuntimeError: Unity Catalog is not reachable at http://localhost:8080",
+        logs=["starting Spark", "password=hunter2xyz token: abc123", "sk-ant-api03-leakedkey"],
+    )
+    root = Run(pipeline="e2e", status=RunStatus.FAILED, parameters={"tenant_id": "tenant1"}, error="run_bronze failed")
+    root.tasks["run_bronze"] = TaskRun(key="run_bronze", type="pipeline", status=RunStatus.FAILED, child_run_id=child.id)
+    root.tasks["run_silver"] = TaskRun(key="run_silver", type="pipeline", status=RunStatus.SKIPPED,
+                                       depends_on=["run_bronze"])
+    child.parent_run_id = root.id
+    child.root_run_id = root.id
+    child.depth = 1
+    store.save(root)
+    store.save(child)
+    ok = Run(pipeline="e2e", status=RunStatus.SUCCEEDED)
+    store.save(ok)
+    return root, ok
+
+
+def test_a_failed_run_can_be_explained(client, fake):
+    c = client
+    root, ok = _failed_run(c.app.state.store)
+    assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = RunHelp(diagnosis="Unity Catalog is down.", failed_task="ingest (bronze)",
+                          steps=["Start Unity Catalog", " "], confidence="high")
+
+    r = c.post(f"/api/ai-assist/runs/{root.id}/explain")
+    assert r.status_code == 200
+    assert r.json() | {"model": None} == {"diagnosis": "Unity Catalog is down.", "failed_task": "ingest (bronze)",
+                                          "steps": ["Start Unity Catalog"], "confidence": "high", "model": None}
+    sent = fake.calls[-1]["messages"][0]["content"]
+    assert "Unity Catalog is not reachable" in sent and '"tenant_id": "tenant1"' in sent
+    assert "run_silver (pipeline): SKIPPED, after run_bronze" in sent and "Run " + root.tasks["run_bronze"].child_run_id in sent
+    assert "hunter2xyz" not in sent and "abc123" not in sent and "leakedkey" not in sent  # secrets masked
+
+    assert c.post(f"/api/ai-assist/runs/{ok.id}/explain").status_code == 409  # only failed runs
+    assert c.post("/api/ai-assist/runs/nope/explain").status_code == 404
+
+    # Pipelines users may ask; others may not
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["pipelines"]})
+    c.post("/api/users", json={"username": "sam", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 200
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 403

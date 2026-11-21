@@ -1,5 +1,6 @@
-"""``/api/ai-assist`` routes: the Claude account settings (admins) and the SQL editor's
-"ask AI Assist" for a failed query (users of the SQL tab)."""
+"""``/api/ai-assist`` routes: the Claude account settings (admins), the SQL editor's
+"ask AI Assist" for a failed query (users of the SQL tab) and the same for a failed
+pipeline run (users of the Pipelines and Ingestion tabs)."""
 
 from __future__ import annotations
 
@@ -8,7 +9,8 @@ from pydantic import BaseModel, Field
 
 from .. import ai_assist
 from ..ai_assist import AiAssistError, AiAssistStore
-from .deps import CatalogPaths, get_catalog_paths
+from ..runs import RunStore
+from .deps import CatalogPaths, get_catalog_paths, get_store
 from .sql import _describe, _described_tables
 
 router = APIRouter(prefix="/api/ai-assist", tags=["ai-assist"])
@@ -77,5 +79,18 @@ def sql_fix(body: SqlFixIn, request: Request, paths: CatalogPaths = Depends(get_
     tables = [t.model_dump(by_alias=True) for t in _describe(_described_tables(paths))]
     try:
         return ai_assist.suggest_sql_fix(_store(request).get(), body.sql, body.error, tables)
+    except AiAssistError as e:
+        raise _fail(e) from None
+
+
+@router.post("/runs/{run_id}/explain")
+def explain_run(run_id: str, request: Request, store: RunStore = Depends(get_store)) -> dict:
+    """Send the failed run, its tasks' errors and the last lines they printed (secrets masked)
+    to Claude; return its diagnosis and the steps to fix it. Nothing is changed or re-run."""
+    tree = store.tree(run_id)
+    if tree is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Run '{run_id}' not found")
+    try:
+        return ai_assist.explain_run(_store(request).get(), tree)
     except AiAssistError as e:
         raise _fail(e) from None
