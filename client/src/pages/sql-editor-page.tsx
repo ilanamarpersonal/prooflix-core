@@ -76,7 +76,7 @@ function saveEditorHeight(h: number) {
   }
 }
 
-const ASSIST_OPEN_KEY = "prooflix-sql-ai-assist-open" // the user's choice to show the AI Assist panel
+const ASSIST_OPEN_KEY = "prooflix-sql-ai-assist-open" // the user's choice to show the AI Assist panel; a failed query opens it too
 
 function loadAssistOpen() {
   try {
@@ -249,6 +249,8 @@ export function SqlEditorPage() {
       pendingFix.current = null
       setFixRan(false)
       setFailure((prev) => ({ id: (prev?.id ?? 0) + 1, tabId, sql, error: text }))
+      // a failed query opens the panel with the offer (for this visit; nothing is sent until the user agrees)
+      setAssistOpenState(true)
     } else if (pendingFix.current !== null && pendingFix.current === sql) {
       pendingFix.current = null
       setFixRan(true)
