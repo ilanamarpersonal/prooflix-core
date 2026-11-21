@@ -491,7 +491,10 @@ export interface AlertEvent {
   fields: Record<string, string>
   suppressed: number
   note?: string
-  deliveries: Record<string, { channel: string; kind: string; status: "sending" | "sent" | "failed"; error?: string | null }>
+  deliveries: Record<
+    string,
+    { channel: string; kind: string; status: "sending" | "sent" | "failed"; error?: string | null }
+  >
 }
 
 // ------------------------------------------------------------ semantic model
@@ -547,4 +550,42 @@ export interface SemanticModelFile {
   exists: boolean
   modified: number | null
   model: SemanticModel
+}
+
+/** Cloudin: Claude in Prooflix. The settings as the browser sees them (never the key itself). */
+export interface CloudinSettings {
+  enabled: boolean
+  model: string
+  effort: "low" | "medium" | "high"
+  key_source: "saved" | "environment" | "none"
+  /** the key's last four characters, "…abcd" */
+  key_hint: string | null
+  ready: boolean
+  models: { id: string; label: string }[]
+}
+
+export interface CloudinSettingsIn {
+  enabled: boolean
+  model: string
+  effort: string
+  api_key?: string | null
+  remove_key?: boolean
+}
+
+export interface CloudinStatus {
+  ready: boolean
+  enabled: boolean
+  model: string
+}
+
+/** Cloudin's answer about a failed SQL query */
+export interface CloudinSqlFix {
+  diagnosis: string
+  explanation: string
+  fixed_sql: string
+  confidence: "high" | "medium" | "low"
+  /** fixed_sql is one read-only SELECT */
+  runnable: boolean
+  problem: string | null
+  model: string
 }

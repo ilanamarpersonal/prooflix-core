@@ -42,8 +42,10 @@ SESSION_SECONDS = 12 * 3600
 USERNAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{2,31}$"
 ROLES = ("admin", "user")
 
-# The tabs of the web client (client/src/lib/tabs.ts) a user can be given; "users" is admins only.
+# The tabs of the web client (client/src/lib/tabs.ts) a user can be given.
 TABS = ("pipelines", "ingestion", "sql", "catalog", "semantic", "workspace", "clickhouse", "alerts", "system")
+# Tabs only admins see: Users, and Cloudin (the Claude account settings).
+ADMIN_TABS = ("users", "cloudin")
 
 # API path prefix -> the tabs that use it (any one of them gives access). Longest prefix wins.
 TAB_PATHS: dict[str, tuple[str, ...]] = {
@@ -60,9 +62,11 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/alerts": ("alerts",),
     "/api/semantic": ("semantic",),
     "/api/system": ("system",),
+    "/api/cloudin/status": TABS,  # whether Cloudin can answer: any signed-in user
+    "/api/cloudin/sql": ("sql",),  # ask Cloudin about a failed query
 }
 PUBLIC_PATHS = ("/api/health", "/api/auth/")
-ADMIN_PATHS = ("/api/users",)
+ADMIN_PATHS = ("/api/users", "/api/cloudin/settings")  # Cloudin's Claude account: admins only
 
 MAX_FAILURES = 5
 LOCK_SECONDS = 60
@@ -152,7 +156,7 @@ class User:
 
     @property
     def visible_tabs(self) -> list[str]:
-        return [*TABS, "users"] if self.role == "admin" else [t for t in TABS if t in self.tabs]
+        return [*TABS, *ADMIN_TABS] if self.role == "admin" else [t for t in TABS if t in self.tabs]
 
     @property
     def stamp(self) -> str:

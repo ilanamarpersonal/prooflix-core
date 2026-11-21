@@ -6,6 +6,10 @@ import {
   type SystemParameter,
   type ClickHouseImportResult,
   type AlertChannel,
+  type CloudinSettings,
+  type CloudinSettingsIn,
+  type CloudinSqlFix,
+  type CloudinStatus,
   type AlertChannelKind,
   type AlertEvent,
   type AlertRule,
@@ -168,6 +172,14 @@ export const api = {
   clickhouseStatus: () => request<ClickHouseStatus>("/clickhouse/status"),
   goldTables: () => request<GoldTable[]>("/clickhouse/gold-tables"),
   alertKinds: () => request<{ channels: AlertChannelKind[]; severities: string[] }>("/alerts/kinds"),
+  cloudinStatus: () => request<CloudinStatus>("/cloudin/status"),
+  cloudinSettings: () => request<CloudinSettings>("/cloudin/settings"),
+  saveCloudinSettings: (body: CloudinSettingsIn) =>
+    request<CloudinSettings>("/cloudin/settings", { method: "PUT", body: JSON.stringify(body) }),
+  testCloudin: () =>
+    request<{ ok: boolean; model: string; display_name: string }>("/cloudin/settings/test", { method: "POST" }),
+  cloudinSqlFix: (sql: string, error: string) =>
+    request<CloudinSqlFix>("/cloudin/sql/fix", { method: "POST", body: JSON.stringify({ sql, error }) }),
   alertChannels: () => request<AlertChannel[]>("/alerts/channels"),
   saveAlertChannel: (id: string, body: { kind: string; name: string; config: Record<string, string> }) =>
     request<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -435,6 +447,19 @@ export function useAlertMutation<A, R = unknown>(fn: (a: A) => Promise<R>) {
   const qc = useQueryClient()
   return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }) })
 }
+
+export const useCloudinStatus = () => useQuery({ queryKey: ["cloudin", "status"], queryFn: api.cloudinStatus })
+export const useCloudinSettings = () => useQuery({ queryKey: ["cloudin", "settings"], queryFn: api.cloudinSettings })
+export function useSaveCloudinSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: api.saveCloudinSettings,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cloudin"] }),
+  })
+}
+export const useTestCloudin = () => useMutation({ mutationFn: api.testCloudin })
+export const useCloudinSqlFix = () =>
+  useMutation({ mutationFn: ({ sql, error }: { sql: string; error: string }) => api.cloudinSqlFix(sql, error) })
 
 export const useSemanticModel = () => useQuery({ queryKey: ["semantic", "model"], queryFn: api.semanticModel })
 export const useSemanticTables = () =>

@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react"
 
+import { CloudinSqlPanel, type SqlFailure } from "@/components/cloudin-sql-panel"
 import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
@@ -23,7 +24,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
-import { useSqlQuery, useSqlTables } from "@/lib/api"
+import { ApiError, useAuthStatus, useCloudinStatus, useSqlQuery, useSqlTables } from "@/lib/api"
 import { caretPosition, completeAt, type Completion, type Suggestion } from "@/lib/sql-completion"
 import type { SqlResult, SqlTable } from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
@@ -163,12 +164,28 @@ function loadTabs(): TabsState {
   }
 }
 
+/** What the page can do in the open query's editor */
+interface EditorApi {
+  insert: (text: string) => void
+  /** replace the query */
+  setSql: (text: string) => void
+  /** replace the query and run it */
+  runSql: (text: string) => void
+}
+
 export function SqlEditorPage() {
   const [state, setState] = useState<TabsState>(loadTabs)
   const tables = useSqlTables()
   const location = useLocation()
   const navigate = useNavigate()
-  const editorApi = useRef<{ insert: (text: string) => void } | null>(null)
+  const editorApi = useRef<EditorApi | null>(null)
+  // Cloudin: the last failed query, offered for a suggested fix in the panel on the right
+  const cloudin = useCloudinStatus()
+  const auth = useAuthStatus()
+  const canSetUp = auth.data ? !auth.data.enabled || auth.data.user?.role === "admin" : false
+  const [failure, setFailure] = useState<SqlFailure | null>(null)
+  const [fixRan, setFixRan] = useState(false)
+  const pendingFix = useRef<string | null>(null)
   // On md+ screens the schemas and the editor column fill the window; the
   // divider splits the column between the editor and the results.
   const panels = useRef<HTMLDivElement>(null)
@@ -198,6 +215,22 @@ export function SqlEditorPage() {
   }, [state])
 
   const active = state.tabs.find((t) => t.id === state.active) ?? state.tabs[0]
+  const cloudinReady = !!cloudin.data?.ready
+  const showPanel =
+    !!failure && failure.tabId === active.id && (cloudinReady || (canSetUp && cloudin.data?.enabled !== false))
+
+  const onQueryDone = (tabId: string, sql: string, error: unknown) => {
+    if (error) {
+      const text = error instanceof ApiError && error.errors.length ? error.errors.join("\n") : String(error)
+      // the suggested fix failed too: offer to look again
+      pendingFix.current = null
+      setFixRan(false)
+      setFailure((prev) => ({ id: (prev?.id ?? 0) + 1, tabId, sql, error: text }))
+    } else if (pendingFix.current !== null && pendingFix.current === sql) {
+      pendingFix.current = null
+      setFixRan(true)
+    }
+  }
 
   const addTab = (sql = "", title?: string) => {
     const tab = { id: newId(), title: title ?? "", sql }
@@ -256,7 +289,12 @@ export function SqlEditorPage() {
             "--schemas-w": `${schemasWidth}px`,
           } as React.CSSProperties
         }
-        className="grid items-start gap-4 md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0"
+        className={cn(
+          "grid items-start gap-4 md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0",
+          showPanel
+            ? "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] xl:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)_minmax(20rem,26rem)]"
+            : "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)]",
+        )}
       >
         <TableList
           tables={tables.data}
@@ -293,8 +331,23 @@ export function SqlEditorPage() {
             apiRef={editorApi}
             tables={tables.data ?? []}
             onLoadFile={(title, sql) => addTab(sql, title)}
+            onQueryDone={(sql, error) => onQueryDone(active.id, sql, error)}
           />
         </div>
+        {showPanel && failure && (
+          <CloudinSqlPanel
+            failure={failure}
+            ready={cloudinReady}
+            canSetUp={canSetUp}
+            fixRan={fixRan}
+            onRun={(sql) => {
+              pendingFix.current = sql
+              editorApi.current?.runSql(sql)
+            }}
+            onPaste={(sql) => editorApi.current?.setSql(sql)}
+            onClose={() => setFailure(null)}
+          />
+        )}
       </div>
     </>
   )
@@ -476,16 +529,19 @@ function QueryEditor({
   apiRef,
   tables,
   onLoadFile,
+  onQueryDone,
 }: {
   tab: QueryTab
   onSqlChange: (sql: string) => void
   runOnMount: boolean
   onMounted: () => void
-  apiRef: React.MutableRefObject<{ insert: (text: string) => void } | null>
+  apiRef: React.MutableRefObject<EditorApi | null>
   /** for code completion: schema. -> tables, schema.table. -> columns */
   tables: SqlTable[]
   /** a .sql file was chosen with Load SQL: open it in a new query tab */
   onLoadFile: (title: string, sql: string) => void
+  /** a query finished: error is set when it failed */
+  onQueryDone: (sql: string, error: unknown) => void
 }) {
   const sql = tab.sql
   const fileInput = useRef<HTMLInputElement>(null)
@@ -570,7 +626,9 @@ function QueryEditor({
         onSuccess: (r) => {
           results.set(tab.id, r)
           setResult(r)
+          onQueryDone(text, null)
         },
+        onError: (e) => onQueryDone(text, e),
       },
     )
   }
@@ -592,7 +650,18 @@ function QueryEditor({
       el.setSelectionRange(s + text.length, s + text.length)
     })
   }
-  apiRef.current = { insert }
+  const setSql = (text: string) => {
+    onSqlChange(text)
+    requestAnimationFrame(() => editor.current?.focus())
+  }
+  apiRef.current = {
+    insert,
+    setSql,
+    runSql: (text) => {
+      onSqlChange(text)
+      run(text)
+    },
+  }
 
   return (
     <>

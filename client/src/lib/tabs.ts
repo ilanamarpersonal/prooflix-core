@@ -4,6 +4,7 @@ import {
   ArrowDownToLine,
   BellRing,
   Shapes,
+  Sparkles,
   Database,
   DatabaseZap,
   FolderTree,
@@ -25,6 +26,7 @@ export type SectionId =
   | "alerts"
   | "system"
   | "users"
+  | "cloudin"
 
 /** Menu groups, in order: building pipelines, working with data, running the server. */
 export const GROUPS = [
@@ -85,6 +87,7 @@ export const SECTIONS: Section[] = [
   { id: "alerts", label: "Alerts", icon: BellRing, group: "admin", home: "/alerts", prefixes: ["/alerts"] },
   { id: "system", label: "System", icon: SlidersHorizontal, group: "admin", home: "/system", prefixes: ["/system"] },
   { id: "users", label: "Users", icon: UsersRound, group: "admin", home: "/users", prefixes: ["/users"] },
+  { id: "cloudin", label: "Cloudin", icon: Sparkles, group: "admin", home: "/cloudin", prefixes: ["/cloudin"] },
 ]
 
 /** The sections a user sees: their tabs when sign-in is on, else every tab but Users. */

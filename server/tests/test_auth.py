@@ -281,6 +281,7 @@ def test_users_routes(client):
     c.cookies.clear()
     c.post("/api/auth/login", json={"username": "boss", "password": "Newpass123"})
     assert c.put("/api/users/dana", json={"disabled": True}).status_code == 200
+    c.cookies.clear()  # else boss's cookie (set for the test host) is the one sent
     c.cookies.set("prooflix_session", dana_cookie)
     assert c.get("/api/catalog").status_code == 401
     assert c.delete("/api/users/dana").status_code in (401, 204)

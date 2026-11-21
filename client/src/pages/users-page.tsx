@@ -29,7 +29,7 @@ import { cn, formatDateTime } from "@/lib/utils"
 
 const NEW = "\u0000new"
 // the tabs a user can be given, in menu order (Users is for admins only)
-const GIVABLE = SECTIONS.filter((s) => s.id !== "users")
+const GIVABLE = SECTIONS.filter((s) => s.id !== "users" && s.id !== "cloudin")
 // tabs that change code or configuration running on the server: as powerful as an admin
 const TRUSTED: Record<string, string> = {
   workspace: "can change the code pipelines run on the server",
