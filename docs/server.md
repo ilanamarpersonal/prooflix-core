@@ -97,6 +97,7 @@ flowchart TB
 | `cli.py` | `prooflix serve`, `prooflix validate`, `prooflix run <id> -p key=value` |
 | `pipelines/models.py` | Pydantic models of the YAML format. Task types are a discriminated union on `type`; `schedule:` is validated with `Cron`. |
 | `pipelines/workspace.py` | Lists projects and YAML files, runs per-file and whole-workspace validation, saves and deletes files (atomic writes) |
+| `pipelines/parameters.py` | `ParameterSpec` (a declared parameter: type, default, required, choices, pattern), the short-form/long-form parsing, and `bind()`, which converts and checks the values of every run before it starts |
 | `pipelines/templating.py` | Finds and resolves `${params...}`, `${tasks...}`, `${run...}` and `${system...}` references |
 | `pipelines/graph.py` | Cycle detection, transitive dependencies, shortest path (used to report recursive calls) |
 | `pipelines/cron.py` | Parses cron expressions (5 fields, or 6 with seconds first) and computes the next times in a time zone, DST-aware |
@@ -260,7 +261,7 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/health` | | `{status, version, workspace}` (the active workspace) |
-| GET | `/api/pipelines` | | `PipelineSummary[]` (invalid ones included, with `errors`; `project`, `file` and `schedule` info) |
+| GET | `/api/pipelines` | | `PipelineSummary[]` (invalid ones included, with `errors`; `project`, `file` and `schedule` info; `parameters`: the defaults, `parameter_specs`: each parameter's declaration) |
 | GET | `/api/pipelines/{id}` | | `PipelineDetail`: summary + `source`, `spec`, `graph{nodes,edges}`, `used_by` |
 | POST | `/api/pipelines/{id}/validate` | `{source}` | `{valid, errors}`. Validates unsaved YAML against the rest of the workspace. |
 | PUT | `/api/pipelines/{id}[?create_only=true]` | `{source}` | `201`/`200 PipelineDetail`, `422 {detail:{errors}}`, `409` if `create_only` and it exists |
@@ -268,7 +269,7 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | PUT | `/api/pipelines/{id}/schedule` | `{cron, timezone, enabled}` | `PipelineDetail`; writes the `schedule:` block into the YAML. `422` for an invalid cron or time zone. |
 | DELETE | `/api/pipelines/{id}/schedule` | | `PipelineDetail` without a schedule (runs only when started) |
 | GET | `/api/pipelines/{id}/tasks/{key}/code` | | `{type, language, path, content, line}`: the Python module (at the function), shell command or sub-pipeline YAML a task runs |
-| POST | `/api/pipelines/{id}/runs` | `{parameters}` | `202 Run`, `404`, `422` (invalid pipeline or unknown parameters) |
+| POST | `/api/pipelines/{id}/runs` | `{parameters}` | `202 Run` (its `parameters` are the values used, defaults included), `404`, `422 {detail:{errors}}` (invalid pipeline, unknown parameters, or values that don't match their declaration: every problem listed) |
 | POST | `/api/schedules/preview` | `{cron, timezone}` | `{valid, cron, next_runs[5], error}`: checks a cron without saving |
 | GET | `/api/runs?pipeline=&root_only=true&limit=50` | | `Run[]`, newest first |
 | GET | `/api/runs/{id}` | | `Run` |

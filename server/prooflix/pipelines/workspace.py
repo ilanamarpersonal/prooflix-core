@@ -306,6 +306,17 @@ def validate_workspace(defs: dict[str, PipelineDefinition]) -> None:
                     f"{where} passes parameters not declared by '{task.pipeline}': "
                     + ", ".join(unknown)
                 )
+            for name, declared in child.spec.parameters.items():
+                if name not in task.parameters:
+                    if declared.required and declared.default in (None, ""):
+                        d.errors.append(f"{where} must pass '{name}', which '{task.pipeline}' requires")
+                    continue
+                value = task.parameters[name]
+                if next(iter_references(value), None) is None:  # a literal can be checked now
+                    try:
+                        declared.check(value, f"{where} passes '{name}' to '{task.pipeline}':")
+                    except ValueError as exc:
+                        d.errors.append(str(exc))
 
         for child_id in calls.get(pid, []):
             path = shortest_path(calls, child_id, pid)

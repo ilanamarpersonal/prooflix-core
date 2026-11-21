@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from ..pipelines.models import PipelineTask, PythonTask
+from ..pipelines.parameters import ParameterSpec
 from ..pipelines.workspace import PipelineDefinition
 
 if TYPE_CHECKING:
@@ -74,7 +75,9 @@ class PipelineSummary(BaseModel):
     errors: list[str]
     task_count: int
     sub_pipelines: list[str]
-    parameters: dict[str, Any]
+    parameters: dict[str, Any]  # each parameter's default value
+    # each parameter's declaration (type, default, required, ...), for the run form
+    parameter_specs: dict[str, ParameterSpec] = Field(default_factory=dict)
     project: str = ""  # project folder relative to the workspace; "" for the workspace root
     file: str | None = None  # the pipeline's YAML file, relative to the workspace
     schedule: ScheduleInfo | None = None  # None: runs only when started
@@ -134,7 +137,8 @@ def summary_of(d: PipelineDefinition, root: Path | None = None, scheduler: "Sche
         errors=d.errors,
         task_count=len(spec.tasks) if spec else 0,
         sub_pipelines=spec.sub_pipelines if spec else [],
-        parameters=spec.parameters if spec else {},
+        parameters=spec.defaults if spec else {},
+        parameter_specs=spec.parameters if spec else {},
         schedule=schedule_of(d, scheduler),
     )
 

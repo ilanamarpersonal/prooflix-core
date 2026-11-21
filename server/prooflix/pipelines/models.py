@@ -7,7 +7,11 @@ Example::
 
     name: Daily orders
     parameters:
-      run_date: "2026-01-01"
+      run_date: "2026-01-01"        # short form: a default value
+      tenant_id:                    # long form: a typed declaration (see parameters.py)
+        type: identifier
+        default: tenant1
+        required: true
     tasks:
       - key: ingest
         type: pipeline
@@ -31,9 +35,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .cron import Cron, CronError, zone
+from .parameters import ParameterSpec, check_names, normalize_declarations
 
 PIPELINE_ID_PATTERN = r"^[a-z0-9][a-z0-9_\-]*$"
 # Task keys are identifiers so they can be referenced as ${tasks.<key>.output}.
@@ -110,8 +115,8 @@ class ScheduleSpec(_Model):
 class PipelineSpec(_Model):
     name: str | None = Field(default=None, description="Display name; defaults to the id")
     description: str | None = None
-    parameters: dict[str, Any] = Field(
-        default_factory=dict, description="Declared parameters and their default values"
+    parameters: dict[str, ParameterSpec] = Field(
+        default_factory=dict, description="Declared parameters: a default value, or a typed declaration"
     )
     tasks: list[Task] = Field(min_length=1)
     outputs: dict[str, Any] = Field(
@@ -119,6 +124,29 @@ class PipelineSpec(_Model):
         description="Values returned to a calling pipeline, usually ${tasks.<key>.output...}",
     )
     schedule: ScheduleSpec | None = Field(default=None, description="Run automatically on a cron schedule")
+
+    @field_validator("parameters", mode="before")
+    @classmethod
+    def _declarations(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            check_names(value)
+        return normalize_declarations(value)
+
+    @model_validator(mode="after")
+    def _schedulable(self) -> "PipelineSpec":
+        if self.schedule is not None and self.schedule.enabled:
+            missing = [n for n, p in self.parameters.items() if p.required and p.default in (None, "")]
+            if missing:
+                raise ValueError(
+                    f"The schedule can't start this pipeline: required parameters without a default: "
+                    f"{', '.join(missing)}. Give them a default or pause the schedule"
+                )
+        return self
+
+    @property
+    def defaults(self) -> dict[str, Any]:
+        """Each parameter's default value."""
+        return {name: p.default for name, p in self.parameters.items()}
 
     def task(self, key: str) -> PythonTask | ShellTask | PipelineTask:
         for t in self.tasks:

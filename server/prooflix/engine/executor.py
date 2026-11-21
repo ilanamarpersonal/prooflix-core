@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any
 
 from ..pipelines.errors import PipelineNotFound, PipelineValidationError
+from ..pipelines.parameters import bind
 from ..pipelines.models import PipelineSpec, PipelineTask, PythonTask, ShellTask
 from ..pipelines.templating import resolve, resolve_shell
 from ..pipelines.workspace import Workspace
@@ -93,17 +94,15 @@ class PipelineExecutor:
         spec = definition.spec
         assert spec is not None
 
-        parameters = dict(parameters or {})
-        unknown = sorted(set(parameters) - set(spec.parameters))
-        if unknown:
-            raise PipelineValidationError(
-                pipeline_id, [f"Unknown parameters: {', '.join(unknown)}"]
-            )
+        # every way of starting a run comes through here, so values are always checked
+        values, errors = bind(spec.parameters, dict(parameters or {}))
+        if errors:
+            raise PipelineValidationError(pipeline_id, errors)
 
         run = Run(
             pipeline=pipeline_id,
             pipeline_name=definition.name,
-            parameters={**spec.parameters, **parameters},
+            parameters=values,
             parent_run_id=parent.run_id if parent else None,
             parent_task_key=parent.task_key if parent else None,
             depth=parent.depth if parent else 0,

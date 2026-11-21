@@ -20,6 +20,16 @@ export interface GraphEdge {
   target: string
 }
 
+/** A declared pipeline parameter. "any" is the short form (just a default): the value is taken as given. */
+export interface ParameterSpec {
+  type: "any" | "string" | "identifier" | "integer" | "number" | "boolean" | "date" | "list" | "object"
+  default: unknown
+  required: boolean
+  description: string | null
+  choices: unknown[] | null
+  pattern: string | null
+}
+
 export interface PipelineSummary {
   id: string
   name: string
@@ -28,7 +38,10 @@ export interface PipelineSummary {
   errors: string[]
   task_count: number
   sub_pipelines: string[]
+  /** each parameter's default value */
   parameters: Record<string, unknown>
+  /** each parameter's declaration: type, default, required, ... (for the run form) */
+  parameter_specs: Record<string, ParameterSpec>
   /** project folder relative to the workspace ("" for the workspace root) */
   project: string
   /** the pipeline's YAML file, relative to the workspace */

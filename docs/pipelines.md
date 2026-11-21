@@ -38,8 +38,13 @@ workspaces/
 name: Daily orders                 # optional display name (defaults to the id)
 description: Ingest and transform  # optional
 
-parameters:                        # declared parameters and their defaults
-  run_date: "2026-01-01"
+parameters:                        # declared parameters (see Parameters below)
+  run_date: "2026-01-01"           # short form: a default value
+  tenant_id:                       # long form: a typed declaration
+    type: identifier
+    default: tenant1
+    required: true
+    description: Tenant whose catalog the run writes
 
 tasks:
   - key: ingest                    # unique within the pipeline, identifier-like
@@ -168,6 +173,37 @@ sequenceDiagram
     P->>P: start "transform" with ${tasks.ingest.output.path}
 ```
 
+## Parameters
+
+A parameter is declared in one of two forms. The **short form** is just a default
+(`run_date: "2026-01-01"`): any value is accepted, as given. The **long form** is a
+mapping with a `type` and only these keys:
+
+| Key | Meaning |
+|---|---|
+| `type` | `any`, `string` (at most 1000 characters), `identifier`, `integer`, `number`, `boolean`, `date` (`YYYY-MM-DD`), `list` or `object` |
+| `default` | used when a run gives no value (or an empty one); checked against the type when the file is loaded |
+| `required` | `true`: a run must end up with a value, from the run or the default |
+| `description` | shown under the field in the run form |
+| `choices` | the allowed values (the form shows a list) |
+| `pattern` | a regular expression the whole text must match (`string` and `identifier` only) |
+
+An **identifier** is a short lowercase identifier: a letter, then lowercase
+letters, digits or `_`, at most 32 characters (`tenant1`). It is safe in folder
+names, catalog names and SQL, so use it for any value that reaches them, such as a
+tenant ID. An object default whose keys include `type` needs the long form
+(`{type: object, default: {...}}`).
+
+Every run, whether started from the UI, the API, the CLI, a schedule or a parent
+pipeline, has its values checked before it starts: text is converted to the
+declared type (`"12"` becomes `12` for an integer, since forms send text), and any
+problem is a `422` that lists every invalid value, so nothing runs with a bad
+value. The run records the values it used (`parameters`), defaults included.
+
+In the UI, **Run** on a pipeline with parameters opens the **Run with parameters**
+form: one field per parameter, with its type, default and description, a
+required mark, and a preview check of identifiers, whole numbers and patterns.
+
 ## References: `${...}`
 
 | Reference | Value |
@@ -196,14 +232,18 @@ and when the UI's **Validate** or **Save** buttons are used.
    (`[a-z0-9][a-z0-9_-]*`).
 2. Schema: known fields only, required fields present, valid `type`, `entrypoint` format.
 3. Task keys are unique, every `depends_on` exists, and the task graph has no cycle.
-4. `${params.x}` names a declared parameter.
+4. `${params.x}` names a declared parameter. Parameter declarations are valid
+   (known type, a default of that type, `pattern` and `choices` consistent), and
+   an enabled schedule doesn't leave a required parameter without a default.
 5. `${tasks.k.output}` names a task that is an **upstream dependency**
    (direct or indirect) of the task using it.
 
 **Across the workspace**
 
 6. Every called pipeline exists and is itself valid.
-7. Parameters passed to a sub-pipeline are declared by that sub-pipeline.
+7. Parameters passed to a sub-pipeline are declared by that sub-pipeline, its
+   required parameters without a default are passed, and literal values (without
+   `${...}`) match their declared type.
 8. No recursive calls: `a -> b -> a` and `a -> a` are rejected, with the
    cycle path in the error.
 

@@ -129,12 +129,15 @@ export function PipelineDetailPage() {
           <Card className={cn("py-3", running && "border-status-running/50 bg-status-running/5")}>
             <CardContent className="flex flex-wrap items-center gap-3 px-4 text-sm">
               <span className="font-medium">
-                {running ? (activeRuns.length > 1 ? `Running now (${activeRuns.length} runs)` : "Running now") : "Latest run"}
+                {running
+                  ? activeRuns.length > 1
+                    ? `Running now (${activeRuns.length} runs)`
+                    : "Running now"
+                  : "Latest run"}
               </span>
               <StatusBadge status={shown.status} />
               <span className="text-muted-foreground">
-                <span className="font-mono">{shown.id}</span> ·{" "}
-                {running ? "started " : ""}
+                <span className="font-mono">{shown.id}</span> · {running ? "started " : ""}
                 {formatDateTime(shown.started_at ?? shown.created_at)}
                 {running && running.depth > 0 && " · as a sub-pipeline"}
               </span>
@@ -155,7 +158,7 @@ export function PipelineDetailPage() {
         {showRunForm && (
           <RunPipelineForm
             pipelineId={pipeline.id}
-            parameters={pipeline.parameters}
+            parameters={pipeline.parameter_specs}
             onDone={() => setShowRunForm(false)}
           />
         )}
@@ -224,12 +227,16 @@ export function PipelineDetailPage() {
                 <CardTitle className="text-sm">Parameters</CardTitle>
               </CardHeader>
               <CardContent>
-                {Object.keys(pipeline.parameters).length ? (
+                {Object.keys(pipeline.parameter_specs).length ? (
                   <dl className="grid gap-2 text-sm">
-                    {Object.entries(pipeline.parameters).map(([k, v]) => (
-                      <div key={k} className="flex justify-between gap-2">
-                        <dt className="font-mono">{k}</dt>
-                        <dd className="text-muted-foreground truncate font-mono">{JSON.stringify(v)}</dd>
+                    {Object.entries(pipeline.parameter_specs).map(([k, p]) => (
+                      <div key={k} className="flex justify-between gap-2" title={p.description ?? undefined}>
+                        <dt className="flex min-w-0 items-center gap-1.5 font-mono">
+                          {k}
+                          {p.required && <span className="text-status-failed">*</span>}
+                          {p.type !== "any" && <span className="text-muted-foreground text-xs">{p.type}</span>}
+                        </dt>
+                        <dd className="text-muted-foreground truncate font-mono">{JSON.stringify(p.default)}</dd>
                       </div>
                     ))}
                   </dl>
