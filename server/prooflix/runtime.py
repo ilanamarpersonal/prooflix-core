@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from . import linked_folders
+from .alerts import AlertEngine, AlertStore
 from .config import Settings
 from .connections import ConnectionStore
 from .engine import PipelineExecutor, Scheduler
@@ -37,6 +38,8 @@ class Services:
     executor: PipelineExecutor
     scheduler: Scheduler
     connections: ConnectionStore
+    alert_store: AlertStore
+    alerts: AlertEngine
 
 
 def build_services(settings: Settings) -> Services:
@@ -53,11 +56,18 @@ def build_services(settings: Settings) -> Services:
         found = connections.get(name)
         return found.for_task() if found is not None else None
 
+    alert_store = AlertStore(settings.home)  # PROOFLIX_HOME/alerts.json
+    alerts = AlertEngine(alert_store)
     executor = PipelineExecutor(
-        workspace, store, max_depth=settings.max_depth, start_date=settings.start_date, connections=connection
+        workspace,
+        store,
+        max_depth=settings.max_depth,
+        start_date=settings.start_date,
+        connections=connection,
+        on_log=alerts.handle,
     )
     scheduler = Scheduler(workspace, executor, store)
-    return Services(settings, workspace, store, executor, scheduler, connections)
+    return Services(settings, workspace, store, executor, scheduler, connections, alert_store, alerts)
 
 
 def install(app: FastAPI, services: Services) -> None:
@@ -67,6 +77,8 @@ def install(app: FastAPI, services: Services) -> None:
     app.state.executor = services.executor
     app.state.scheduler = services.scheduler
     app.state.connections = services.connections
+    app.state.alert_store = services.alert_store
+    app.state.alerts = services.alerts
 
 
 async def switch_workspace(app: FastAPI, root: Path) -> bool:

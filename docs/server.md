@@ -108,6 +108,8 @@ flowchart TB
 | `clickhouse.py` | Copies a catalog table into ClickHouse over its HTTP interface: maps the columns to ClickHouse types (`Int64`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, ..., each `Nullable`), loads the rows as Parquet into a staging table and swaps it in (`EXCHANGE TABLES`) |
 | `auth.py` | Users (`PROOFLIX_HOME/users.json`, scrypt hashes), the password rules, signed session cookies, the lockout after wrong passwords, and which API paths each tab opens |
 | `api/auth.py` | Sign in and out, the first admin, changing your password, and the Users tab's routes |
+| `alerts.py` | Alerts: message formats (`{field}` templates or regular expressions), channels (Email over SMTP, Slack, Teams, webhook) and rules in `PROOFLIX_HOME/alerts.json`, the engine that checks task log lines, cooldowns, delivery on background threads, and the history |
+| `api/alerts.py` | The Alerts tab's routes |
 | `connections.py` | Database connections (Oracle, SQL Server, MySQL, PostgreSQL): the fields of each type, the JDBC URL and driver, the store in `PROOFLIX_HOME/connections.json` (mode 600), and listing a database's tables and columns with pure-Python drivers (pg8000, PyMySQL, python-oracledb thin, python-tds) |
 | `ingestion.py` | Ingestion jobs: a job (connection, tables, columns, watermarks, start date, schedule) as a generated pipeline calling `bronze.jdbc_ingest:run`, and back |
 | `api/ingestion.py` | The Ingestion tab: connections (save, test, list tables) and jobs |
@@ -276,7 +278,8 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/workspace/tree` | | The folder tree (hidden folders like `.prooflix` left out) |
-| GET | `/api/workspace/file?path=` | | `{path, size, content}` (first 1 MB; `binary: true` for binary files) |
+| GET | `/api/workspace/file?path=` | | `{path, size, content, modified}` (first 1 MB; `binary: true` for binary files) |
+| PUT | `/api/workspace/file` | `{path, content, modified}` | Saves an existing text file (up to 1 MB) and returns it. `409` when the file changed since it was opened (`modified`), `404` for hidden or missing files, `413` too large, `422` binary; never reaches `PROOFLIX_HOME` |
 | POST | `/api/workspace/import` | `{files: [{path, content_base64}], overwrite}` | `{written, pipelines}`; `409` with `conflicts` when files exist and `overwrite` is false |
 | DELETE | `/api/workspace/item?path=` | | Moves a file or folder to `.prooflix/trash/<time>/` |
 | GET | `/api/workspace/folders/{source-data,data-lake}` | | `{kind, link, path, origin, workspace_setting, server_default, linked}`: the folder `source/` or `data/` uses and whether it is the workspace's choice, the server default or its own folder |
@@ -300,6 +303,23 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/clickhouse/status` | | `{configured, reachable, url, public_url, reader, version, error, tables: [{database, name, rows, bytes}]}` |
 | GET | `/api/clickhouse/gold-tables` | | `[{table, target, rows, columns: [{name, clickhouse_type}], error}]`: every table of a `gold` schema and the ClickHouse table it becomes (`tenant1.gold.x` -> `tenant1.x`) |
 | POST | `/api/clickhouse/import` | `{tables: ["tenant1.gold.x", ...]}` | One result per table: `{table, target, ok, rows, columns, replaced, seconds, error}`. Each table is replaced as a whole; one failing leaves its old copy and doesn't stop the others. `409` when ClickHouse isn't configured. |
+
+**Alerts** (the Alerts tab; admins and users given the `alerts` tab)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/alerts/kinds` | | Channel types (`email`, `slack`, `teams`, `webhook`) with their fields, and the severities |
+| GET | `/api/alerts/channels` | | `[{id, kind, name, config}]`; secrets (`url`, `password`, `authorization`) are `********` |
+| PUT | `/api/alerts/channels/{id}` | `{kind, name, config}` | The channel; `********` keeps a saved secret. Slack URLs must be `https://hooks.slack.com/…`, Teams `https://…` |
+| DELETE | `/api/alerts/channels/{id}` | | `204`; `409` while a rule names it |
+| POST | `/api/alerts/channels/{id}/test` | | `{ok, error}` after sending a test alert (errors never show the secret) |
+| GET / POST | `/api/alerts/rules` | `{name, enabled, mode, pattern, severity, pipelines, channels, cooldown_seconds}` | Rules; `mode` is `format` (text with `{fields}`) or `regex`; empty `pipelines` / `channels` mean all |
+| PUT / DELETE | `/api/alerts/rules/{id}` | as above | The rule / `204` |
+| POST | `/api/alerts/try` | `{mode, pattern, line}` | `{matches, fields}` (nothing is sent) |
+| GET | `/api/alerts/history` | | The last 200 alerts, newest first, with each channel's delivery `status` (`sending`, `sent`, `failed`) and error |
+| POST | `/api/alerts/history/delete` | `{ids}` | `{deleted}`: removes those alerts from the history (`ids: null` removes all) |
+
+Every task log line is checked against the enabled rules as it is written (`TaskRun.log` → `AlertEngine.handle`), except the `$ command` line shell tasks echo. Deliveries run on background threads with a 10 second timeout, so they never slow a run. `alerts.json` fails closed like the other `PROOFLIX_HOME` files.
 
 **Sign-in and users** (with `PROOFLIX_AUTH` on, every other `/api` route answers `401` without a session and `403` for a tab the user doesn't have)
 

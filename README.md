@@ -125,6 +125,24 @@ users and choose for each one:
 Users live in `PROOFLIX_HOME/users.json`, with salted scrypt password hashes (never
 the passwords). `PROOFLIX_AUTH=0` turns sign-in off, for example on a laptop.
 
+## Alerts
+
+The **Alerts** tab raises an alert when a task's log shows a line in a format you
+define, and sends it to **Email**, **Slack**, **Microsoft Teams** or a **webhook**:
+
+* **Rules:** a log message format such as `ERROR {message}` (failed tasks) or
+  `ALERT {severity}: {message}` (a task can print its own alerts), where `{name}`
+  matches any text and becomes a field of the alert; or a regular expression. A rule
+  watches all pipelines or chosen ones, sends to all channels or chosen ones, has a
+  severity, and a cooldown so a noisy line notifies at most once per pipeline in that
+  time. "Try a log line" shows whether a line would raise the alert.
+* **Channels:** an SMTP server and recipients, a Slack incoming webhook, a Teams
+  workflow webhook, or any HTTP endpoint (the alert as JSON). **Test** sends a test
+  alert. URLs and passwords are kept in `PROOFLIX_HOME/alerts.json` (mode 600).
+* **Recent alerts** shows each alert and whether every channel received it.
+
+Only admins, and users an admin gives the Alerts permission, can create alerts.
+
 ## Ingestion from databases
 
 The **Ingestion** tab copies tables of Oracle, SQL Server, MySQL and PostgreSQL

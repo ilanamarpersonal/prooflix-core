@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import {
   ArrowDownToLine,
+  BellRing,
   Database,
   DatabaseZap,
   FolderTree,
@@ -12,7 +13,16 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-export type SectionId = "pipelines" | "ingestion" | "sql" | "workspace" | "catalog" | "clickhouse" | "system" | "users"
+export type SectionId =
+  | "pipelines"
+  | "ingestion"
+  | "sql"
+  | "workspace"
+  | "catalog"
+  | "clickhouse"
+  | "alerts"
+  | "system"
+  | "users"
 
 /** Menu groups, in order: building pipelines, working with data, running the server. */
 export const GROUPS = [
@@ -69,6 +79,7 @@ export const SECTIONS: Section[] = [
     home: "/clickhouse",
     prefixes: ["/clickhouse"],
   },
+  { id: "alerts", label: "Alerts", icon: BellRing, group: "admin", home: "/alerts", prefixes: ["/alerts"] },
   { id: "system", label: "System", icon: SlidersHorizontal, group: "admin", home: "/system", prefixes: ["/system"] },
   { id: "users", label: "Users", icon: UsersRound, group: "admin", home: "/users", prefixes: ["/users"] },
 ]

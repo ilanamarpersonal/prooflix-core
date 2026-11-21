@@ -15,10 +15,14 @@ import {
   FolderOpen,
   FolderInput,
   FolderPlus,
+  Loader2,
+  Pencil,
   RefreshCw,
+  Save,
   Table2,
   Trash2,
   Workflow,
+  X,
   type LucideIcon,
 } from "lucide-react"
 
@@ -37,7 +41,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SwitchWorkspacePanel } from "@/components/switch-workspace-panel"
-import { useForgetWorkspace, useRemoveWorkspaceItem, useWorkspaceFile, useWorkspaces, useWorkspaceTree } from "@/lib/api"
+import {
+  useForgetWorkspace,
+  useRemoveWorkspaceItem,
+  useSaveWorkspaceFile,
+  useWorkspaceFile,
+  useWorkspaces,
+  useWorkspaceTree,
+} from "@/lib/api"
 import { sqlTableFor } from "@/lib/sql-names"
 import type { ImportWorkspaceResult, RemoveResult, WorkspaceEntry, WorkspaceList, WorkspaceNode } from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
@@ -140,16 +151,17 @@ export function WorkspacePage() {
             <Button variant="outline" onClick={() => setPanel("new")} disabled={panel === "new"}>
               <FolderPlus /> New workspace
             </Button>
-            <Button variant="outline" onClick={() => setPanel("switch")} disabled={panel === "switch" || panel === "open-folder"}>
+            <Button
+              variant="outline"
+              onClick={() => setPanel("switch")}
+              disabled={panel === "switch" || panel === "open-folder"}
+            >
               <ArrowLeftRight /> Switch workspace
             </Button>
             <Button onClick={pickFolder}>
               <FolderInput /> Import Workspace
             </Button>
-            <FolderPickerInput
-              inputRef={folderPicker}
-              onPicked={importFolder}
-            />
+            <FolderPickerInput inputRef={folderPicker} onPicked={importFolder} />
           </>
         }
       />
@@ -170,7 +182,9 @@ export function WorkspacePage() {
           <div className="border-primary text-foreground grid justify-items-center gap-2 rounded-xl border-2 border-dashed px-10 py-8 text-center">
             <FolderInput className="text-primary size-8" />
             <p className="font-medium">Drop a folder to import it as a workspace</p>
-            <p className="text-muted-foreground text-sm">It is named after the folder and becomes the active workspace.</p>
+            <p className="text-muted-foreground text-sm">
+              It is named after the folder and becomes the active workspace.
+            </p>
           </div>
         </div>
       )}
@@ -280,7 +294,9 @@ export function WorkspacePage() {
         {noWorkspace ? (
           <Card className="text-muted-foreground grid min-h-64 place-items-center p-6 text-center text-sm md:min-h-0">
             <div className="grid justify-items-center gap-3">
-              <p>There are no workspaces. Drop a folder here to import it, create one, or open a folder on the server.</p>
+              <p>
+                There are no workspaces. Drop a folder here to import it, create one, or open a folder on the server.
+              </p>
               <div className="flex flex-wrap justify-center gap-2">
                 <Button onClick={pickFolder}>
                   <FolderInput /> Import Workspace
@@ -559,6 +575,35 @@ function FileViewer({ path, onRemove, removing }: { path: string | null; onRemov
   const file = useWorkspaceFile(path)
   const navigate = useNavigate()
   const lines = useMemo(() => file.data?.content?.split("\n") ?? [], [file.data?.content])
+  const save = useSaveWorkspaceFile()
+  const [draft, setDraft] = useState<string | null>(null) // null: not editing
+  const editable = !!file.data && file.data.content != null && !file.data.truncated && !file.data.binary
+  const dirty = draft !== null && draft !== file.data?.content
+
+  // another file chosen: leave the editor
+  useEffect(() => {
+    setDraft(null)
+    save.reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path])
+
+  // don't lose unsaved changes by closing the page
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [dirty])
+
+  const doSave = () => {
+    if (!path || draft === null || !file.data) return
+    save.mutate({ path, content: draft, modified: file.data.modified }, { onSuccess: () => setDraft(null) })
+  }
+  const cancel = () => {
+    if (dirty && !window.confirm("Discard your changes to this file?")) return
+    setDraft(null)
+    save.reset()
+  }
 
   if (!path) {
     return (
@@ -576,7 +621,23 @@ function FileViewer({ path, onRemove, removing }: { path: string | null; onRemov
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
         <code className="min-w-0 flex-1 truncate font-mono text-sm">{path}</code>
         {file.data && <span className="text-muted-foreground text-xs">{formatSize(file.data.size)}</span>}
-        {pipelineId && (
+        {draft === null && editable && (
+          <Button variant="outline" size="sm" onClick={() => setDraft(file.data!.content ?? "")}>
+            <Pencil /> Edit
+          </Button>
+        )}
+        {draft !== null && (
+          <>
+            {dirty && <span className="text-muted-foreground text-xs">unsaved changes</span>}
+            <Button size="sm" onClick={doSave} disabled={!dirty || save.isPending} title="Save (Ctrl/Cmd+S)">
+              {save.isPending ? <Loader2 className="animate-spin" /> : <Save />} Save
+            </Button>
+            <Button variant="ghost" size="sm" onClick={cancel}>
+              <X /> Cancel
+            </Button>
+          </>
+        )}
+        {pipelineId && draft === null && (
           <Button variant="outline" size="sm" asChild>
             <Link to={`/pipelines/${pipelineId}`}>
               <ExternalLink /> Open in Pipelines
@@ -598,7 +659,51 @@ function FileViewer({ path, onRemove, removing }: { path: string | null; onRemov
           </Button>
         )}
       </div>
-      {file.error ? (
+      {save.error && (
+        <div className="flex flex-wrap items-start gap-2 p-3">
+          <div className="min-w-0 flex-1">
+            <ErrorAlert title="Not saved" error={save.error} />
+          </div>
+          {(save.error as { status?: number }).status === 409 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setDraft(null)
+                save.reset()
+                void file.refetch()
+              }}
+            >
+              Reload the file
+            </Button>
+          )}
+        </div>
+      )}
+      {draft !== null ? (
+        <textarea
+          aria-label={`Edit ${path}`}
+          autoFocus
+          spellCheck={false}
+          wrap="off"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+              e.preventDefault()
+              doSave()
+            } else if (e.key === "Tab" && !e.shiftKey) {
+              // indent with two spaces instead of leaving the editor
+              e.preventDefault()
+              const el = e.currentTarget
+              const { selectionStart: a, selectionEnd: b } = el
+              const next = draft.slice(0, a) + "  " + draft.slice(b)
+              setDraft(next)
+              requestAnimationFrame(() => el.setSelectionRange(a + 2, a + 2))
+            }
+          }}
+          className="bg-background min-h-[60vh] w-full flex-1 resize-none p-4 font-mono text-[13px] leading-relaxed outline-none md:min-h-0"
+        />
+      ) : file.error ? (
         <div className="p-4">
           <ErrorAlert title="Could not open file" error={file.error} />
         </div>
@@ -676,4 +781,3 @@ function useFolderDrop(onDrop: (data: DataTransfer) => void): boolean {
   }, [])
   return dragging
 }
-

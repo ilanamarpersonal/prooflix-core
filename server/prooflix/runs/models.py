@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 MAX_LOG_LINES = 2000
 
@@ -52,11 +52,18 @@ class TaskRun(BaseModel):
     error: str | None = None
     logs: list[str] = Field(default_factory=list)
     child_run_id: str | None = None
+    # called with each new log line (the alert engine); not saved with the run
+    _listener: Any = PrivateAttr(default=None)
 
     def log(self, message: str) -> None:
         stamp = utcnow().strftime("%H:%M:%S")
         for line in str(message).splitlines() or [""]:
             self.logs.append(f"{stamp} {line}")
+            if self._listener is not None:
+                try:
+                    self._listener(line)
+                except Exception:  # an alert problem must never break a run
+                    pass
         if len(self.logs) > MAX_LOG_LINES:
             del self.logs[: len(self.logs) - MAX_LOG_LINES]
 

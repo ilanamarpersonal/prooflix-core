@@ -34,6 +34,7 @@ const GIVABLE = SECTIONS.filter((s) => s.id !== "users")
 const TRUSTED: Record<string, string> = {
   workspace: "can change the code pipelines run on the server",
   system: "can change the server's configuration",
+  alerts: "can create and manage alerts, and send log lines to channels they choose",
 }
 
 /** Admins add users, set their role and the tabs they see, reset passwords, disable or remove them. */
@@ -332,9 +333,9 @@ function UserForm({ user, me, onDone }: { user: AppUser | null; me: string; onDo
               <div className="text-muted-foreground flex items-start gap-1.5 text-xs">
                 <ShieldAlert className="text-status-failed mt-0.5 size-3.5 shrink-0" />
                 <span>
-                  Give Workspace and System only to people you'd trust as an admin: Workspace can change the code
-                  pipelines run on the server, and System its configuration. Only admins can save pipelines with shell
-                  tasks.
+                  Give Workspace, System and Alerts only to people you'd trust as an admin: Workspace can change the
+                  code pipelines run on the server, System its configuration, and Alerts creates alerts that send log
+                  lines to outside channels. Only admins can save pipelines with shell tasks.
                 </span>
               </div>
             </>

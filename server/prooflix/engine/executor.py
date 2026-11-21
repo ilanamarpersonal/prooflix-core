@@ -62,12 +62,14 @@ class PipelineExecutor:
         max_depth: int = 10,
         start_date: str | None = None,
         connections: Callable[[str], dict | None] | None = None,
+        on_log: Callable[[Run, str, str], None] | None = None,
     ):
         self.workspace = workspace
         self.store = store
         self.max_depth = max_depth
         self.start_date = start_date  # PROOFLIX_START_DATE, ISO 8601 (UTC); None: all data
         self.connections = connections  # name -> connection details, for ctx.connection()
+        self.on_log = on_log  # (run, task key, line) for each task log line: alerts
         self._active: dict[str, asyncio.Task[Run]] = {}
         install_print_capture()  # print() inside python tasks goes to the task log
 
@@ -259,6 +261,9 @@ class PipelineExecutor:
     async def _run_task(self, run: Run, task: AnyTask, scope: dict[str, Any]) -> None:
         tr = run.tasks[task.key]
         tr.started_at = utcnow()
+        if self.on_log is not None:
+            on_log = self.on_log
+            tr._listener = lambda line, key=task.key: on_log(run, key, line)
         for attempt in range(1, task.retries + 2):
             tr.attempt = attempt
             tr.status = RunStatus.RUNNING

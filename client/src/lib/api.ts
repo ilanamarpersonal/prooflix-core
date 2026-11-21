@@ -5,6 +5,11 @@ import {
   type PipelineDetail,
   type SystemParameter,
   type ClickHouseImportResult,
+  type AlertChannel,
+  type AlertChannelKind,
+  type AlertEvent,
+  type AlertRule,
+  type AlertRuleIn,
   type AppUser,
   type AuthStatus,
   type ClickHouseStatus,
@@ -120,6 +125,8 @@ export const api = {
   setLinkedFolder: (kind: LinkedFolderKind, path: string | null) =>
     request<LinkedFolder>(`/workspace/folders/${kind}`, { method: "PUT", body: JSON.stringify({ path }) }),
   workspaceFile: (path: string) => request<WorkspaceFile>(`/workspace/file?${new URLSearchParams({ path })}`),
+  saveWorkspaceFile: (path: string, content: string, modified: number | null) =>
+    request<WorkspaceFile>("/workspace/file", { method: "PUT", body: JSON.stringify({ path, content, modified }) }),
   removeWorkspaceItem: (path: string) =>
     request<RemoveResult>(`/workspace/item?${new URLSearchParams({ path })}`, { method: "DELETE" }),
   workspaces: () => request<WorkspaceList>("/workspaces"),
@@ -152,6 +159,29 @@ export const api = {
   systemParameters: () => request<SystemParameter[]>("/system/parameters"),
   clickhouseStatus: () => request<ClickHouseStatus>("/clickhouse/status"),
   goldTables: () => request<GoldTable[]>("/clickhouse/gold-tables"),
+  alertKinds: () => request<{ channels: AlertChannelKind[]; severities: string[] }>("/alerts/kinds"),
+  alertChannels: () => request<AlertChannel[]>("/alerts/channels"),
+  saveAlertChannel: (id: string, body: { kind: string; name: string; config: Record<string, string> }) =>
+    request<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteAlertChannel: (id: string) => request<void>(`/alerts/channels/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  testAlertChannel: (id: string) =>
+    request<{ ok: boolean; error: string | null }>(`/alerts/channels/${encodeURIComponent(id)}/test`, {
+      method: "POST",
+    }),
+  alertRules: () => request<AlertRule[]>("/alerts/rules"),
+  saveAlertRule: (id: string | null, body: AlertRuleIn) =>
+    id
+      ? request<AlertRule>(`/alerts/rules/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) })
+      : request<AlertRule>("/alerts/rules", { method: "POST", body: JSON.stringify(body) }),
+  deleteAlertRule: (id: string) => request<void>(`/alerts/rules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  tryAlertFormat: (mode: string, pattern: string, line: string) =>
+    request<{ matches: boolean; fields: Record<string, string> }>("/alerts/try", {
+      method: "POST",
+      body: JSON.stringify({ mode, pattern, line }),
+    }),
+  alertHistory: () => request<AlertEvent[]>("/alerts/history"),
+  deleteAlerts: (ids: string[] | null) =>
+    request<{ deleted: number }>("/alerts/history/delete", { method: "POST", body: JSON.stringify({ ids }) }),
   authStatus: () => request<AuthStatus>("/auth/status"),
   login: (username: string, password: string) =>
     request<AuthStatus>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
@@ -309,6 +339,19 @@ export function useSetLinkedFolder(kind: LinkedFolderKind) {
 
 export const useWorkspaceTree = () => useQuery({ queryKey: ["workspace", "tree"], queryFn: api.workspaceTree })
 
+export function useSaveWorkspaceFile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ path, content, modified }: { path: string; content: string; modified: number | null }) =>
+      api.saveWorkspaceFile(path, content, modified),
+    onSuccess: (data) => {
+      qc.setQueryData(["workspace", "file", data.path], data)
+      qc.invalidateQueries({ queryKey: ["workspace", "tree"] })
+      qc.invalidateQueries({ queryKey: ["pipelines"] }) // a pipeline's YAML may have changed
+    },
+  })
+}
+
 export const useWorkspaceFile = (path: string | null) =>
   useQuery({
     queryKey: ["workspace", "file", path],
@@ -348,6 +391,19 @@ export function useImportToClickHouse() {
     mutationFn: (tables: string[]) => api.importToClickHouse(tables),
     onSettled: () => qc.invalidateQueries({ queryKey: ["clickhouse", "status"] }),
   })
+}
+
+export const useAlertKinds = () =>
+  useQuery({ queryKey: ["alerts", "kinds"], queryFn: api.alertKinds, staleTime: Infinity })
+export const useAlertChannels = () => useQuery({ queryKey: ["alerts", "channels"], queryFn: api.alertChannels })
+export const useAlertRules = () => useQuery({ queryKey: ["alerts", "rules"], queryFn: api.alertRules })
+export const useAlertHistory = () =>
+  useQuery({ queryKey: ["alerts", "history"], queryFn: api.alertHistory, refetchInterval: 5000 })
+
+/** A change on the Alerts tab: refetch its lists afterwards. */
+export function useAlertMutation<A, R = unknown>(fn: (a: A) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }) })
 }
 
 export const useAuthStatus = () => useQuery({ queryKey: ["auth"], queryFn: api.authStatus, staleTime: 60_000 })

@@ -43,7 +43,7 @@ USERNAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{2,31}$"
 ROLES = ("admin", "user")
 
 # The tabs of the web client (client/src/lib/tabs.ts) a user can be given; "users" is admins only.
-TABS = ("pipelines", "ingestion", "sql", "catalog", "workspace", "clickhouse", "system")
+TABS = ("pipelines", "ingestion", "sql", "catalog", "workspace", "clickhouse", "alerts", "system")
 
 # API path prefix -> the tabs that use it (any one of them gives access). Longest prefix wins.
 TAB_PATHS: dict[str, tuple[str, ...]] = {
@@ -57,6 +57,7 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/workspaces": ("workspace",),
     "/api/fs": ("workspace", "system"),  # the folder picker
     "/api/clickhouse": ("clickhouse",),
+    "/api/alerts": ("alerts",),
     "/api/system": ("system",),
 }
 PUBLIC_PATHS = ("/api/health", "/api/auth/")

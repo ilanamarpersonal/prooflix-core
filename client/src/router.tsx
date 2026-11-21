@@ -1,6 +1,7 @@
 import { createBrowserRouter } from "react-router"
 
 import { AppShell } from "@/components/layout/app-shell"
+import { AlertsPage } from "@/pages/alerts-page"
 import { CatalogPage } from "@/pages/catalog-page"
 import { ClickHousePage } from "@/pages/clickhouse-page"
 import { IngestionPage } from "@/pages/ingestion-page"
@@ -31,6 +32,7 @@ export const router = createBrowserRouter([
       { path: "workspace", element: <WorkspacePage /> },
       { path: "catalog", element: <CatalogPage /> },
       { path: "clickhouse", element: <ClickHousePage /> },
+      { path: "alerts", element: <AlertsPage /> },
       { path: "system", element: <SystemPage /> },
       { path: "users", element: <UsersPage /> },
     ],

@@ -129,6 +129,8 @@ export interface WorkspaceFile {
   content: string | null
   truncated: boolean
   binary: boolean
+  /** when it last changed; saving sends it back so a newer change isn't overwritten */
+  modified: number | null
 }
 
 export interface ImportWorkspaceResult {
@@ -423,4 +425,52 @@ export interface AuthStatus {
   user: AppUser | null
   /** every tab a user can be given */
   tabs: string[]
+}
+
+// ------------------------------------------------------------ alerts
+export interface AlertChannelKind {
+  kind: "email" | "slack" | "teams" | "webhook"
+  label: string
+  fields: { key: string; label: string; secret: boolean; required: boolean }[]
+}
+
+export interface AlertChannel {
+  id: string
+  kind: AlertChannelKind["kind"]
+  name: string
+  /** secrets are "********" */
+  config: Record<string, string>
+}
+
+export interface AlertRuleIn {
+  name: string
+  enabled: boolean
+  /** format: text with {fields}; regex: a regular expression */
+  mode: "format" | "regex"
+  pattern: string
+  severity: "info" | "warning" | "critical"
+  /** [] = every pipeline */
+  pipelines: string[]
+  /** [] = every channel */
+  channels: string[]
+  cooldown_seconds: number
+}
+
+export interface AlertRule extends AlertRuleIn {
+  id: string
+}
+
+export interface AlertEvent {
+  id: string
+  at: string
+  rule: string
+  severity: string
+  pipeline: string
+  run_id: string
+  task: string
+  line: string
+  fields: Record<string, string>
+  suppressed: number
+  note?: string
+  deliveries: Record<string, { channel: string; kind: string; status: "sending" | "sent" | "failed"; error?: string | null }>
 }

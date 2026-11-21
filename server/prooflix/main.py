@@ -18,6 +18,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import __version__
 from .api import clickhouse as clickhouse_api, ingestion as ingestion_api, pipelines, runs, schedules, sql, system, workspace as workspace_api
+from .alerts import AlertsFileError
+from .api import alerts as alerts_api
 from .api import auth as auth_api
 from .api import workspaces as workspaces_api
 from .auth import COOKIE, PUBLIC_PATHS, UserStore, UsersFileError, can_access
@@ -54,6 +56,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.switch_lock = asyncio.Lock()
     install(app, build_services(settings))
     app.state.users = UserStore(settings.home)  # PROOFLIX_HOME/users.json
+
+    @app.exception_handler(AlertsFileError)
+    async def alerts_file_error(request, exc):  # fail closed (principle 11)
+        return JSONResponse({"detail": str(exc)}, status_code=500)
 
     @app.exception_handler(ConnectionsFileError)
     async def connections_file_error(request, exc):  # fail closed (principle 11)
@@ -97,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(clickhouse_api.router)
     app.include_router(ingestion_api.router)
+    app.include_router(alerts_api.router)
     app.include_router(auth_api.router)
     app.include_router(auth_api.users_router)
 

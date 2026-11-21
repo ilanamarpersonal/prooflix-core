@@ -40,6 +40,13 @@ class WorkspaceFile(BaseModel):
     content: str | None  # None when the file is binary or too large to show
     truncated: bool = False
     binary: bool = False
+    modified: float | None = None  # when it last changed (seconds); saving checks it hasn't since
+
+
+class FileSave(BaseModel):
+    path: str
+    content: str
+    modified: float | None = None  # the "modified" it was opened with: refused if the file changed since
 
 
 def _visible(p: Path) -> bool:
@@ -224,16 +231,46 @@ async def read_file(
     hidden = any(part.startswith(".") or part in HIDDEN_NAMES for part in parts)
     if hidden or not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"File '{path}' not found")
-    size = target.stat().st_size
+    st = target.stat()
+    size = st.st_size
     raw = target.read_bytes()[:MAX_FILE_BYTES]
     if b"\0" in raw[:8192]:
-        return WorkspaceFile(path=path, size=size, content=None, binary=True)
+        return WorkspaceFile(path=path, size=size, content=None, binary=True, modified=st.st_mtime)
     return WorkspaceFile(
         path=path,
         size=size,
         content=raw.decode("utf-8", errors="replace"),
         truncated=size > MAX_FILE_BYTES,
+        modified=st.st_mtime,
     )
+
+
+@router.put("/file", response_model=WorkspaceFile)
+async def save_file(body: FileSave, request: Request, ws: Workspace = Depends(get_workspace)) -> WorkspaceFile:
+    """Save a text file of the workspace (edited in the Workspace tab).
+
+    Only existing text files, up to 1 MB, in the workspace or its linked folders; never
+    hidden files or anything in PROOFLIX_HOME. ``409`` when the file changed since it
+    was opened (``modified``), so one person's save never silently undoes another's.
+    """
+    target = resolve_inside(ws.root, body.path, request.app.state.settings.home)
+    parts = Path(os.path.normpath(body.path)).parts
+    if any(part.startswith(".") or part in HIDDEN_NAMES for part in parts) or not target.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"File '{body.path}' not found")
+    data = body.content.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Files over 1 MB can't be edited here")
+    st = target.stat()
+    if st.st_size > MAX_FILE_BYTES or b"\0" in target.read_bytes()[:8192]:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Only text files up to 1 MB can be edited here")
+    if body.modified is not None and abs(st.st_mtime - body.modified) > 1e-6:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "The file changed since you opened it; reload it, then make your change again")
+    tmp = target.with_name(f".{target.name}.saving")
+    tmp.write_bytes(data)
+    os.chmod(tmp, st.st_mode & 0o777)
+    os.replace(tmp, target)  # atomic: a reader never sees half a file
+    return await read_file(request, body.path, ws)
 
 
 # ------------------------------------------------------------------ linked folders
