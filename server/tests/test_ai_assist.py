@@ -69,11 +69,16 @@ def test_the_key_is_private_and_never_shown(tmp_path: Path):
     assert stat.S_IMODE((tmp_path / "ai_assist.json").stat().st_mode) == 0o600
     p = ai_assist.public(store.get())
     assert KEY not in str(p) and p["key_hint"] == "…WXYZ" and p["ready"] and p["key_source"] == "saved"
+    assert p["key_prefix"] == "sk-ant-api03" and p["key_saved_at"]
+    haiku = next(m for m in p["models"] if m["id"] == "claude-haiku-5-5")
+    assert haiku["input_price"] == 0.10 and haiku["output_price"] == 0.50
+    saved_at = p["key_saved_at"]
     # saving without a key keeps it; removing it takes it away
     store.update(enabled=True, model="claude-sonnet-5-5", effort="low")
     assert store.get().api_key == KEY and store.get().model == "claude-sonnet-5-5"
+    assert store.get().key_saved_at == saved_at  # keeping the key keeps its date
     store.update(enabled=True, model="claude-sonnet-5-5", effort="low", remove_key=True)
-    assert store.get().api_key == ""
+    assert store.get().api_key == "" and store.get().key_saved_at == ""
 
 
 def test_environment_key_is_used_when_none_is_saved(tmp_path: Path, monkeypatch):

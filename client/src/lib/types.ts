@@ -560,8 +560,13 @@ export interface AiAssistSettings {
   key_source: "saved" | "environment" | "none"
   /** the key's last four characters, "…abcd" */
   key_hint: string | null
+  /** the key's kind, "sk-ant-api03" (not secret); null when unknown */
+  key_prefix: string | null
+  /** when the saved key was set (UTC, ISO 8601); null for the environment's key */
+  key_saved_at: string | null
   ready: boolean
-  models: { id: string; label: string }[]
+  /** prices in US dollars per million tokens */
+  models: { id: string; label: string; input_price: number; output_price: number }[]
 }
 
 export interface AiAssistSettingsIn {

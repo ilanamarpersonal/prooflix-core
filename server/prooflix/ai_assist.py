@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -31,12 +32,13 @@ log = logging.getLogger(__name__)
 
 SETTINGS_FILE = "ai_assist.json"
 DEFAULT_MODEL = "claude-opus-5-5"
-# model id -> label
+# model id -> (label, input $ per million tokens, output $ per million tokens).
+# Anthropic's list prices (platform.claude.com pricing, November 2026); update them here when they change.
 MODELS = {
-    "claude-opus-5-5": "Claude Opus 5.5 (recommended)",
-    "claude-sonnet-5-5": "Claude Sonnet 5.5 (faster, cheaper)",
-    "claude-haiku-5-5": "Claude Haiku 5.5 (fastest, cheapest)",
-    "claude-fable-5-2": "Claude Fable 5.2 (most capable)",
+    "claude-opus-5-5": ("Claude Opus 5.5 (recommended)", 4.00, 20.00),
+    "claude-sonnet-5-5": ("Claude Sonnet 5.5 (faster, cheaper)", 2.00, 10.00),
+    "claude-haiku-5-5": ("Claude Haiku 5.5 (fastest, cheapest)", 0.10, 0.50),
+    "claude-fable-5-2": ("Claude Fable 5.2 (most capable)", 8.00, 40.00),
 }
 EFFORTS = ("low", "medium", "high")
 # models that take the server-side refusal fallback (Haiku has none)
@@ -63,6 +65,7 @@ class Settings(BaseModel):
     api_key: str = ""
     model: str = DEFAULT_MODEL
     effort: Literal["low", "medium", "high"] = "medium"
+    key_saved_at: str = ""  # when the saved key was set (UTC, ISO 8601)
 
 
 class AiAssistStore:
@@ -105,7 +108,13 @@ class AiAssistStore:
         with self._lock:
             current = self.get()
             new_key = "" if remove_key else (key or current.api_key)
-            s = Settings(enabled=enabled, model=model, effort=effort, api_key=new_key)
+            if remove_key:
+                saved_at = ""
+            elif key:
+                saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            else:
+                saved_at = current.key_saved_at
+            s = Settings(enabled=enabled, model=model, effort=effort, api_key=new_key, key_saved_at=saved_at)
             if self.file is None:
                 self._memory = s
             else:
@@ -127,6 +136,13 @@ def key_of(s: Settings) -> tuple[str, Literal["saved", "environment", "none"]]:
     return "", "none"
 
 
+def _key_prefix(key: str) -> str:
+    """The key's kind, e.g. "sk-ant-api03": not secret, and tells keys apart."""
+    parts = key.split("-")
+    prefix = "-".join(parts[:3])
+    return prefix if key.startswith("sk-ant-") and len(parts) > 3 and len(prefix) <= 14 else ""
+
+
 def public(s: Settings) -> dict:
     """The settings as the browser may see them: never the key itself."""
     key, source = key_of(s)
@@ -136,8 +152,13 @@ def public(s: Settings) -> dict:
         "effort": s.effort,
         "key_source": source,
         "key_hint": f"…{key[-4:]}" if key else None,
+        "key_prefix": _key_prefix(key) if key else None,
+        "key_saved_at": (s.key_saved_at or None) if source == "saved" else None,
         "ready": s.enabled and bool(key),
-        "models": [{"id": k, "label": v} for k, v in MODELS.items()],
+        "models": [
+            {"id": k, "label": label, "input_price": inp, "output_price": out}
+            for k, (label, inp, out) in MODELS.items()
+        ],
     }
 
 

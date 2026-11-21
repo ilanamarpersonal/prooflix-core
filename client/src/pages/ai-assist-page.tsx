@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { CheckCircle2, KeyRound, Loader2, PlugZap, Save, Trash2 } from "lucide-react"
+import { CheckCircle2, KeyRound, Loader2, PlugZap, RefreshCw, Save, Trash2 } from "lucide-react"
 
 import { AiAssistIcon } from "@/components/ai-assist-icon"
 import { ErrorAlert } from "@/components/error-alert"
@@ -34,11 +34,31 @@ export function AiAssistPage() {
   )
 }
 
+/** dollars as in a price list: $4, $0.10, $0.042, $0.0011 */
+function usd(n: number) {
+  if (Number.isInteger(n)) return `$${n}`
+  if (n >= 0.1) return `$${n.toFixed(2)}`
+  return `$${n.toPrecision(2)}`
+}
+
+// A typical request: the query, the error and a small catalog in (~3,000 tokens), the answer
+// with its thinking out (~1,500 tokens). Only a guide; the Claude Console shows what was spent.
+const TYPICAL_INPUT_TOKENS = 3000
+const TYPICAL_OUTPUT_TOKENS = 1500
+function fixCost(m: { input_price: number; output_price: number }) {
+  return (TYPICAL_INPUT_TOKENS * m.input_price + TYPICAL_OUTPUT_TOKENS * m.output_price) / 1_000_000
+}
+
 function SettingsForm({ current }: { current: AiAssistSettings }) {
   const [enabled, setEnabled] = useState(current.enabled)
   const [model, setModel] = useState(current.model)
   const [effort, setEffort] = useState<string>(current.effort)
   const [apiKey, setApiKey] = useState("")
+  // the key input shows when there is no key yet, or after "Replace"
+  const [replacing, setReplacing] = useState(false)
+  const selected = current.models.find((m) => m.id === model)
+  const hasKey = current.key_source !== "none"
+  const showInput = !hasKey || replacing
   const save = useSaveAiAssistSettings()
   const test = useTestAiAssist()
   const [saved, setSaved] = useState(false)
@@ -57,6 +77,7 @@ function SettingsForm({ current }: { current: AiAssistSettings }) {
       {
         onSuccess: () => {
           setApiKey("")
+          setReplacing(false)
           setSaved(true)
         },
       },
@@ -89,28 +110,76 @@ function SettingsForm({ current }: { current: AiAssistSettings }) {
           </label>
 
           <div className="grid gap-1.5">
-            <label htmlFor="ai-assist-key" className="font-medium">
+            <label htmlFor={showInput ? "ai-assist-key" : undefined} className="font-medium">
               Claude API key
             </label>
-            <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
-              <KeyRound className="size-3.5" />
-              {current.key_source === "saved" && <>A key ending in {current.key_hint} is saved.</>}
-              {current.key_source === "environment" && (
-                <>
-                  Using the server's <code className="font-mono">ANTHROPIC_API_KEY</code> ({current.key_hint}). A key
-                  saved here takes its place.
-                </>
-              )}
-              {current.key_source === "none" && <>No key yet.</>}
-            </div>
-            <Input
-              id="ai-assist-key"
-              type="password"
-              autoComplete="off"
-              placeholder={current.key_source === "saved" ? "Leave empty to keep the saved key" : "sk-ant-…"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
+            {hasKey && (
+              <div className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2">
+                <KeyRound className="text-muted-foreground size-4 shrink-0" />
+                <div className="grid min-w-0 flex-1 gap-0.5">
+                  <code className="truncate font-mono text-sm">
+                    {current.key_prefix ? `${current.key_prefix}-` : ""}
+                    {"•".repeat(8)}
+                    {current.key_hint?.replace("…", "")}
+                  </code>
+                  <span className="text-muted-foreground text-xs">
+                    {current.key_source === "saved" ? (
+                      current.key_saved_at ? (
+                        <>Saved {new Date(current.key_saved_at).toLocaleString()}</>
+                      ) : (
+                        <>Saved</>
+                      )
+                    ) : (
+                      <>
+                        From the server's <code className="font-mono">ANTHROPIC_API_KEY</code>; a key saved here takes
+                        its place
+                      </>
+                    )}
+                  </span>
+                </div>
+                {!replacing && (
+                  <Button variant="outline" size="sm" onClick={() => setReplacing(true)} disabled={save.isPending}>
+                    <RefreshCw /> {current.key_source === "saved" ? "Replace" : "Save a key"}
+                  </Button>
+                )}
+                {current.key_source === "saved" && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive"
+                    onClick={() => submit(true)}
+                    disabled={save.isPending}
+                  >
+                    <Trash2 /> Remove
+                  </Button>
+                )}
+              </div>
+            )}
+            {showInput && (
+              <div className="flex items-center gap-2">
+                <Input
+                  id="ai-assist-key"
+                  type="password"
+                  autoComplete="off"
+                  autoFocus={replacing}
+                  placeholder={hasKey ? "Paste the new key" : "sk-ant-…"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+                {replacing && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setReplacing(false)
+                      setApiKey("")
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            )}
             <p className="text-muted-foreground text-xs">
               Create one in the Claude Console under API keys. It is kept on the server in{" "}
               <code className="font-mono">PROOFLIX_HOME/ai_assist.json</code> (readable only by the server's user) and
@@ -130,10 +199,17 @@ function SettingsForm({ current }: { current: AiAssistSettings }) {
             >
               {current.models.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.label}
+                  {m.label} · {usd(m.input_price)} / {usd(m.output_price)} per 1M tokens
                 </option>
               ))}
             </select>
+            {selected && (
+              <p className="text-muted-foreground text-xs">
+                {usd(selected.input_price)} per million input tokens, {usd(selected.output_price)} per million output
+                tokens. A suggested fix costs roughly {usd(fixCost(selected))}; a big catalog or higher effort costs
+                more.
+              </p>
+            )}
           </div>
 
           <div className="grid gap-1.5">
@@ -177,16 +253,6 @@ function SettingsForm({ current }: { current: AiAssistSettings }) {
             >
               {test.isPending ? <Loader2 className="animate-spin" /> : <PlugZap />} Test connection
             </Button>
-            {current.key_source === "saved" && (
-              <Button
-                variant="ghost"
-                className="text-destructive"
-                onClick={() => submit(true)}
-                disabled={save.isPending}
-              >
-                <Trash2 /> Remove the key
-              </Button>
-            )}
             {saved && <span className="text-muted-foreground text-xs">Saved</span>}
           </div>
         </CardContent>
