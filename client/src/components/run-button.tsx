@@ -31,8 +31,8 @@ function useDismiss(box: React.RefObject<HTMLElement | null>, onClose: () => voi
 
 /**
  * Run: starts a run with the pipeline's default parameters and opens it, so you watch its tasks run.
- * A pipeline that declares parameters gets an arrow on the right whose menu has "Run with parameters…",
- * which opens a small panel with the parameters (defaults filled in) and its own Run button. A pipeline
+ * The arrow on its right opens a menu with "Run with parameters…": a small panel with the parameters the
+ * pipeline declares in its YAML (defaults filled in) and its own Run button. A pipeline
  * with a required parameter that has no default opens that panel on Run, since it can't run on defaults.
  */
 export function RunButton({
@@ -83,42 +83,38 @@ export function RunButton({
           variant={variant}
           onClick={run}
           disabled={!pipeline.valid || start.isPending}
-          className={cn(hasParameters && "rounded-r-none")}
+          className="rounded-r-none"
           title={
             disabledTitle ??
             (start.error
               ? `Could not start: ${start.error.message}`
-              : hasParameters
-                ? needsValues
-                  ? "Run: asks for the required parameters first"
-                  : "Run with the default parameters"
-                : undefined)
+              : needsValues
+                ? "Run: asks for the required parameters first"
+                : "Run with the default parameters")
           }
         >
           <span className="contents">{start.isPending ? <Loader2 className="animate-spin" /> : <Play />}</span> Run
         </Button>
-        {hasParameters && (
-          <Button
-            size={size}
-            variant={variant}
-            disabled={!pipeline.valid}
-            aria-label="More ways to run"
-            aria-haspopup="menu"
-            aria-expanded={menu}
-            title={disabledTitle ?? "More ways to run"}
-            className={cn(
-              "rounded-l-none px-1.5 has-[>svg]:px-1.5",
-              variant === "default" ? "border-primary-foreground/25 border-l" : "-ml-px",
-            )}
-            onClick={() => {
-              place()
-              setPanel(false)
-              setMenu((m) => !m)
-            }}
-          >
-            <ChevronDown />
-          </Button>
-        )}
+        <Button
+          size={size}
+          variant={variant}
+          disabled={!pipeline.valid}
+          aria-label="More ways to run"
+          aria-haspopup="menu"
+          aria-expanded={menu}
+          title={disabledTitle ?? "More ways to run"}
+          className={cn(
+            "rounded-l-none px-1.5 has-[>svg]:px-1.5",
+            variant === "default" ? "border-primary-foreground/25 border-l" : "-ml-px",
+          )}
+          onClick={() => {
+            place()
+            setPanel(false)
+            setMenu((m) => !m)
+          }}
+        >
+          <ChevronDown />
+        </Button>
       </div>
       {menu && anchor && (
         <RunMenu anchor={anchor} ignore={group.current} onClose={() => setMenu(false)} onParameters={openPanel} />
