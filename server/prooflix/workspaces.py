@@ -51,6 +51,31 @@ def discover(root: Path) -> list[Path]:
     )
 
 
+def git_branch(path: Path) -> str | None:
+    """The branch checked out in a git working folder (or "detached at <sha>"); None outside git.
+
+    Reads .git/HEAD directly (also for worktrees, where .git is a file pointing elsewhere),
+    so no git program is needed."""
+    path = Path(path)
+    for folder in (path, *path.parents):
+        dot = folder / ".git"
+        if dot.is_file():
+            text = dot.read_text(errors="replace").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            git_dir = Path(text.split(":", 1)[1].strip())
+            dot = git_dir if git_dir.is_absolute() else (folder / git_dir)
+        if dot.is_dir():
+            try:
+                head = (dot / "HEAD").read_text(errors="replace").strip()
+            except OSError:
+                return None
+            if head.startswith("ref: refs/heads/"):
+                return head[len("ref: refs/heads/"):]
+            return f"detached at {head[:7]}" if head else None
+    return None
+
+
 def create_workspace_dirs(path: Path) -> None:
     """Make ``path`` a workspace: create it with ``pipelines/`` and ``src/``."""
     (path / "pipelines").mkdir(parents=True, exist_ok=True)

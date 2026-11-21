@@ -138,6 +138,15 @@ def inside(target: Path, folder: Path) -> bool:
     return any(_same(p, folder) for p in (target, *target.parents))
 
 
+COPIES = "workspaces"  # PROOFLIX_HOME/workspaces holds workspace copies: not private
+
+
+def private(target: Path, home: Path) -> bool:
+    """target is in PROOFLIX_HOME's private files (users, keys, connections, alerts), that is
+    inside PROOFLIX_HOME but not in its workspaces folder."""
+    return inside(target, home) and not inside(target, home / COPIES)
+
+
 def _overlaps(folder: Path, protected: Path) -> bool:
     """folder is protected, inside it, or contains it."""
     return inside(folder, protected) or inside(protected, folder)

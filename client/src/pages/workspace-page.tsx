@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
 import {
   ArrowLeftRight,
+  Copy,
+  GitBranch,
   Braces,
   Check,
   ChevronRight,
@@ -28,6 +30,7 @@ import {
 
 import { LinkedFolderSection } from "@/components/linked-folder-section"
 import { ErrorAlert } from "@/components/error-alert"
+import { ImportProjectPanel } from "@/components/import-project-panel"
 import {
   FolderPickerInput,
   ImportWorkspacePanel,
@@ -50,7 +53,14 @@ import {
   useWorkspaceTree,
 } from "@/lib/api"
 import { sqlTableFor } from "@/lib/sql-names"
-import type { ImportWorkspaceResult, RemoveResult, WorkspaceEntry, WorkspaceList, WorkspaceNode } from "@/lib/types"
+import type {
+  ImportPathResult,
+  ImportWorkspaceResult,
+  RemoveResult,
+  WorkspaceEntry,
+  WorkspaceList,
+  WorkspaceNode,
+} from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
 
@@ -59,9 +69,10 @@ export function WorkspacePage() {
   const selected = params.get("path")
   const tree = useWorkspaceTree()
   const workspaces = useWorkspaces()
+  const [importedPath, setImportedPath] = useState<ImportPathResult | null>(null)
   // one panel at a time under the header
   // "open-folder" is the switch panel with its folder picker already shown
-  const [panel, setPanel] = useState<"import" | "new" | "switch" | "open-folder" | null>(null)
+  const [panel, setPanel] = useState<"import" | "import-path" | "new" | "switch" | "open-folder" | null>(null)
   const [removed, setRemoved] = useState<RemoveResult | null>(null)
   const remover = useRemoveWorkspaceItem()
   const forgetter = useForgetWorkspace()
@@ -166,6 +177,41 @@ export function WorkspacePage() {
         }
       />
       {panel === "new" && <NewWorkspacePanel onClose={() => setPanel(null)} />}
+      {panel === "import-path" && (
+        <ImportProjectPanel
+          onClose={() => setPanel(null)}
+          onUpload={pickFolder}
+          onImported={(r) => {
+            setPanel(null)
+            setImportedPath(r)
+            setImported(null)
+            setRemoved(null)
+            setRemovedWs(null)
+            if (r.workspace.active) setParams({})
+          }}
+        />
+      )}
+      {importedPath && (
+        <Alert className="mb-4">
+          <FolderInput />
+          <AlertTitle>
+            {importedPath.mode === "copy" ? "Copied and imported" : "Imported in place"}{" "}
+            <code className="font-mono">{importedPath.workspace.name}</code>
+          </AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-x-2">
+            <span>
+              {importedPath.mode === "copy"
+                ? `${importedPath.copied_files} files copied to ${importedPath.workspace.path}; the original stays as it is.`
+                : `Prooflix works on ${importedPath.workspace.path}${importedPath.workspace.branch ? `, branch ${importedPath.workspace.branch}` : ""}.`}{" "}
+              {importedPath.workspace.active ? "It is now the active workspace." : "Switch to it to use it."}{" "}
+              {importedPath.pipelines.length} pipeline{importedPath.pipelines.length === 1 ? "" : "s"}.
+            </span>
+            <button type="button" className="underline" onClick={() => setImportedPath(null)}>
+              Dismiss
+            </button>
+          </AlertDescription>
+        </Alert>
+      )}
       {(panel === "switch" || panel === "open-folder") && (
         <SwitchWorkspacePanel
           openFolder={panel === "open-folder"}
@@ -183,7 +229,7 @@ export function WorkspacePage() {
             <FolderInput className="text-primary size-8" />
             <p className="font-medium">Drop a folder to import it as a workspace</p>
             <p className="text-muted-foreground text-sm">
-              It is named after the folder and becomes the active workspace.
+              Then choose to work on it in place or copy it into PROOFLIX_HOME/workspaces.
             </p>
           </div>
         </div>
@@ -206,7 +252,15 @@ export function WorkspacePage() {
           selection={picked.selection}
           onChooseAgain={pickFolder}
           onClose={() => setPanel(null)}
-          onOpenFolder={() => setPanel("open-folder")}
+          onServerPath={() => setPanel("import-path")}
+          onImportedInPlace={(r) => {
+            setPanel(null)
+            setImportedPath(r)
+            setImported(null)
+            setRemoved(null)
+            setRemovedWs(null)
+            if (r.workspace.active) setParams({})
+          }}
           onImported={(r) => {
             setPanel(null)
             setImported(r)
@@ -360,6 +414,20 @@ function WorkspaceListSection({
           >
             {w.active ? <Check className="text-primary size-4 shrink-0" /> : <span className="size-4 shrink-0" />}
             <span className={cn("min-w-0 flex-1 truncate", !w.exists && "italic line-through")}>{w.name}</span>
+            {w.is_copy && (
+              <Copy className="size-3 shrink-0 opacity-60" aria-label="a copy in PROOFLIX_HOME/workspaces">
+                <title>A copy in PROOFLIX_HOME/workspaces</title>
+              </Copy>
+            )}
+            {w.branch && (
+              <span
+                className="text-muted-foreground flex max-w-24 shrink-0 items-center gap-0.5 font-mono text-[11px] font-normal"
+                title={`git branch ${w.branch}`}
+              >
+                <GitBranch className="size-3 shrink-0" />
+                <span className="truncate">{w.branch}</span>
+              </span>
+            )}
             <button
               type="button"
               onClick={() => onRemove(w)}

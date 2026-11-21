@@ -165,6 +165,25 @@ export interface WorkspaceEntry {
   /** in the workspaces folder, so listed for as long as its folder is there */
   in_root: boolean
   exists: boolean
+  /** the git branch checked out in the folder, when it is a git working folder */
+  branch: string | null
+  /** a copy Prooflix keeps in PROOFLIX_HOME/workspaces */
+  is_copy: boolean
+}
+
+export interface FoundFolder {
+  path: string
+  /** how many of the chosen folder's files it has */
+  matches: number
+  branch: string | null
+}
+
+export interface ImportPathResult {
+  workspace: WorkspaceEntry
+  mode: "in_place" | "copy"
+  source: string
+  copied_files: number | null
+  pipelines: string[]
 }
 
 export interface WorkspaceList {

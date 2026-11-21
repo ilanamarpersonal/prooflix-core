@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react"
-import { ArrowLeftRight, FolderInput, Loader2, TriangleAlert, X } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Copy, FolderInput, FolderOpen, GitBranch, Loader2, TriangleAlert, X } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useImportWorkspace } from "@/lib/api"
-import type { ImportWorkspaceResult } from "@/lib/types"
+import { FolderPicker } from "@/components/folder-picker"
+import { Input } from "@/components/ui/input"
+import { api, useImportPath, useImportWorkspace } from "@/lib/api"
+import type { FoundFolder, ImportPathResult, ImportWorkspaceResult } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 // The server's limits for one upload (MAX_IMPORT_BYTES and MAX_IMPORT_FILES in server/prooflix/api/workspace.py)
 const MAX_BYTES = 20 * 1024 * 1024
@@ -155,67 +158,91 @@ export function ImportWorkspacePanel({
   onChooseAgain,
   onClose,
   onImported,
-  onOpenFolder,
+  onImportedInPlace,
+  onServerPath,
 }: {
   /** the chosen or dropped folder (null: nothing usable was chosen) */
   selection: FolderSelection | null
   /** open the folder picker again (or drop another folder) */
   onChooseAgain: () => void
   onClose: () => void
+  /** copied (uploaded) into PROOFLIX_HOME/workspaces */
   onImported: (result: ImportWorkspaceResult) => void
-  /** use the folder where it is on the server instead (Switch workspace → Open another folder) */
-  onOpenFolder: () => void
+  /** worked on in place, where it is on the server */
+  onImportedInPlace: (result: ImportPathResult) => void
+  /** type a path on the server instead (the folder isn't on this computer) */
+  onServerPath: () => void
 }) {
-  const name = selection ? suggestName(selection.folder) : ""
+  const [name, setName] = useState(selection ? suggestName(selection.folder) : "")
   const [reading, setReading] = useState(false)
   const importer = useImportWorkspace()
+  const inPlace = useImportPath()
+  const [mode, setMode] = useState<"in_place" | "copy" | null>(null) // null until the search answers
+  const [path, setPath] = useState("")
+  const [found, setFound] = useState<FoundFolder[] | null>(null)
+  const [activate, setActivate] = useState(true)
 
   const totalSize = selection?.files.reduce((n, p) => n + p.file.size, 0) ?? 0
-  const busy = reading || importer.isPending
-  // Checked before reading anything: a large folder would stall the browser while it is encoded.
+  const busy = reading || importer.isPending || inPlace.isPending
+  // only a copy is uploaded, so only a copy has the browser's size limits
   const tooBig = !!selection && (totalSize > MAX_BYTES || selection.files.length > MAX_FILES)
   const empty = !selection || selection.files.length === 0
+  const error = importer.error ?? inPlace.error
 
-  const submit = async () => {
+  // where is this folder on the server? (the browser never says) — search once per choice
+  useEffect(() => {
+    if (!selection || empty) return
+    let current = true
+    const sample = selection.files.map((p) => p.path).slice(0, 20)
+    api
+      .findFolder(selection.folder, sample)
+      .then((list) => {
+        if (!current) return
+        setFound(list)
+        setPath(list[0]?.path ?? "")
+        setMode(list.length ? "in_place" : "copy")
+      })
+      .catch(() => {
+        if (!current) return
+        setFound([])
+        setMode("copy")
+      })
+    return () => {
+      current = false
+    }
+  }, [selection, empty])
+
+  const copy = async () => {
     if (!selection || empty || tooBig) return
     setReading(true)
     try {
       const encoded = await Promise.all(
         selection.files.map(async (p) => ({ path: p.path, content_base64: await toBase64(p.file) })),
       )
-      // a workspace of that name (imported before, maybe removed from the list) is updated with this folder
-      importer.mutate({ name, files: encoded, activate: true, overwrite: true }, { onSuccess: onImported })
+      // a copy of that name (imported before, maybe removed from the list) is updated with this folder
+      importer.mutate({ name, files: encoded, activate, overwrite: true }, { onSuccess: onImported })
     } finally {
       setReading(false)
     }
   }
-
-  // Import as soon as a folder is chosen (once per choice, also under React's double effects).
-  const started = useRef<FolderSelection | null | undefined>(undefined)
-  useEffect(() => {
-    if (started.current === selection) return
-    started.current = selection
-    importer.reset()
-    void submit()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection])
+  const submit = () =>
+    mode === "in_place"
+      ? inPlace.mutate({ path: path.trim(), mode: "in_place", name: null, activate }, { onSuccess: onImportedInPlace })
+      : void copy()
 
   return (
     <Card className="mb-4 py-4">
-      <CardContent className="grid gap-3 px-4">
+      <CardContent className="grid gap-4 px-4 text-sm">
         <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            {busy && <Loader2 className="text-muted-foreground size-4 shrink-0 animate-spin" />}
-            <h2 className="truncate font-medium">
-              {busy ? "Importing" : "Import"} <code className="font-mono">{selection?.folder ?? "folder"}/</code>
-              {selection && !empty && (
-                <span className="text-muted-foreground text-sm font-normal">
-                  {" "}
-                  · {selection.files.length} file{selection.files.length === 1 ? "" : "s"}, {formatSize(totalSize)}
-                </span>
-              )}
-            </h2>
-          </div>
+          <h2 className="min-w-0 truncate font-medium">
+            Import <code className="font-mono">{selection?.folder ?? "folder"}/</code>
+            {selection && !empty && (
+              <span className="text-muted-foreground text-sm font-normal">
+                {" "}
+                · {selection.files.length} file{selection.files.length === 1 ? "" : "s"}, {formatSize(totalSize)}
+              </span>
+            )}
+          </h2>
           <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onClose} aria-label="Close import">
             <X />
           </Button>
@@ -226,45 +253,167 @@ export function ImportWorkspacePanel({
             title="Nothing to import"
             error={new Error("The folder has no files to import (hidden and cache files are left out).")}
           />
-        ) : tooBig ? (
-          <Alert>
-            <TriangleAlert />
-            <AlertTitle>This folder is too large to import from the browser</AlertTitle>
-            <AlertDescription className="grid gap-2">
-              <span>
-                It has {selection.files.length.toLocaleString()} files ({formatSize(totalSize)}); one import can carry
-                at most {MAX_FILES.toLocaleString()} files and {formatSize(MAX_BYTES)}. Largest:{" "}
-                {biggest(selection.files).map((b, i) => (
-                  <span key={b.name}>
-                    {i > 0 && ", "}
-                    <code className="font-mono">{b.name}</code> {formatSize(b.size)}
-                  </span>
-                ))}
-                .
-              </span>
-              <span>
-                If the folder is on the computer running Prooflix, open it where it is instead: nothing is copied, and
-                its data stays in place.
-              </span>
-              <div>
-                <Button size="sm" variant="outline" onClick={onOpenFolder}>
-                  <ArrowLeftRight /> Open a folder instead
-                </Button>
-              </div>
-            </AlertDescription>
-          </Alert>
+        ) : mode === null ? (
+          <span className="text-muted-foreground flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin" /> Looking for this folder on the server…
+          </span>
         ) : (
-          importer.error && <ErrorAlert title="Import failed" error={importer.error} />
+          <>
+            <div className="grid gap-2">
+              <span className="font-medium">How to import it</span>
+              <div role="radiogroup" className="grid gap-2 md:grid-cols-2">
+                <ModeChoice
+                  on={mode === "in_place"}
+                  onClick={() => setMode("in_place")}
+                  icon={GitBranch}
+                  title="Work on it in place"
+                  text="Prooflix uses the folder where it is on the server: in a git checkout, the branch checked out there. Edits go into it; nothing is copied."
+                />
+                <ModeChoice
+                  on={mode === "copy"}
+                  onClick={() => setMode("copy")}
+                  icon={Copy}
+                  title="Copy it into PROOFLIX_HOME/workspaces"
+                  text="The folder's files are uploaded into a copy Prooflix works on. The original stays as it is."
+                />
+              </div>
+            </div>
+
+            {mode === "in_place" && (
+              <div className="grid gap-2">
+                <span className="font-medium">Where it is on the server</span>
+                {found && found.length > 0 ? (
+                  <div className="grid gap-1" role="radiogroup" aria-label="Folders found">
+                    {found.map((f) => (
+                      <label
+                        key={f.path}
+                        className="hover:bg-accent flex cursor-pointer items-center gap-2 rounded-md px-2 py-1"
+                      >
+                        <input
+                          type="radio"
+                          className="accent-primary"
+                          checked={path === f.path}
+                          onChange={() => setPath(f.path)}
+                        />
+                        <code className="min-w-0 truncate font-mono text-xs">{f.path}</code>
+                        {f.branch && (
+                          <span className="text-muted-foreground flex shrink-0 items-center gap-0.5 font-mono text-xs">
+                            <GitBranch className="size-3" /> {f.branch}
+                          </span>
+                        )}
+                        <span className="text-muted-foreground shrink-0 text-xs">
+                          {f.matches} of {Math.min(selection.files.length, 20)} files match
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-xs">
+                    No folder named <code className="font-mono">{selection.folder}</code> with a pipelines/ folder was
+                    found on the server. Give its path below, or copy it instead.
+                  </p>
+                )}
+                <FolderPicker value={path} onChange={setPath} />
+                <p className="text-muted-foreground text-xs">
+                  Pick one that was found, or browse to or type the exact path.
+                </p>
+              </div>
+            )}
+
+            {mode === "copy" &&
+              (tooBig ? (
+                <Alert>
+                  <TriangleAlert />
+                  <AlertTitle>Too large to copy from the browser</AlertTitle>
+                  <AlertDescription className="grid gap-2">
+                    <span>
+                      It has {selection.files.length.toLocaleString()} files ({formatSize(totalSize)}); one copy can
+                      carry at most {MAX_FILES.toLocaleString()} files and {formatSize(MAX_BYTES)}. Largest:{" "}
+                      {biggest(selection.files).map((b, i) => (
+                        <span key={b.name}>
+                          {i > 0 && ", "}
+                          <code className="font-mono">{b.name}</code> {formatSize(b.size)}
+                        </span>
+                      ))}
+                      . Work on it in place instead: nothing is uploaded.
+                    </span>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <div className="grid gap-1.5">
+                  <span className="font-medium">Name of the copy</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <code className="text-muted-foreground font-mono text-xs">PROOFLIX_HOME/workspaces/</code>
+                    <Input
+                      className="w-64"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      aria-label="Name of the copy"
+                    />
+                  </div>
+                </div>
+              ))}
+
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                className="accent-primary size-4"
+                checked={activate}
+                onChange={(e) => setActivate(e.target.checked)}
+              />
+              Make it the active workspace
+            </label>
+          </>
         )}
 
-        {!busy && (empty || tooBig || importer.error) && (
-          <div>
-            <Button variant="outline" size="sm" onClick={onChooseAgain}>
-              <FolderInput /> Choose another folder
+        {error && <ErrorAlert title="Import failed" error={error} />}
+        <div className="flex flex-wrap items-center gap-2">
+          {!empty && mode !== null && (
+            <Button onClick={submit} disabled={busy || (mode === "in_place" ? !path.trim() : tooBig || !name.trim())}>
+              {busy ? <Loader2 className="animate-spin" /> : mode === "copy" ? <Copy /> : <FolderOpen />}
+              {mode === "copy" ? "Copy and import" : "Import in place"}
             </Button>
-          </div>
-        )}
+          )}
+          <Button variant="outline" size="sm" onClick={onChooseAgain} disabled={busy}>
+            <FolderInput /> Choose another folder
+          </Button>
+          <button type="button" className="text-muted-foreground text-xs underline" onClick={onServerPath}>
+            The folder is on another computer? Give a path on the server
+          </button>
+        </div>
       </CardContent>
     </Card>
+  )
+}
+
+function ModeChoice({
+  on,
+  onClick,
+  icon: Icon,
+  title,
+  text,
+}: {
+  on: boolean
+  onClick: () => void
+  icon: typeof Copy
+  title: string
+  text: string
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={on}
+      onClick={onClick}
+      className={cn(
+        "grid gap-1 rounded-md border p-3 text-left",
+        on ? "border-primary bg-primary/5 ring-primary/30 ring-2" : "hover:bg-accent",
+      )}
+    >
+      <span className="flex items-center gap-2 font-medium">
+        <Icon className="text-primary size-4" /> {title}
+      </span>
+      <span className="text-muted-foreground text-xs">{text}</span>
+    </button>
   )
 }

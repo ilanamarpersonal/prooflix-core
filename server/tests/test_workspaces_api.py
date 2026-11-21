@@ -36,6 +36,8 @@ def test_default_workspace_is_listed_and_active(client, sample_workspace):
         "active": True,
         "default": True,
         "in_root": False,
+        "branch": None,
+        "is_copy": False,
         "exists": True,
     }
 
@@ -53,6 +55,8 @@ def test_create_makes_folder_with_pipelines_and_src_but_does_not_activate(client
         "active": False,
         "default": False,
         "in_root": False,
+        "branch": None,
+        "is_copy": False,
         "exists": True,
     }
     body = client.get("/api/workspaces").json()
@@ -369,24 +373,25 @@ def test_import_workspace_creates_lists_and_activates_it(tmp_path):
         {"path": "pipelines/hello.yaml", "content_base64": _b64("name: Hello\ntasks:\n  - key: a\n    type: shell\n    command: echo hi\n")},
         {"path": "README.md", "content_base64": _b64("# bundle\n")},
     ]
+    copies = tmp_path / "home" / "workspaces"  # uploads are copied into PROOFLIX_HOME/workspaces
     with root_client(root, tmp_path) as c:
         r = c.post("/api/workspaces/import", json={"name": "bundle", "files": files})
         assert r.status_code == 201, r.text
         body = r.json()
         assert body["written"] == 2 and body["pipelines"] == ["hello"]
         assert body["workspace"]["name"] == "bundle" and body["workspace"]["active"] is True
-        assert (root / "bundle" / "src").is_dir()  # created when missing
+        assert (copies / "bundle" / "src").is_dir()  # created when missing
         assert [p["id"] for p in c.get("/api/pipelines").json()] == ["hello"]
         # the same name again is refused, and nothing is written
         r = c.post("/api/workspaces/import", json={"name": "bundle", "files": files})
         assert r.status_code == 409
         detail = r.json()["detail"]
         assert detail["exists"] and detail["workspace"] and not detail["removed"]
-        assert detail["path"] == str((root / "bundle").resolve())
+        assert detail["path"] == str((copies / "bundle").resolve())
         # without activate it is only listed
         r = c.post("/api/workspaces/import", json={"name": "other", "files": files, "activate": False})
         assert r.json()["workspace"]["active"] is False
-        assert c.get("/api/workspaces").json()["active"] == str((root / "bundle").resolve())
+        assert c.get("/api/workspaces").json()["active"] == str((copies / "bundle").resolve())
 
 
 @pytest.mark.parametrize(
@@ -409,10 +414,11 @@ def test_import_again_after_removing_updates_the_existing_workspace(tmp_path):
         {"path": "pipelines/a.yaml", "content_base64": _b64("name: A\ntasks:\n  - key: t\n    type: shell\n    command: echo 1\n")},
         {"path": "notes.txt", "content_base64": _b64("v1")},
     ]
+    copies = tmp_path / "home" / "workspaces"
     with root_client(root, tmp_path) as c:
         c.post("/api/workspaces/import", json={"name": "bundle", "files": v1, "activate": False})
-        (root / "bundle" / "local.txt").write_text("kept")
-        c.delete("/api/workspaces", params={"path": str(root / "bundle")})
+        (copies / "bundle" / "local.txt").write_text("kept")
+        c.delete("/api/workspaces", params={"path": str(copies / "bundle")})
         # importing it again tells the client it exists and was removed
         r = c.post("/api/workspaces/import", json={"name": "bundle", "files": v1})
         assert r.status_code == 409 and r.json()["detail"]["removed"] is True
@@ -421,22 +427,106 @@ def test_import_again_after_removing_updates_the_existing_workspace(tmp_path):
         r = c.post("/api/workspaces/import", json={"name": "bundle", "files": v2, "overwrite": True})
         assert r.status_code == 201, r.text
         assert r.json()["workspace"]["active"] is True
-        assert (root / "bundle" / "notes.txt").read_text() == "v2"
-        assert (root / "bundle" / "local.txt").read_text() == "kept"  # the rest is kept
-        assert (root / "bundle" / "pipelines" / "a.yaml").is_file()
-        assert [w["name"] for w in c.get("/api/workspaces").json()["workspaces"]] == ["bundle", "main"]
+        assert (copies / "bundle" / "notes.txt").read_text() == "v2"
+        assert (copies / "bundle" / "local.txt").read_text() == "kept"  # the rest is kept
+        assert (copies / "bundle" / "pipelines" / "a.yaml").is_file()
+        # the workspaces folder's own first, then the copies in PROOFLIX_HOME/workspaces
+        assert [w["name"] for w in c.get("/api/workspaces").json()["workspaces"]] == ["main", "bundle"]
 
 
 def test_import_never_overwrites_a_folder_that_is_not_a_workspace(tmp_path):
     root = tmp_path / "workspaces"
     make_ws(root / "main")
-    (root / "stuff").mkdir()
-    (root / "stuff" / "f.txt").write_text("mine")
+    copies = tmp_path / "home" / "workspaces"
+    (copies / "stuff").mkdir(parents=True)
+    (copies / "stuff" / "f.txt").write_text("mine")
     with root_client(root, tmp_path) as c:
         r = c.post(
             "/api/workspaces/import",
             json={"name": "stuff", "files": [{"path": "f.txt", "content_base64": _b64("x")}], "overwrite": True},
         )
         assert r.status_code == 409 and r.json()["detail"]["workspace"] is False
-    assert (root / "stuff" / "f.txt").read_text() == "mine"
+    assert (copies / "stuff" / "f.txt").read_text() == "mine"
 
+
+
+
+def _project(path: Path) -> Path:
+    (path / "pipelines").mkdir(parents=True)
+    (path / "pipelines" / "hello.yaml").write_text("name: Hello\ntasks:\n  - key: a\n    type: shell\n    command: echo hi\n")
+    (path / "src").mkdir()
+    return path
+
+
+def test_import_path_in_place_works_on_the_branch_checked_out(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    repo = _project(tmp_path / "repo")
+    (repo / ".git").mkdir()
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/feature/x\n")
+    with root_client(root, tmp_path) as c:
+        r = c.post("/api/workspaces/import-path", json={"path": str(repo), "mode": "in_place"})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["workspace"]["path"] == str(repo.resolve()) and body["workspace"]["branch"] == "feature/x"
+        assert body["workspace"]["active"] is True and body["workspace"]["is_copy"] is False
+        assert body["pipelines"] == ["hello"] and body["copied_files"] is None
+        # it is the folder itself: a change there is what Prooflix sees
+        (repo / "pipelines" / "two.yaml").write_text("tasks:\n  - key: a\n    type: shell\n    command: echo 2\n")
+        assert sorted(p["id"] for p in c.get("/api/pipelines").json()) == ["hello", "two"]
+
+
+def test_import_path_copy_goes_to_prooflix_home(tmp_path):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    repo = _project(tmp_path / "repo")
+    (repo / ".git").mkdir()
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (repo / "src" / "__pycache__").mkdir()
+    (repo / "src" / "__pycache__" / "x.pyc").write_bytes(b"0")
+    with root_client(root, tmp_path) as c:
+        r = c.post("/api/workspaces/import-path", json={"path": str(repo), "mode": "copy", "name": "my copy"})
+        assert r.status_code == 201, r.text
+        copy = tmp_path / "home" / "workspaces" / "my copy"
+        body = r.json()
+        assert body["workspace"]["path"] == str(copy.resolve()) and body["workspace"]["is_copy"] is True
+        assert (copy / "pipelines" / "hello.yaml").is_file()
+        assert not (copy / ".git").exists() and not (copy / "src" / "__pycache__").exists()
+        assert body["workspace"]["branch"] is None  # a copy has no git history
+        assert c.post("/api/workspaces/import-path", json={"path": str(repo), "mode": "copy", "name": "my copy"}).status_code == 409
+        # the original is untouched by work on the copy
+        (copy / "pipelines" / "hello.yaml").write_text("changed")
+        assert "Hello" in (repo / "pipelines" / "hello.yaml").read_text()
+
+
+@pytest.mark.parametrize("where", ["missing", "not_project", "home", "above_home"])
+def test_import_path_refusals(tmp_path, where):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    home = tmp_path / "box" / "home"
+    home.mkdir(parents=True)
+    (home / "users.json").write_text("{}")
+    paths = {"missing": tmp_path / "nope", "not_project": tmp_path, "home": _project(home / "evil"),
+             "above_home": _project(tmp_path / "box")}
+    with root_client(root, tmp_path, home=home) as c:
+        r = c.post("/api/workspaces/import-path", json={"path": str(paths[where]), "mode": "in_place"})
+        assert r.status_code in (400, 422), r.text
+
+
+def test_find_a_chosen_folder_on_the_server(tmp_path, monkeypatch):
+    root = tmp_path / "workspaces"
+    make_ws(root / "main")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "me")
+    a = _project(tmp_path / "me" / "github" / "repo-a" / "proj")
+    (a / "src" / "job.py").write_text("x")
+    _project(tmp_path / "me" / "old" / "proj")  # same name, fewer of the chosen files
+    _project(tmp_path / "me" / ".hidden" / "proj")  # hidden folders aren't searched
+    (tmp_path / "me" / "notproj" / "proj").mkdir(parents=True)  # no pipelines/: not a project
+    with root_client(root, tmp_path) as c:
+        # a folder holding every chosen file ends the search
+        found = c.post("/api/workspaces/find", json={"name": "proj", "files": ["src/job.py", "pipelines/hello.yaml"]}).json()
+        assert [(Path(f["path"]).parts[-3:], f["matches"]) for f in found] == [(("github", "repo-a", "proj"), 2)]
+        # otherwise every candidate, best match first
+        found = c.post("/api/workspaces/find", json={"name": "proj", "files": ["src/job.py", "nope.txt"]}).json()
+        assert [(Path(f["path"]).parts[-3:], f["matches"]) for f in found] == [
+            (("github", "repo-a", "proj"), 1), (("me", "old", "proj"), 0)]

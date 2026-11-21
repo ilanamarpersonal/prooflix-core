@@ -75,7 +75,7 @@ def resolve_inside(root: Path, rel: str, protected: Path | None = None) -> Path:
     """
     root = root.resolve()
     target = (root / rel).resolve()
-    if protected is not None and linked_folders.inside(target, Path(protected).resolve()):
+    if protected is not None and linked_folders.private(target, Path(protected).resolve()):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Path is outside the workspace")
     inside = lambda base: target == base or base in target.parents  # noqa: E731
     lexical = Path(os.path.normpath(root / rel))

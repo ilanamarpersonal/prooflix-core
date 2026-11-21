@@ -34,6 +34,8 @@ import {
   type CatalogSchema,
   type LinkedFolder,
   type LinkedFolderKind,
+  type FoundFolder,
+  type ImportPathResult,
   type ImportWorkspaceResult,
   type RemoveResult,
   type DirListing,
@@ -136,6 +138,10 @@ export const api = {
     request<WorkspaceEntry>("/workspaces", { method: "POST", body: JSON.stringify({ parent, name }) }),
   activateWorkspace: (path: string) =>
     request<WorkspaceList>("/workspaces/active", { method: "PUT", body: JSON.stringify({ path }) }),
+  findFolder: (name: string, files: string[]) =>
+    request<FoundFolder[]>("/workspaces/find", { method: "POST", body: JSON.stringify({ name, files }) }),
+  importPath: (body: { path: string; mode: "in_place" | "copy"; name: string | null; activate: boolean }) =>
+    request<ImportPathResult>("/workspaces/import-path", { method: "POST", body: JSON.stringify(body) }),
   importWorkspace: (
     name: string,
     files: { path: string; content_base64: string }[],
@@ -600,6 +606,17 @@ export const useSqlQuery = () =>
   useMutation({ mutationFn: ({ sql, limit }: { sql: string; limit?: number }) => api.sqlQuery(sql, limit) })
 
 /** Upload a folder as a new workspace; when it is made active, every page's data changes with it. */
+export function useImportPath() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: api.importPath,
+    onSuccess: (r) => {
+      if (r.workspace.active) qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "workspaces" })
+      qc.invalidateQueries({ queryKey: ["workspaces"] })
+    },
+  })
+}
+
 export function useImportWorkspace() {
   const qc = useQueryClient()
   return useMutation({
