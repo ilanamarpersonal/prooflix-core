@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { UNAUTHORIZED_EVENT, useAuthStatus } from "@/lib/api"
 import { GROUPS, visibleSections, useTabs, type Section } from "@/lib/tabs"
 import type { AppUser } from "@/lib/types"
+import { IconTile } from "@/components/icon-tile"
 import { cn } from "@/lib/utils"
 
 /** Signs the user in first when sign-in is on, then shows the app with their tabs. */
@@ -102,7 +103,7 @@ function Shell({ sections, user }: { sections: Section[]; user: AppUser | null }
         </div>
         {/* on small screens the menu sits in the top bar, as icons */}
         <nav className="flex items-center gap-0.5 overflow-x-auto md:hidden" aria-label="Sections">
-          {sections.map(({ id, label, icon: Icon }) => (
+          {sections.map(({ id, label, icon, color }) => (
             <button
               key={id}
               type="button"
@@ -112,7 +113,7 @@ function Shell({ sections, user }: { sections: Section[]; user: AppUser | null }
               aria-current={tabs.active === id ? "page" : undefined}
               className={cn("rounded-md p-1.5", tabs.active === id && "bg-accent")}
             >
-              <Icon className="size-4" />
+              <IconTile icon={icon} color={color} />
             </button>
           ))}
         </nav>
@@ -218,7 +219,7 @@ function SideNav({
                 except the page you are on */}
             {items
               .filter((s) => collapsed || !closed.has(g.id) || s.id === active)
-              .map(({ id, label, icon: Icon }) => (
+              .map(({ id, label, icon, color }) => (
                 <button
                   key={id}
                   type="button"
@@ -227,12 +228,12 @@ function SideNav({
                   aria-label={collapsed ? label : undefined}
                   aria-current={active === id ? "page" : undefined}
                   className={cn(
-                    "hover:bg-sidebar-accent flex items-center gap-2 rounded-md py-2 text-left text-sm",
+                    "hover:bg-sidebar-accent flex items-center gap-2.5 rounded-md py-1.5 text-left text-sm",
                     collapsed ? "justify-center px-0" : "px-3",
                     active === id && "bg-sidebar-accent font-medium",
                   )}
                 >
-                  <Icon className="size-4 shrink-0" />
+                  <IconTile icon={icon} color={color} />
                   {!collapsed && label}
                 </button>
               ))}

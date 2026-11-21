@@ -4,7 +4,6 @@ import {
   ArrowDownToLine,
   BellRing,
   Shapes,
-  Sparkles,
   Database,
   DatabaseZap,
   FolderTree,
@@ -14,6 +13,8 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react"
+
+import { CloudinIcon } from "@/components/cloudin-icon"
 
 export type SectionId =
   | "pipelines"
@@ -39,8 +40,10 @@ export type GroupId = (typeof GROUPS)[number]["id"]
 export interface Section {
   id: SectionId
   label: string
-  icon: LucideIcon
+  icon: LucideIcon | ((props: { className?: string }) => React.ReactElement)
   group: GroupId
+  /** the colour of its menu tile; none for an icon that is a tile already (Cloudin) */
+  color?: string
   /** where the tab starts */
   home: string
   /** URL prefixes that belong to this tab */
@@ -51,6 +54,7 @@ export interface Section {
 export const SECTIONS: Section[] = [
   {
     id: "pipelines",
+    color: "#378ADD",
     label: "Pipelines",
     icon: Workflow,
     group: "build",
@@ -59,6 +63,7 @@ export const SECTIONS: Section[] = [
   },
   {
     id: "ingestion",
+    color: "#1D9E75",
     label: "Ingestion",
     icon: ArrowDownToLine,
     group: "build",
@@ -67,27 +72,69 @@ export const SECTIONS: Section[] = [
   },
   {
     id: "workspace",
+    color: "#BA7517",
     label: "Workspace",
     icon: FolderTree,
     group: "build",
     home: "/workspace",
     prefixes: ["/workspace"],
   },
-  { id: "sql", label: "SQL Editor", icon: Database, group: "data", home: "/sql", prefixes: ["/sql"] },
-  { id: "catalog", label: "Catalog", icon: Library, group: "data", home: "/catalog", prefixes: ["/catalog"] },
-  { id: "semantic", label: "Semantic model", icon: Shapes, group: "data", home: "/semantic", prefixes: ["/semantic"] },
+  { id: "sql", color: "#7F77DD", label: "SQL Editor", icon: Database, group: "data", home: "/sql", prefixes: ["/sql"] },
+  {
+    id: "catalog",
+    color: "#D85A30",
+    label: "Catalog",
+    icon: Library,
+    group: "data",
+    home: "/catalog",
+    prefixes: ["/catalog"],
+  },
+  {
+    id: "semantic",
+    color: "#D4537E",
+    label: "Semantic model",
+    icon: Shapes,
+    group: "data",
+    home: "/semantic",
+    prefixes: ["/semantic"],
+  },
   {
     id: "clickhouse",
+    color: "#D9A21B",
     label: "ClickHouse",
     icon: DatabaseZap,
     group: "data",
     home: "/clickhouse",
     prefixes: ["/clickhouse"],
   },
-  { id: "alerts", label: "Alerts", icon: BellRing, group: "admin", home: "/alerts", prefixes: ["/alerts"] },
-  { id: "system", label: "System", icon: SlidersHorizontal, group: "admin", home: "/system", prefixes: ["/system"] },
-  { id: "users", label: "Users", icon: UsersRound, group: "admin", home: "/users", prefixes: ["/users"] },
-  { id: "cloudin", label: "Cloudin", icon: Sparkles, group: "admin", home: "/cloudin", prefixes: ["/cloudin"] },
+  {
+    id: "alerts",
+    color: "#E24B4A",
+    label: "Alerts",
+    icon: BellRing,
+    group: "admin",
+    home: "/alerts",
+    prefixes: ["/alerts"],
+  },
+  {
+    id: "system",
+    color: "#888780",
+    label: "System",
+    icon: SlidersHorizontal,
+    group: "admin",
+    home: "/system",
+    prefixes: ["/system"],
+  },
+  {
+    id: "users",
+    color: "#639922",
+    label: "Users",
+    icon: UsersRound,
+    group: "admin",
+    home: "/users",
+    prefixes: ["/users"],
+  },
+  { id: "cloudin", label: "Cloudin", icon: CloudinIcon, group: "admin", home: "/cloudin", prefixes: ["/cloudin"] },
 ]
 
 /** The sections a user sees: their tabs when sign-in is on, else every tab but Users. */

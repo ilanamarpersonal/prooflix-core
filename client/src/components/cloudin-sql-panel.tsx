@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router"
-import { AlertTriangle, CheckCircle2, ClipboardPaste, Loader2, Play, RotateCcw, Sparkles, X } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ClipboardPaste, Loader2, Play, RotateCcw, X } from "lucide-react"
 
+import { CloudinIcon } from "@/components/cloudin-icon"
 import { ErrorAlert } from "@/components/error-alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -67,7 +68,7 @@ export function CloudinSqlPanel({
         data-cloudin-panel
       >
         <div className="flex items-center gap-2 border-b px-3 py-2.5">
-          <Sparkles className="text-primary size-4" />
+          <CloudinIcon className="size-5" />
           <span className="flex-1 text-sm font-semibold">Cloudin</span>
           <Button variant="ghost" size="icon" className="size-7" onClick={onClose} aria-label="Close Cloudin">
             <X />
@@ -81,7 +82,7 @@ export function CloudinSqlPanel({
               {canSetUp ? (
                 <Button asChild size="sm" className="justify-self-start">
                   <Link to="/cloudin">
-                    <Sparkles /> Set up Cloudin
+                    <CloudinIcon /> Set up Cloudin
                   </Link>
                 </Button>
               ) : (
@@ -99,7 +100,7 @@ export function CloudinSqlPanel({
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" onClick={ask}>
-                  <Sparkles /> Yes, look at it
+                  <CloudinIcon /> Yes, look at it
                 </Button>
                 <Button size="sm" variant="ghost" onClick={onClose}>
                   Not now

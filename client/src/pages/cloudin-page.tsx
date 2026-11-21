@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
-import { CheckCircle2, KeyRound, Loader2, PlugZap, Save, Sparkles, Trash2 } from "lucide-react"
+import { CheckCircle2, KeyRound, Loader2, PlugZap, Save, Trash2 } from "lucide-react"
 
+import { CloudinIcon } from "@/components/cloudin-icon"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
@@ -66,7 +67,7 @@ function SettingsForm({ current }: { current: CloudinSettings }) {
     <div className="grid max-w-2xl gap-4">
       <Card className="gap-0 py-0">
         <CardHeader className="flex flex-row items-center gap-3 border-b px-4 py-3">
-          <Sparkles className="text-primary size-4" />
+          <CloudinIcon className="size-5" />
           <CardTitle className="flex-1 text-base">Claude account</CardTitle>
           {current.ready ? (
             <Badge variant="secondary" className="gap-1">

@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
+import { IconTile } from "@/components/icon-tile"
 import { api, useLogout } from "@/lib/api"
 import type { Section } from "@/lib/tabs"
 import type { AppUser } from "@/lib/types"
@@ -30,7 +31,10 @@ interface Command {
   label: string
   /** shown on the right: what kind of thing it is, a status */
   hint?: string
-  icon: LucideIcon
+  icon: LucideIcon | ((props: { className?: string }) => React.ReactElement)
+  /** a page: shown with its menu tile */
+  page?: boolean
+  color?: string
   /** extra words it is found by */
   keywords?: string
   run: () => void | Promise<unknown>
@@ -81,7 +85,16 @@ export function CommandPalette({
     const out: Command[] = []
     const go = (path: string, state?: unknown) => () => navigate(path, state ? { state } : undefined)
     for (const s of sections) {
-      out.push({ id: `go:${s.id}`, group: "Go to", label: s.label, icon: s.icon, hint: "page", run: go(s.home) })
+      out.push({
+        id: `go:${s.id}`,
+        group: "Go to",
+        label: s.label,
+        icon: s.icon,
+        page: true,
+        color: s.color,
+        hint: "page",
+        run: go(s.home),
+      })
     }
     if (has("pipelines"))
       out.push({ id: "new-pipeline", group: "Actions", label: "New pipeline", icon: Plus, run: go("/pipelines/new") })
@@ -315,6 +328,8 @@ export function CommandPalette({
                 >
                   {busy === c.id ? (
                     <Loader2 className="size-4 shrink-0 animate-spin" />
+                  ) : c.page ? (
+                    <IconTile icon={Icon} color={c.color} className="size-5 [&>svg]:size-3" />
                   ) : (
                     <Icon className="text-muted-foreground size-4 shrink-0" />
                   )}
