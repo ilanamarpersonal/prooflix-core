@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router"
-import { AlertTriangle, CheckCircle2, ClipboardPaste, Loader2, Play, RotateCcw, X } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronRight, ClipboardPaste, Loader2, Play, RotateCcw } from "lucide-react"
 
-import { CloudinIcon } from "@/components/cloudin-icon"
+import { AiAssistIcon } from "@/components/ai-assist-icon"
 import { ErrorAlert } from "@/components/error-alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { useCloudinSqlFix } from "@/lib/api"
+import { useAiAssistSqlFix } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-/** A query that failed in the SQL editor, for Cloudin to look at */
+/** A query that failed in the SQL editor, for AI Assist to look at */
 export interface SqlFailure {
   /** changes for every failure, so the panel starts over */
   id: number
@@ -20,40 +20,46 @@ export interface SqlFailure {
 }
 
 /**
- * Cloudin's panel on the right of the SQL editor. It opens when a query fails and asks
- * first. Only when the user agrees is the query sent to Claude, which explains the
+ * AI Assist's panel on the right of the SQL editor. The user shows or hides it (hidden by
+ * default). When a query fails it offers to look at it and asks first. Only when the user agrees is the query sent to Claude, which explains the
  * error and suggests a corrected query. The user can then run it or put it in the editor.
  */
-export function CloudinSqlPanel({
+export function AiAssistSqlPanel({
   failure,
   ready,
   canSetUp,
   fixRan,
   onRun,
   onPaste,
+  onDismiss,
   onClose,
 }: {
-  failure: SqlFailure
-  /** Cloudin has an account and is on */
+  /** the last failed query of the open tab, if any */
+  failure: SqlFailure | null
+  /** AI Assist has an account and is on */
   ready: boolean
-  /** the user is an admin, who can set Cloudin up */
+  /** the user is an admin, who can set AI Assist up */
   canSetUp: boolean
   /** the suggested query ran without an error */
   fixRan: boolean
   onRun: (sql: string) => void
   onPaste: (sql: string) => void
+  /** forget the failed query ("Not now") */
+  onDismiss: () => void
+  /** hide the panel */
   onClose: () => void
 }) {
-  const fix = useCloudinSqlFix()
+  const fix = useAiAssistSqlFix()
   const [asked, setAsked] = useState(false)
   // a new failure starts over
   useEffect(() => {
     setAsked(false)
     fix.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [failure.id])
+  }, [failure?.id])
 
   const ask = () => {
+    if (!failure) return
     setAsked(true)
     fix.mutate({ sql: failure.sql, error: failure.error })
   }
@@ -63,57 +69,72 @@ export function CloudinSqlPanel({
     // on wide screens a column next to the editor; on narrower ones it slides over from the right
     <div className="fixed inset-y-0 right-0 z-40 w-full max-w-sm p-3 xl:static xl:z-auto xl:max-w-none xl:p-0 xl:pl-4">
       <Card
-        aria-label="Cloudin"
+        aria-label="AI Assist"
         className="flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0 shadow-xl xl:shadow-none"
-        data-cloudin-panel
+        data-ai-assist-panel
       >
         <div className="flex items-center gap-2 border-b px-3 py-2.5">
-          <CloudinIcon className="size-5" />
-          <span className="flex-1 text-sm font-semibold">Cloudin</span>
-          <Button variant="ghost" size="icon" className="size-7" onClick={onClose} aria-label="Close Cloudin">
-            <X />
+          <AiAssistIcon className="size-5" />
+          <span className="flex-1 text-sm font-semibold">AI Assist</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={onClose}
+            aria-label="Hide AI Assist"
+            title="Hide AI Assist"
+          >
+            <ChevronRight />
           </Button>
         </div>
 
         <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto p-3 text-sm">
           {!ready ? (
             <div className="grid gap-2">
-              <p>The query failed. Cloudin can explain the error and suggest a fix, but it isn't set up yet.</p>
+              <p>
+                {failure ? "The query failed. " : "When a query fails, "}AI Assist can explain the error and suggest a
+                fix, but it isn't set up yet.
+              </p>
               {canSetUp ? (
                 <Button asChild size="sm" className="justify-self-start">
-                  <Link to="/cloudin">
-                    <CloudinIcon /> Set up Cloudin
+                  <Link to="/ai-assist">
+                    <AiAssistIcon /> Set up AI Assist
                   </Link>
                 </Button>
               ) : (
                 <p className="text-muted-foreground text-xs">
-                  Ask an admin to add a Claude account in the Cloudin tab.
+                  Ask an admin to add a Claude account in the AI Assist tab.
                 </p>
               )}
             </div>
+          ) : !failure ? (
+            <div className="text-muted-foreground grid gap-2">
+              <p>When a query fails, AI Assist can explain the error and suggest a fix you can run.</p>
+              <p className="text-xs">Nothing is sent to Claude until you ask.</p>
+            </div>
           ) : !asked ? (
             <div className="grid gap-3">
-              <p>The query failed. Do you want Cloudin to look at it and suggest a fix?</p>
+              <p>The query failed. Do you want AI Assist to look at it and suggest a fix?</p>
               <p className="text-muted-foreground text-xs">
-                Cloudin sends the query, the error and the catalog's table and column names to Claude. No data rows are
-                sent.
+                AI Assist sends the query, the error and the catalog's table and column names to Claude. No data rows
+                are sent.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" onClick={ask}>
-                  <CloudinIcon /> Yes, look at it
+                  <AiAssistIcon /> Yes, look at it
                 </Button>
-                <Button size="sm" variant="ghost" onClick={onClose}>
+                <Button size="sm" variant="ghost" onClick={onDismiss}>
                   Not now
                 </Button>
               </div>
             </div>
           ) : fix.isPending ? (
             <div className="text-muted-foreground flex items-center gap-2">
-              <Loader2 className="size-4 animate-spin" /> Cloudin is looking at the query and the catalog…
+              <Loader2 className="size-4 animate-spin" /> AI Assist is looking at the query and the catalog…
             </div>
           ) : fix.error ? (
             <div className="grid gap-3">
-              <ErrorAlert title="Cloudin couldn't answer" error={fix.error} />
+              <ErrorAlert title="AI Assist couldn't answer" error={fix.error} />
               <Button size="sm" variant="outline" className="justify-self-start" onClick={ask}>
                 <RotateCcw /> Try again
               </Button>
@@ -173,7 +194,7 @@ export function CloudinSqlPanel({
                   )}
                 </>
               ) : (
-                <p className="text-muted-foreground">Cloudin has no fix to suggest for this one.</p>
+                <p className="text-muted-foreground">AI Assist has no fix to suggest for this one.</p>
               )}
 
               <p className="text-muted-foreground text-xs">

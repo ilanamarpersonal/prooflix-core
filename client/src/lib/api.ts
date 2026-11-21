@@ -6,10 +6,10 @@ import {
   type SystemParameter,
   type ClickHouseImportResult,
   type AlertChannel,
-  type CloudinSettings,
-  type CloudinSettingsIn,
-  type CloudinSqlFix,
-  type CloudinStatus,
+  type AiAssistSettings,
+  type AiAssistSettingsIn,
+  type AiAssistSqlFix,
+  type AiAssistStatus,
   type AlertChannelKind,
   type AlertEvent,
   type AlertRule,
@@ -172,14 +172,14 @@ export const api = {
   clickhouseStatus: () => request<ClickHouseStatus>("/clickhouse/status"),
   goldTables: () => request<GoldTable[]>("/clickhouse/gold-tables"),
   alertKinds: () => request<{ channels: AlertChannelKind[]; severities: string[] }>("/alerts/kinds"),
-  cloudinStatus: () => request<CloudinStatus>("/cloudin/status"),
-  cloudinSettings: () => request<CloudinSettings>("/cloudin/settings"),
-  saveCloudinSettings: (body: CloudinSettingsIn) =>
-    request<CloudinSettings>("/cloudin/settings", { method: "PUT", body: JSON.stringify(body) }),
-  testCloudin: () =>
-    request<{ ok: boolean; model: string; display_name: string }>("/cloudin/settings/test", { method: "POST" }),
-  cloudinSqlFix: (sql: string, error: string) =>
-    request<CloudinSqlFix>("/cloudin/sql/fix", { method: "POST", body: JSON.stringify({ sql, error }) }),
+  aiAssistStatus: () => request<AiAssistStatus>("/ai-assist/status"),
+  aiAssistSettings: () => request<AiAssistSettings>("/ai-assist/settings"),
+  saveAiAssistSettings: (body: AiAssistSettingsIn) =>
+    request<AiAssistSettings>("/ai-assist/settings", { method: "PUT", body: JSON.stringify(body) }),
+  testAiAssist: () =>
+    request<{ ok: boolean; model: string; display_name: string }>("/ai-assist/settings/test", { method: "POST" }),
+  aiAssistSqlFix: (sql: string, error: string) =>
+    request<AiAssistSqlFix>("/ai-assist/sql/fix", { method: "POST", body: JSON.stringify({ sql, error }) }),
   alertChannels: () => request<AlertChannel[]>("/alerts/channels"),
   saveAlertChannel: (id: string, body: { kind: string; name: string; config: Record<string, string> }) =>
     request<AlertChannel>(`/alerts/channels/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -448,18 +448,19 @@ export function useAlertMutation<A, R = unknown>(fn: (a: A) => Promise<R>) {
   return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ["alerts"] }) })
 }
 
-export const useCloudinStatus = () => useQuery({ queryKey: ["cloudin", "status"], queryFn: api.cloudinStatus })
-export const useCloudinSettings = () => useQuery({ queryKey: ["cloudin", "settings"], queryFn: api.cloudinSettings })
-export function useSaveCloudinSettings() {
+export const useAiAssistStatus = () => useQuery({ queryKey: ["ai-assist", "status"], queryFn: api.aiAssistStatus })
+export const useAiAssistSettings = () =>
+  useQuery({ queryKey: ["ai-assist", "settings"], queryFn: api.aiAssistSettings })
+export function useSaveAiAssistSettings() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: api.saveCloudinSettings,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["cloudin"] }),
+    mutationFn: api.saveAiAssistSettings,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ai-assist"] }),
   })
 }
-export const useTestCloudin = () => useMutation({ mutationFn: api.testCloudin })
-export const useCloudinSqlFix = () =>
-  useMutation({ mutationFn: ({ sql, error }: { sql: string; error: string }) => api.cloudinSqlFix(sql, error) })
+export const useTestAiAssist = () => useMutation({ mutationFn: api.testAiAssist })
+export const useAiAssistSqlFix = () =>
+  useMutation({ mutationFn: ({ sql, error }: { sql: string; error: string }) => api.aiAssistSqlFix(sql, error) })
 
 export const useSemanticModel = () => useQuery({ queryKey: ["semantic", "model"], queryFn: api.semanticModel })
 export const useSemanticTables = () =>

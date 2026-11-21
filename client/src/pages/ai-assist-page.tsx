@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { CheckCircle2, KeyRound, Loader2, PlugZap, Save, Trash2 } from "lucide-react"
 
-import { CloudinIcon } from "@/components/cloudin-icon"
+import { AiAssistIcon } from "@/components/ai-assist-icon"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useCloudinSettings, useSaveCloudinSettings, useTestCloudin } from "@/lib/api"
-import type { CloudinSettings } from "@/lib/types"
+import { useAiAssistSettings, useSaveAiAssistSettings, useTestAiAssist } from "@/lib/api"
+import type { AiAssistSettings } from "@/lib/types"
 
 const EFFORTS = [
   { id: "low", label: "Low: quickest answers" },
@@ -18,29 +18,29 @@ const EFFORTS = [
   { id: "high", label: "High: most thorough" },
 ]
 
-/** Admins set the Claude account Cloudin uses: the API key, the model and how hard it thinks. */
-export function CloudinPage() {
-  const settings = useCloudinSettings()
+/** Admins set the Claude account AI Assist uses: the API key, the model and how hard it thinks. */
+export function AiAssistPage() {
+  const settings = useAiAssistSettings()
   return (
     <div>
       <PageHeader
-        title="Cloudin"
-        description="Claude inside Prooflix. When a query fails in the SQL editor, Cloudin offers to look at it, explains the error and suggests a fix you can run. Only the query, the error and the catalog's table and column names are sent to Claude, and only after the user agrees."
+        title="AI Assist"
+        description="Claude inside Prooflix. When a query fails in the SQL editor, AI Assist offers to look at it, explains the error and suggests a fix you can run. Only the query, the error and the catalog's table and column names are sent to Claude, and only after the user agrees."
       />
-      {settings.error && <ErrorAlert title="Could not load the Cloudin settings" error={settings.error} />}
+      {settings.error && <ErrorAlert title="Could not load the AI Assist settings" error={settings.error} />}
       {settings.isLoading && <Skeleton className="h-64 w-full max-w-2xl" />}
       {settings.data && <SettingsForm key={JSON.stringify(settings.data)} current={settings.data} />}
     </div>
   )
 }
 
-function SettingsForm({ current }: { current: CloudinSettings }) {
+function SettingsForm({ current }: { current: AiAssistSettings }) {
   const [enabled, setEnabled] = useState(current.enabled)
   const [model, setModel] = useState(current.model)
   const [effort, setEffort] = useState<string>(current.effort)
   const [apiKey, setApiKey] = useState("")
-  const save = useSaveCloudinSettings()
-  const test = useTestCloudin()
+  const save = useSaveAiAssistSettings()
+  const test = useTestAiAssist()
   const [saved, setSaved] = useState(false)
   useEffect(() => {
     if (!saved) return
@@ -67,7 +67,7 @@ function SettingsForm({ current }: { current: CloudinSettings }) {
     <div className="grid max-w-2xl gap-4">
       <Card className="gap-0 py-0">
         <CardHeader className="flex flex-row items-center gap-3 border-b px-4 py-3">
-          <CloudinIcon className="size-5" />
+          <AiAssistIcon className="size-5" />
           <CardTitle className="flex-1 text-base">Claude account</CardTitle>
           {current.ready ? (
             <Badge variant="secondary" className="gap-1">
@@ -85,11 +85,11 @@ function SettingsForm({ current }: { current: CloudinSettings }) {
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
             />
-            Turn Cloudin on
+            Turn AI Assist on
           </label>
 
           <div className="grid gap-1.5">
-            <label htmlFor="cloudin-key" className="font-medium">
+            <label htmlFor="ai-assist-key" className="font-medium">
               Claude API key
             </label>
             <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
@@ -104,7 +104,7 @@ function SettingsForm({ current }: { current: CloudinSettings }) {
               {current.key_source === "none" && <>No key yet.</>}
             </div>
             <Input
-              id="cloudin-key"
+              id="ai-assist-key"
               type="password"
               autoComplete="off"
               placeholder={current.key_source === "saved" ? "Leave empty to keep the saved key" : "sk-ant-…"}
@@ -113,17 +113,17 @@ function SettingsForm({ current }: { current: CloudinSettings }) {
             />
             <p className="text-muted-foreground text-xs">
               Create one in the Claude Console under API keys. It is kept on the server in{" "}
-              <code className="font-mono">PROOFLIX_HOME/cloudin.json</code> (readable only by the server's user) and is
-              never shown again.
+              <code className="font-mono">PROOFLIX_HOME/ai_assist.json</code> (readable only by the server's user) and
+              is never shown again.
             </p>
           </div>
 
           <div className="grid gap-1.5">
-            <label htmlFor="cloudin-model" className="font-medium">
+            <label htmlFor="ai-assist-model" className="font-medium">
               Model
             </label>
             <select
-              id="cloudin-model"
+              id="ai-assist-model"
               className="border-input bg-background h-9 rounded-md border px-3 text-sm"
               value={model}
               onChange={(e) => setModel(e.target.value)}
@@ -137,11 +137,11 @@ function SettingsForm({ current }: { current: CloudinSettings }) {
           </div>
 
           <div className="grid gap-1.5">
-            <label htmlFor="cloudin-effort" className="font-medium">
+            <label htmlFor="ai-assist-effort" className="font-medium">
               Effort
             </label>
             <select
-              id="cloudin-effort"
+              id="ai-assist-effort"
               className="border-input bg-background h-9 rounded-md border px-3 text-sm"
               value={effort}
               onChange={(e) => setEffort(e.target.value)}

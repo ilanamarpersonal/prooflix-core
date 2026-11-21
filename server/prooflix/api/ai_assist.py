@@ -1,37 +1,37 @@
-"""``/api/cloudin`` routes: the Claude account settings (admins) and the SQL editor's
-"ask Cloudin" for a failed query (users of the SQL tab)."""
+"""``/api/ai-assist`` routes: the Claude account settings (admins) and the SQL editor's
+"ask AI Assist" for a failed query (users of the SQL tab)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from .. import cloudin
-from ..cloudin import CloudinError, CloudinStore
+from .. import ai_assist
+from ..ai_assist import AiAssistError, AiAssistStore
 from .deps import CatalogPaths, get_catalog_paths
 from .sql import _describe, _described_tables
 
-router = APIRouter(prefix="/api/cloudin", tags=["cloudin"])
+router = APIRouter(prefix="/api/ai-assist", tags=["ai-assist"])
 
 
-def _store(request: Request) -> CloudinStore:
-    return request.app.state.cloudin
+def _store(request: Request) -> AiAssistStore:
+    return request.app.state.ai_assist
 
 
-def _fail(e: CloudinError) -> HTTPException:
+def _fail(e: AiAssistError) -> HTTPException:
     return HTTPException(e.status, str(e))
 
 
 @router.get("/status")
-def cloudin_status(request: Request) -> dict:
-    """Whether Cloudin can answer, for any signed-in user (no account details)."""
-    p = cloudin.public(_store(request).get())
+def ai_assist_status(request: Request) -> dict:
+    """Whether AI Assist can answer, for any signed-in user (no account details)."""
+    p = ai_assist.public(_store(request).get())
     return {"ready": p["ready"], "enabled": p["enabled"], "model": p["model"]}
 
 
 class SettingsIn(BaseModel):
     enabled: bool = True
-    model: str = cloudin.DEFAULT_MODEL
+    model: str = ai_assist.DEFAULT_MODEL
     effort: str = "medium"
     api_key: str | None = None  # None or "": keep the saved key
     remove_key: bool = False
@@ -39,7 +39,7 @@ class SettingsIn(BaseModel):
 
 @router.get("/settings")
 def get_settings(request: Request) -> dict:
-    return cloudin.public(_store(request).get())
+    return ai_assist.public(_store(request).get())
 
 
 @router.put("/settings")
@@ -54,14 +54,14 @@ def save_settings(body: SettingsIn, request: Request) -> dict:
         )
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
-    return cloudin.public(s)
+    return ai_assist.public(s)
 
 
 @router.post("/settings/test")
 def test_settings(request: Request) -> dict:
     try:
-        return cloudin.test_connection(_store(request).get())
-    except CloudinError as e:
+        return ai_assist.test_connection(_store(request).get())
+    except AiAssistError as e:
         raise _fail(e) from None
 
 
@@ -76,6 +76,6 @@ def sql_fix(body: SqlFixIn, request: Request, paths: CatalogPaths = Depends(get_
     Claude; return its diagnosis and a corrected query. Nothing is run here."""
     tables = [t.model_dump(by_alias=True) for t in _describe(_described_tables(paths))]
     try:
-        return cloudin.suggest_sql_fix(_store(request).get(), body.sql, body.error, tables)
-    except CloudinError as e:
+        return ai_assist.suggest_sql_fix(_store(request).get(), body.sql, body.error, tables)
+    except AiAssistError as e:
         raise _fail(e) from None

@@ -3,11 +3,11 @@ import { useId } from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * Cloudin's icon: a white sparkle on a violet-blue-cyan tile. It is one SVG sized like the
+ * AI Assist's icon: a white sparkle on a violet-blue-cyan tile. It is one SVG sized like the
  * Lucide icons (size-4 and so on), so it fits wherever they do, and keeps its colours
  * whatever text colour it sits in.
  */
-export function CloudinIcon({ className }: { className?: string }) {
+export function AiAssistIcon({ className }: { className?: string }) {
   const id = useId()
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className={cn("size-4 shrink-0", className)}>

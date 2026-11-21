@@ -1,14 +1,14 @@
-"""Cloudin: Claude as an assistant inside Prooflix.
+"""AI Assist: Claude as an assistant inside Prooflix.
 
 The first place it helps is the SQL editor. When a query fails, the editor offers to
-ask Cloudin. Only when the user accepts are the query, the error and the catalog's
+ask AI Assist. Only when the user accepts are the query, the error and the catalog's
 tables and columns (never their rows) sent to Claude. Claude explains the failure
 and suggests a corrected query. The suggestion is checked to be one read-only
 SELECT, and it runs only when the user clicks Run.
 
 The Claude account details are secrets, so they live in
-``PROOFLIX_HOME/cloudin.json`` (mode 600) and never in a repository. An admin sets
-them in the Cloudin tab. When no key is saved, the server's ``ANTHROPIC_API_KEY``
+``PROOFLIX_HOME/ai_assist.json`` (mode 600) and never in a repository. An admin sets
+them in the AI Assist tab. When no key is saved, the server's ``ANTHROPIC_API_KEY``
 environment variable is used if it is set. The key is never sent back to the
 browser: the client only sees its last four characters.
 """
@@ -29,7 +29,7 @@ from .alerts import _write_private
 
 log = logging.getLogger(__name__)
 
-SETTINGS_FILE = "cloudin.json"
+SETTINGS_FILE = "ai_assist.json"
 DEFAULT_MODEL = "claude-opus-5-5"
 # model id -> label
 MODELS = {
@@ -46,11 +46,11 @@ MAX_TABLES = 300  # tables described to Claude; more are listed by name only
 MAX_TEXT = 100_000  # characters of SQL or error text accepted
 
 
-class CloudinFileError(RuntimeError):
-    """cloudin.json exists but can't be read: refuse rather than treat it as empty."""
+class AiAssistFileError(RuntimeError):
+    """ai_assist.json exists but can't be read: refuse rather than treat it as empty."""
 
 
-class CloudinError(Exception):
+class AiAssistError(Exception):
     """Claude couldn't answer. ``status`` is the HTTP status to report."""
 
     def __init__(self, message: str, status: int = 502):
@@ -65,8 +65,8 @@ class Settings(BaseModel):
     effort: Literal["low", "medium", "high"] = "medium"
 
 
-class CloudinStore:
-    """The Claude account settings in ``<home>/cloudin.json`` (in memory when home is None)."""
+class AiAssistStore:
+    """The Claude account settings in ``<home>/ai_assist.json`` (in memory when home is None)."""
 
     def __init__(self, home: Path | None):
         self.file = home / SETTINGS_FILE if home is not None else None
@@ -83,7 +83,7 @@ class CloudinStore:
             return Settings()
         except (OSError, ValueError) as e:
             log.error("%s can't be read: %s", self.file, e)
-            raise CloudinFileError("The Cloudin settings file can't be read; fix or remove it (see the server log)") from None
+            raise AiAssistFileError("The AI Assist settings file can't be read; fix or remove it (see the server log)") from None
 
     def update(
         self,
@@ -144,26 +144,35 @@ def public(s: Settings) -> dict:
 def _client(s: Settings) -> anthropic.Anthropic:
     key, _ = key_of(s)
     if not s.enabled:
-        raise CloudinError("Cloudin is turned off; an admin can turn it on in the Cloudin tab", 409)
+        raise AiAssistError("AI Assist is turned off; an admin can turn it on in the AI Assist tab", 409)
     if not key:
-        raise CloudinError("Cloudin has no Claude API key yet; an admin can add one in the Cloudin tab", 409)
+        raise AiAssistError("AI Assist has no Claude API key yet; an admin can add one in the AI Assist tab", 409)
     return anthropic.Anthropic(api_key=key, timeout=120.0, max_retries=2)
 
 
-def _api_error(e: Exception) -> CloudinError:
+def _out_of_credit(e: Exception) -> bool:
+    """The API refuses requests once the prepaid credit is used up (a 400 naming the balance, or a 402)."""
+    if not isinstance(e, anthropic.APIStatusError):
+        return False
+    return e.status_code == 402 or (e.status_code == 400 and "credit balance" in str(e).lower())
+
+
+def _api_error(e: Exception) -> AiAssistError:
     if isinstance(e, anthropic.AuthenticationError):
-        return CloudinError("Claude rejected the API key; check it in the Cloudin tab", 400)
+        return AiAssistError("Claude rejected the API key; check it in the AI Assist tab", 400)
+    if _out_of_credit(e):
+        return AiAssistError("The Claude account is out of credit; add credit in the Claude Console (Billing)", 402)
     if isinstance(e, anthropic.PermissionDeniedError):
-        return CloudinError("This API key isn't allowed to use the chosen model", 400)
+        return AiAssistError("This API key isn't allowed to use the chosen model", 400)
     if isinstance(e, anthropic.NotFoundError):
-        return CloudinError("Claude doesn't know the chosen model; pick another in the Cloudin tab", 400)
+        return AiAssistError("Claude doesn't know the chosen model; pick another in the AI Assist tab", 400)
     if isinstance(e, anthropic.RateLimitError):
-        return CloudinError("Claude's rate limit was reached; try again in a minute", 429)
+        return AiAssistError("Claude's rate limit was reached; try again in a minute", 429)
     if isinstance(e, anthropic.APIStatusError):
-        return CloudinError(f"Claude answered with an error ({e.status_code}); try again", 502)
+        return AiAssistError(f"Claude answered with an error ({e.status_code}); try again", 502)
     if isinstance(e, anthropic.APIConnectionError):
-        return CloudinError("Claude can't be reached from the server; check its internet access", 502)
-    return CloudinError("Claude couldn't answer; see the server log", 502)
+        return AiAssistError("Claude can't be reached from the server; check its internet access", 502)
+    return AiAssistError("Claude couldn't answer; see the server log", 502)
 
 
 def test_connection(s: Settings) -> dict:
@@ -186,7 +195,7 @@ class SqlFix(BaseModel):
     confidence: Literal["high", "medium", "low"]
 
 
-SQL_SYSTEM = """You are Cloudin, the assistant built into Prooflix, a data platform. \
+SQL_SYSTEM = """You are AI Assist, the assistant built into Prooflix, a data platform. \
 You help in its SQL editor. The editor runs read-only DuckDB SQL over Parquet and \
 Delta tables in a catalog. Only one SELECT statement (WITH ... SELECT is fine) runs \
 at a time; there is no INSERT, UPDATE, DDL, COPY, ATTACH or file access.
@@ -234,9 +243,9 @@ def check_select(sql: str) -> str | None:
 def suggest_sql_fix(s: Settings, sql: str, error: str, tables: list[dict]) -> dict:
     """Ask Claude why the query failed and for a corrected one."""
     if not sql.strip():
-        raise CloudinError("There is no query to look at", 422)
+        raise AiAssistError("There is no query to look at", 422)
     if len(sql) > MAX_TEXT or len(error) > MAX_TEXT:
-        raise CloudinError("The query or error is too long to send (100,000 characters at most)", 413)
+        raise AiAssistError("The query or error is too long to send (100,000 characters at most)", 413)
     client = _client(s)
     prompt = (
         f"<catalog>\n{_catalog_text(tables)}\n</catalog>\n\n"
@@ -257,12 +266,12 @@ def suggest_sql_fix(s: Settings, sql: str, error: str, tables: list[dict]) -> di
             **extra,
         )
     except anthropic.APIError as e:
-        log.warning("Cloudin request failed: %s", type(e).__name__)
+        log.warning("AI Assist request failed: %s", type(e).__name__)
         raise _api_error(e) from None
     if response.stop_reason == "refusal":
-        raise CloudinError("Claude declined to answer this one", 422)
+        raise AiAssistError("Claude declined to answer this one", 422)
     if response.stop_reason == "max_tokens" or response.parsed_output is None:
-        raise CloudinError("Claude's answer was cut off; try again", 502)
+        raise AiAssistError("Claude's answer was cut off; try again", 502)
     fix: SqlFix = response.parsed_output
     fixed = fix.fixed_sql.strip().rstrip(";").strip()
     problem = check_select(fixed) if fixed else None

@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils"
 /**
  * A menu icon on a soft tile of its own colour: the colour at a light tint behind, the icon
  * in the colour itself (a little lighter in dark mode). Without a colour the icon is drawn as
- * it is, for icons that are tiles already (Cloudin's).
+ * it is, for icons that are tiles already (AI Assist's).
  */
 export function IconTile({
   icon: Icon,

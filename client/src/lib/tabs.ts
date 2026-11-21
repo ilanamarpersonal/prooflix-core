@@ -14,7 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { CloudinIcon } from "@/components/cloudin-icon"
+import { AiAssistIcon } from "@/components/ai-assist-icon"
 
 export type SectionId =
   | "pipelines"
@@ -27,7 +27,7 @@ export type SectionId =
   | "alerts"
   | "system"
   | "users"
-  | "cloudin"
+  | "ai-assist"
 
 /** Menu groups, in order: building pipelines, working with data, running the server. */
 export const GROUPS = [
@@ -42,7 +42,7 @@ export interface Section {
   label: string
   icon: LucideIcon | ((props: { className?: string }) => React.ReactElement)
   group: GroupId
-  /** the colour of its menu tile; none for an icon that is a tile already (Cloudin) */
+  /** the colour of its menu tile; none for an icon that is a tile already (AI Assist) */
   color?: string
   /** where the tab starts */
   home: string
@@ -134,7 +134,14 @@ export const SECTIONS: Section[] = [
     home: "/users",
     prefixes: ["/users"],
   },
-  { id: "cloudin", label: "Cloudin", icon: CloudinIcon, group: "admin", home: "/cloudin", prefixes: ["/cloudin"] },
+  {
+    id: "ai-assist",
+    label: "AI Assist",
+    icon: AiAssistIcon,
+    group: "admin",
+    home: "/ai-assist",
+    prefixes: ["/ai-assist"],
+  },
 ]
 
 /** The sections a user sees: their tabs when sign-in is on, else every tab but Users. */

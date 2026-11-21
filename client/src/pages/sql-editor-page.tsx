@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import {
+  ChevronLeft,
   ChevronRight,
   Download,
   Layers,
@@ -16,7 +17,8 @@ import {
   X,
 } from "lucide-react"
 
-import { CloudinSqlPanel, type SqlFailure } from "@/components/cloudin-sql-panel"
+import { AiAssistIcon } from "@/components/ai-assist-icon"
+import { AiAssistSqlPanel, type SqlFailure } from "@/components/ai-assist-sql-panel"
 import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
@@ -24,7 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
-import { ApiError, useAuthStatus, useCloudinStatus, useSqlQuery, useSqlTables } from "@/lib/api"
+import { ApiError, useAuthStatus, useAiAssistStatus, useSqlQuery, useSqlTables } from "@/lib/api"
 import { caretPosition, completeAt, type Completion, type Suggestion } from "@/lib/sql-completion"
 import type { SqlResult, SqlTable } from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
@@ -71,6 +73,16 @@ function saveEditorHeight(h: number) {
     localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(h)))
   } catch {
     /* storage unavailable */
+  }
+}
+
+const ASSIST_OPEN_KEY = "prooflix-sql-ai-assist-open" // the user's choice to show the AI Assist panel
+
+function loadAssistOpen() {
+  try {
+    return localStorage.getItem(ASSIST_OPEN_KEY) === "1" // hidden unless the user showed it
+  } catch {
+    return false
   }
 }
 
@@ -179,12 +191,21 @@ export function SqlEditorPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const editorApi = useRef<EditorApi | null>(null)
-  // Cloudin: the last failed query, offered for a suggested fix in the panel on the right
-  const cloudin = useCloudinStatus()
+  // AI Assist: the last failed query, offered for a suggested fix in the panel on the right
+  const aiAssist = useAiAssistStatus()
   const auth = useAuthStatus()
   const canSetUp = auth.data ? !auth.data.enabled || auth.data.user?.role === "admin" : false
   const [failure, setFailure] = useState<SqlFailure | null>(null)
   const [fixRan, setFixRan] = useState(false)
+  const [assistOpen, setAssistOpenState] = useState(loadAssistOpen)
+  const setAssistOpen = (open: boolean) => {
+    setAssistOpenState(open)
+    try {
+      localStorage.setItem(ASSIST_OPEN_KEY, open ? "1" : "0")
+    } catch {
+      /* storage unavailable */
+    }
+  }
   const pendingFix = useRef<string | null>(null)
   // On md+ screens the schemas and the editor column fill the window; the
   // divider splits the column between the editor and the results.
@@ -215,9 +236,11 @@ export function SqlEditorPage() {
   }, [state])
 
   const active = state.tabs.find((t) => t.id === state.active) ?? state.tabs[0]
-  const cloudinReady = !!cloudin.data?.ready
-  const showPanel =
-    !!failure && failure.tabId === active.id && (cloudinReady || (canSetUp && cloudin.data?.enabled !== false))
+  const aiAssistReady = !!aiAssist.data?.ready
+  // offered to anyone when it's set up, and to admins so they can set it up
+  const assistAvailable = aiAssistReady || (canSetUp && aiAssist.data?.enabled !== false)
+  const tabFailure = failure && failure.tabId === active.id ? failure : null
+  const showPanel = assistAvailable && assistOpen
 
   const onQueryDone = (tabId: string, sql: string, error: unknown) => {
     if (error) {
@@ -293,7 +316,9 @@ export function SqlEditorPage() {
           "grid items-start gap-4 md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0",
           showPanel
             ? "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] xl:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)_minmax(20rem,26rem)]"
-            : "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)]",
+            : assistAvailable
+              ? "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)_auto]"
+              : "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)]",
         )}
       >
         <TableList
@@ -334,10 +359,29 @@ export function SqlEditorPage() {
             onQueryDone={(sql, error) => onQueryDone(active.id, sql, error)}
           />
         </div>
-        {showPanel && failure && (
-          <CloudinSqlPanel
-            failure={failure}
-            ready={cloudinReady}
+        {assistAvailable && !showPanel && (
+          // the AI Assist panel is hidden: a small tab on the right edge opens it
+          <button
+            type="button"
+            onClick={() => setAssistOpen(true)}
+            title="Show AI Assist"
+            aria-label="Show AI Assist"
+            className="bg-card text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring relative flex flex-col items-center gap-1 self-start rounded-md border px-1 py-1.5 shadow-xs transition-colors focus-visible:ring-2 focus-visible:outline-none max-md:fixed max-md:top-1/2 max-md:right-0 max-md:z-30 max-md:rounded-r-none md:ml-2"
+          >
+            <ChevronLeft className="size-3.5" />
+            <AiAssistIcon className="size-4" />
+            {tabFailure && (
+              <span
+                aria-label="a query failed"
+                className="bg-destructive ring-background absolute -top-1 -left-1 size-2.5 rounded-full ring-2"
+              />
+            )}
+          </button>
+        )}
+        {showPanel && (
+          <AiAssistSqlPanel
+            failure={tabFailure}
+            ready={aiAssistReady}
             canSetUp={canSetUp}
             fixRan={fixRan}
             onRun={(sql) => {
@@ -345,7 +389,8 @@ export function SqlEditorPage() {
               editorApi.current?.runSql(sql)
             }}
             onPaste={(sql) => editorApi.current?.setSql(sql)}
-            onClose={() => setFailure(null)}
+            onDismiss={() => setFailure(null)}
+            onClose={() => setAssistOpen(false)}
           />
         )}
       </div>

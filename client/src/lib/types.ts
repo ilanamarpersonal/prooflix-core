@@ -552,8 +552,8 @@ export interface SemanticModelFile {
   model: SemanticModel
 }
 
-/** Cloudin: Claude in Prooflix. The settings as the browser sees them (never the key itself). */
-export interface CloudinSettings {
+/** AI Assist: Claude in Prooflix. The settings as the browser sees them (never the key itself). */
+export interface AiAssistSettings {
   enabled: boolean
   model: string
   effort: "low" | "medium" | "high"
@@ -564,7 +564,7 @@ export interface CloudinSettings {
   models: { id: string; label: string }[]
 }
 
-export interface CloudinSettingsIn {
+export interface AiAssistSettingsIn {
   enabled: boolean
   model: string
   effort: string
@@ -572,14 +572,14 @@ export interface CloudinSettingsIn {
   remove_key?: boolean
 }
 
-export interface CloudinStatus {
+export interface AiAssistStatus {
   ready: boolean
   enabled: boolean
   model: string
 }
 
-/** Cloudin's answer about a failed SQL query */
-export interface CloudinSqlFix {
+/** AI Assist's answer about a failed SQL query */
+export interface AiAssistSqlFix {
   diagnosis: string
   explanation: string
   fixed_sql: string

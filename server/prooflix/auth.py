@@ -44,8 +44,8 @@ ROLES = ("admin", "user")
 
 # The tabs of the web client (client/src/lib/tabs.ts) a user can be given.
 TABS = ("pipelines", "ingestion", "sql", "catalog", "semantic", "workspace", "clickhouse", "alerts", "system")
-# Tabs only admins see: Users, and Cloudin (the Claude account settings).
-ADMIN_TABS = ("users", "cloudin")
+# Tabs only admins see: Users, and AI Assist (the Claude account settings).
+ADMIN_TABS = ("users", "ai-assist")
 
 # API path prefix -> the tabs that use it (any one of them gives access). Longest prefix wins.
 TAB_PATHS: dict[str, tuple[str, ...]] = {
@@ -62,11 +62,11 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/alerts": ("alerts",),
     "/api/semantic": ("semantic",),
     "/api/system": ("system",),
-    "/api/cloudin/status": TABS,  # whether Cloudin can answer: any signed-in user
-    "/api/cloudin/sql": ("sql",),  # ask Cloudin about a failed query
+    "/api/ai-assist/status": TABS,  # whether AI Assist can answer: any signed-in user
+    "/api/ai-assist/sql": ("sql",),  # ask AI Assist about a failed query
 }
 PUBLIC_PATHS = ("/api/health", "/api/auth/")
-ADMIN_PATHS = ("/api/users", "/api/cloudin/settings")  # Cloudin's Claude account: admins only
+ADMIN_PATHS = ("/api/users", "/api/ai-assist/settings")  # AI Assist's Claude account: admins only
 
 MAX_FAILURES = 5
 LOCK_SECONDS = 60

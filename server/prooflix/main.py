@@ -20,8 +20,8 @@ from . import __version__
 from .api import clickhouse as clickhouse_api, ingestion as ingestion_api, pipelines, runs, schedules, sql, system, workspace as workspace_api
 from .alerts import AlertsFileError
 from .api import alerts as alerts_api
-from .api import cloudin as cloudin_api
-from .cloudin import CloudinFileError, CloudinStore
+from .api import ai_assist as ai_assist_api
+from .ai_assist import AiAssistFileError, AiAssistStore
 from .api import semantic as semantic_api
 from .api import auth as auth_api
 from .api import workspaces as workspaces_api
@@ -59,14 +59,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.switch_lock = asyncio.Lock()
     install(app, build_services(settings))
     app.state.users = UserStore(settings.home)  # PROOFLIX_HOME/users.json
-    app.state.cloudin = CloudinStore(settings.home)  # PROOFLIX_HOME/cloudin.json
+    app.state.ai_assist = AiAssistStore(settings.home)  # PROOFLIX_HOME/ai_assist.json
 
     @app.exception_handler(AlertsFileError)
     async def alerts_file_error(request, exc):  # fail closed (principle 11)
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
-    @app.exception_handler(CloudinFileError)
-    async def cloudin_file_error(request, exc):  # fail closed (principle 11)
+    @app.exception_handler(AiAssistFileError)
+    async def ai_assist_file_error(request, exc):  # fail closed (principle 11)
         return JSONResponse({"detail": str(exc)}, status_code=500)
 
     @app.exception_handler(ConnectionsFileError)
@@ -113,7 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ingestion_api.router)
     app.include_router(alerts_api.router)
     app.include_router(semantic_api.router)
-    app.include_router(cloudin_api.router)
+    app.include_router(ai_assist_api.router)
     app.include_router(auth_api.router)
     app.include_router(auth_api.users_router)
 
