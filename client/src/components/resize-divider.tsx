@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 
 /**
  * A bar that resizes the panel before it: horizontal (default) resizes the panel
- * above, vertical the panel on the left. Drag it, or focus it and use the arrow keys;
+ * above, vertical the panel on the left (with `after`, the panel below or on the right). Drag it, or focus it and use the arrow keys;
  * double-click to reset. `value` is that panel's height (or width) in px; the parent
  * clamps and stores it.
  */
@@ -16,6 +16,7 @@ export function ResizeDivider({
   onReset,
   step = 24,
   orientation = "horizontal",
+  after = false,
   className,
 }: {
   value: number
@@ -28,12 +29,15 @@ export function ResizeDivider({
   step?: number
   /** vertical: a bar between side-by-side panels, resizing the left one */
   orientation?: "horizontal" | "vertical"
+  /** resize the panel after the bar (below it, or on its right) instead of the one before */
+  after?: boolean
   className?: string
 }) {
   const [dragging, setDragging] = useState(false)
   const start = useRef<{ at: number; size: number } | null>(null)
   const vertical = orientation === "vertical"
-  const pos = (e: { clientX: number; clientY: number }) => (vertical ? e.clientX : e.clientY)
+  const sign = after ? -1 : 1 // moving towards the panel after the bar makes it smaller
+  const pos = (e: { clientX: number; clientY: number }) => sign * (vertical ? e.clientX : e.clientY)
 
   // while dragging, the page doesn't select text and shows the resize cursor everywhere
   useEffect(() => {
@@ -84,7 +88,7 @@ export function ResizeDivider({
         const [less, more] = vertical ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"]
         if (e.key === less || e.key === more) {
           e.preventDefault()
-          onDone(value + (e.key === more ? step : -step))
+          onDone(value + sign * (e.key === more ? step : -step))
         }
       }}
     >

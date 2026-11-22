@@ -5,6 +5,7 @@ import { AlertCircle, ChevronRight, Loader2, SendHorizontal } from "lucide-react
 
 import { AiAssistIcon } from "@/components/ai-assist-icon"
 import { ErrorAlert } from "@/components/error-alert"
+import { ResizeDivider } from "@/components/resize-divider"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
@@ -154,33 +155,73 @@ export function AiAssistToggle() {
   )
 }
 
+// the panel's width, set with the divider on its left edge and remembered in the browser
+const WIDTH_KEY = "prooflix-ai-assist-width"
+const DEFAULT_WIDTH = 384 // 24rem
+const clampWidth = (w: number) =>
+  Math.round(Math.min(Math.max(w, 300), Math.max(300, Math.min(960, window.innerWidth - 360))))
+
+function loadWidth(): number {
+  try {
+    const w = Number(localStorage.getItem(WIDTH_KEY))
+    return w ? clampWidth(w) : DEFAULT_WIDTH
+  } catch {
+    return DEFAULT_WIDTH
+  }
+}
+
 /** The AI Assist panel itself, on the right of the page (placed next to the page in the app shell). */
 export function AiAssistDockPanel() {
   const { available, open, claims, setSlot, error, dismissError } = useAiAssistDock()
   const location = useLocation()
   const page = sectionFor(location.pathname)
+  const [width, setWidth] = useState(loadWidth)
+  const resize = (w: number, save = false) => {
+    const next = clampWidth(w)
+    setWidth(next)
+    if (save)
+      try {
+        localStorage.setItem(WIDTH_KEY, String(next))
+      } catch {
+        /* storage unavailable */
+      }
+  }
   if (!available) return null
   return (
     // kept mounted while hidden, so a conversation survives closing and opening the panel
     <aside
       aria-label="AI Assist panel"
+      style={{ ["--assist-w" as string]: `${width}px` }}
       className={cn(
-        // a column: the panel inside grows to the bottom of the screen
-        "bg-background z-30 flex shrink-0 flex-col overflow-y-auto border-l p-3",
+        "bg-background z-30 flex shrink-0",
         // a column beside the page on wide screens; over the page from the right on narrower ones
-        "max-xl:fixed max-xl:top-14 max-xl:right-0 max-xl:bottom-0 max-xl:w-full max-xl:shadow-xl sm:max-xl:w-[24rem]",
-        "xl:sticky xl:top-14 xl:h-[calc(100svh-3.5rem)] xl:w-[24rem]",
+        "max-xl:fixed max-xl:top-14 max-xl:right-0 max-xl:bottom-0 max-xl:w-full max-xl:shadow-xl sm:max-xl:w-(--assist-w)",
+        "xl:sticky xl:top-14 xl:h-[calc(100svh-3.5rem)] xl:w-(--assist-w)",
         !open && "hidden",
       )}
     >
-      <div ref={setSlot} className={cn("flex flex-1 flex-col", !claims && "hidden")} />
-      {!claims && (
-        <GeneralPanel
-          page={page ? `${page.label} (${location.pathname})` : location.pathname}
-          error={error}
-          onDismissError={dismissError}
-        />
-      )}
+      {/* drag the bar between the page and the panel to make the panel wider or narrower */}
+      <ResizeDivider
+        orientation="vertical"
+        after
+        className="-mr-2 max-sm:hidden"
+        label="Resize the AI Assist panel"
+        value={width}
+        onResize={(w) => resize(w)}
+        onDone={(w) => resize(w, true)}
+        onReset={() => resize(DEFAULT_WIDTH, true)}
+      />
+      {/* a column: the panel inside grows to the bottom of the screen */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-3 max-sm:border-l">
+        <div ref={setSlot} className={cn("flex flex-1 flex-col", !claims && "hidden")} />
+        {!claims && (
+          <GeneralPanel
+            page={page ? `${page.label} (${location.pathname})` : location.pathname}
+            error={error}
+            onDismissError={dismissError}
+          />
+        )}
+      </div>
     </aside>
   )
 }

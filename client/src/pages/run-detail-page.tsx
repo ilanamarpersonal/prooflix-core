@@ -8,6 +8,7 @@ import { ErrorAlert } from "@/components/error-alert"
 import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
+import { ResizeDivider } from "@/components/resize-divider"
 import { RunOutput } from "@/components/run-output"
 import { RunTreeView } from "@/components/run-tree-view"
 import { StatusBadge } from "@/components/status-badge"
@@ -20,6 +21,19 @@ import { useCancelRun, usePipeline, usePipelines, useRunTree, useStartRun } from
 import { TERMINAL_STATUSES, type GraphEdge, type GraphNode, type RunStatus } from "@/lib/types"
 import { formatDateTime, formatDuration } from "@/lib/utils"
 
+const SIDE_WIDTH_KEY = "prooflix-run-side-width"
+const DEFAULT_SIDE_WIDTH = 320 // 20rem
+const clampSide = (w: number) => Math.round(Math.min(Math.max(w, 240), 720))
+
+function loadSideWidth(): number {
+  try {
+    const w = Number(localStorage.getItem(SIDE_WIDTH_KEY))
+    return w ? clampSide(w) : DEFAULT_SIDE_WIDTH
+  } catch {
+    return DEFAULT_SIDE_WIDTH
+  }
+}
+
 export function RunDetailPage() {
   const { runId = "" } = useParams()
   const navigate = useNavigate()
@@ -27,6 +41,18 @@ export function RunDetailPage() {
   const cancel = useCancelRun()
   const rerun = useStartRun()
   const [picked, setPicked] = useState<string | null>(null)
+  // the side column's width (run hierarchy, parameters, outputs), set with the divider, remembered in the browser
+  const [sideWidth, setSideWidth] = useState(loadSideWidth)
+  const resizeSide = (w: number, save = false) => {
+    const next = clampSide(w)
+    setSideWidth(next)
+    if (save)
+      try {
+        localStorage.setItem(SIDE_WIDTH_KEY, String(next))
+      } catch {
+        /* storage unavailable */
+      }
+  }
   const pipelines = usePipelines()
   // the pipeline's definition, for each python task's source file
   const definition = usePipeline(run?.pipeline ?? "")
@@ -186,7 +212,10 @@ export function RunDetailPage() {
         {run.error && run.status !== "SUCCEEDED" && <ErrorAlert title="Run error" error={new Error(run.error)} />}
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div
+        style={{ ["--side-w" as string]: `${sideWidth}px` }}
+        className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_1.25rem_var(--side-w)] lg:gap-1"
+      >
         <div className="grid min-w-0 content-start gap-4">
           <p className="text-muted-foreground -mb-2 text-xs">
             {selected ? "Showing one task's printout." : "Every task's output is shown below as it runs."} Click a task
@@ -224,6 +253,16 @@ export function RunDetailPage() {
           )}
         </div>
 
+        <ResizeDivider
+          orientation="vertical"
+          after
+          className="hidden lg:flex"
+          label="Resize the run's side column"
+          value={sideWidth}
+          onResize={(w) => resizeSide(w)}
+          onDone={(w) => resizeSide(w, true)}
+          onReset={() => resizeSide(DEFAULT_SIDE_WIDTH, true)}
+        />
         <div className="grid min-w-0 content-start gap-4">
           <Card className="gap-3">
             <CardHeader>
