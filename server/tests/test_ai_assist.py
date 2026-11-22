@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from prooflix import ai_assist
-from prooflix.ai_assist import AiAssistStore, RunHelp, RunReply, SqlFix
+from prooflix.ai_assist import AiAssistStore, FileChange, RunFix, RunHelp, RunReply, SqlFix
 from prooflix.config import Settings
 from prooflix.main import create_app
 
@@ -302,3 +302,84 @@ def test_general_questions_from_any_screen(client, fake):
     assert c.post("/api/ai-assist/ask", json={"question": "Hi"}).status_code == 401
     c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
     assert c.post("/api/ai-assist/ask", json={"question": "Hi"}).status_code == 200
+
+
+
+E2E_YAML = """name: E2E
+tasks:
+  - key: fail_fast
+    type: python
+    entrypoint: checks.fail_fast:fail
+  - key: done
+    type: shell
+    command: echo done
+    depends_on: [fail_fast]
+"""
+FAIL_PY = "def fail():\n    raise RuntimeError('on purpose')\n"
+
+
+def _fix_workspace(c):
+    """E2E (a python task that raises, then a shell task) and a module holding a secret."""
+    from prooflix.runs import Run, RunStatus, TaskRun
+
+    ws = c.app.state.workspace.root
+    (ws / "pipelines" / "e2e.yaml").write_text(E2E_YAML)
+    (ws / "src" / "checks").mkdir(parents=True)
+    (ws / "src" / "checks" / "__init__.py").write_text("")
+    (ws / "src" / "checks" / "fail_fast.py").write_text(FAIL_PY)
+    (ws / "src" / "checks" / "secret.py").write_text("password = 'hunter2xyz'\n")
+    run = Run(pipeline="e2e", status=RunStatus.FAILED, error="Task 'fail_fast' failed")
+    run.tasks["fail_fast"] = TaskRun(key="fail_fast", type="python", status=RunStatus.FAILED,
+                                     error="RuntimeError: on purpose")
+    c.app.state.store.save(run)
+    return ws, run
+
+
+def test_a_failed_run_gets_proposed_fixes_to_review(client, fake):
+    c = client
+    ws, run = _fix_workspace(c)
+    url = f"/api/ai-assist/runs/{run.id}/fix"
+    assert c.post(url, json={}).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fixed_yaml = E2E_YAML.replace("""  - key: fail_fast
+    type: python
+    entrypoint: checks.fail_fast:fail
+""", "").replace("    depends_on: [fail_fast]\n", "")
+    fake.answer = RunFix(summary="Remove the task that fails on purpose.", changes=[
+        FileChange(path="pipelines/e2e.yaml", reason="drop fail_fast", content=fixed_yaml),
+        FileChange(path="src/checks/fail_fast.py", reason="unchanged", content=FAIL_PY),  # no change: dropped
+        FileChange(path="../outside.txt", reason="nope", content="x"),  # not a file sent: dropped
+    ])
+    r = c.post(url, json={"explanation": {"diagnosis": "fail_fast raised on purpose", "steps": ["Remove it"]}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["summary"] == "Remove the task that fails on purpose."
+    assert [ch["path"] for ch in body["changes"]] == ["pipelines/e2e.yaml"]
+    change = body["changes"][0]
+    assert change["before"] == E2E_YAML and change["after"] == fixed_yaml and change["problems"] == []
+    assert change["modified"] == (ws / "pipelines" / "e2e.yaml").stat().st_mtime
+    assert (ws / "pipelines" / "e2e.yaml").read_text() == E2E_YAML  # nothing saved
+    sent = fake.calls[-1]["messages"][0]["content"]
+    assert '<file path="pipelines/e2e.yaml">' in sent and '<file path="src/checks/fail_fast.py">' in sent
+    assert "fail_fast raised on purpose" in sent and "hunter2xyz" not in sent  # secret file never sent
+
+    # a pipeline change that doesn't validate comes back with its problems
+    fake.answer = RunFix(summary="x", changes=[
+        FileChange(path="pipelines/e2e.yaml", reason="broken", content="name: E2E\ntasks: []\n")])
+    assert c.post(url, json={}).json()["changes"][0]["problems"]
+
+    # the user applies a change with the Workspace tab's save (its conflict check included)
+    save = {"path": "pipelines/e2e.yaml", "content": fixed_yaml, "modified": change["modified"]}
+    assert c.put("/api/workspace/file", json=save).status_code == 200
+    assert (ws / "pipelines" / "e2e.yaml").read_text() == fixed_yaml
+
+    # only users with the Workspace tab may ask for a fix
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["pipelines"]})
+    c.post("/api/users", json={"username": "wes", "password": GOOD, "tabs": ["pipelines", "workspace"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post(url, json={}).status_code == 403
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "wes", "password": GOOD})
+    assert c.post(url, json={}).status_code == 200
+    assert c.post("/api/ai-assist/runs/nope/fix", json={}).status_code == 404

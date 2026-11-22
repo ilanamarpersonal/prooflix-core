@@ -622,6 +622,25 @@ export interface AiAssistRunTurn {
   answer: string
 }
 
+/** A change AI Assist proposes to a workspace file to fix a failed run; saved only when the user applies it. */
+export interface AiAssistFileChange {
+  /** relative to the workspace */
+  path: string
+  reason: string
+  before: string
+  after: string
+  /** the file's version when proposed, for the save's conflict check */
+  modified: number
+  /** for a pipeline's YAML: what the validator found wrong with the change */
+  problems: string[]
+}
+
+export interface AiAssistRunFix {
+  summary: string
+  changes: AiAssistFileChange[]
+  model: string
+}
+
 export interface AiAssistRunReply {
   answer: string
   model: string

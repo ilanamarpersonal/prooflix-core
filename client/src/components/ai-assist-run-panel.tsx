@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router"
-import { ChevronRight, Loader2, RotateCcw, SendHorizontal } from "lucide-react"
+import { Check, ChevronRight, FileCode2, Loader2, RotateCcw, SendHorizontal, Wrench } from "lucide-react"
 
 import { AiAssistIcon } from "@/components/ai-assist-icon"
 import { ErrorAlert } from "@/components/error-alert"
+import { FileDiff } from "@/components/file-diff"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { useAiAssistRunAsk, useAiAssistRunHelp } from "@/lib/api"
-import type { AiAssistRunTurn } from "@/lib/types"
+import {
+  useAiAssistRunAsk,
+  useAiAssistRunFix,
+  useAiAssistRunHelp,
+  useAuthStatus,
+  useSaveWorkspaceFile,
+} from "@/lib/api"
+import type { AiAssistRunFix, AiAssistRunTurn } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
@@ -41,6 +48,33 @@ export function AiAssistRunPanel({
     help.mutate(runId) // questions already asked stay
   }
   const answer = help.data
+  // "Let AI Assist fix it": changes to the run's workspace files, saved only when the user applies them
+  const auth = useAuthStatus().data
+  const canFix = !auth?.enabled || auth.user?.role === "admin" || !!auth.user?.visible_tabs.includes("workspace")
+  const fix = useAiAssistRunFix()
+  const save = useSaveWorkspaceFile()
+  const [applied, setApplied] = useState<string[] | null>(null)
+  const [applyError, setApplyError] = useState<unknown>(null)
+  const proposeFix = () => {
+    setApplied(null)
+    setApplyError(null)
+    fix.mutate({ runId, explanation: answer ?? null })
+  }
+  const applyFix = async () => {
+    if (!fix.data) return
+    setApplyError(null)
+    const done: string[] = []
+    try {
+      for (const c of fix.data.changes) {
+        await save.mutateAsync({ path: c.path, content: c.after, modified: c.modified })
+        done.push(c.path)
+      }
+      setApplied(done)
+    } catch (e) {
+      setApplied(done.length ? done : null)
+      setApplyError(e)
+    }
+  }
   const followUp = useAiAssistRunAsk()
   const [question, setQuestion] = useState("")
   const end = useRef<HTMLDivElement>(null)
@@ -165,6 +199,60 @@ export function AiAssistRunPanel({
             <p className="text-muted-foreground text-xs">
               Suggested by {answer.model}. Check the steps before you act on them, then use Run again.
             </p>
+
+            {canFix && (
+              <section className="grid gap-3 border-t pt-3" aria-label="Fix with AI Assist">
+                {!fix.data && !fix.isPending && (
+                  <>
+                    <p>Do you want AI Assist to fix it?</p>
+                    <p className="text-muted-foreground text-xs">
+                      It proposes changes to this run's pipeline files (their YAML and the Python their tasks call) and
+                      sends those files to Claude. You see every change first; nothing is saved until you apply it.
+                    </p>
+                    <Button size="sm" className="justify-self-start" onClick={proposeFix}>
+                      <Wrench /> Yes, propose a fix
+                    </Button>
+                  </>
+                )}
+                {fix.isPending && (
+                  <p className="text-muted-foreground flex items-center gap-2">
+                    <Loader2 className="size-4 animate-spin" /> AI Assist is preparing a fix…
+                  </p>
+                )}
+                {fix.error && (
+                  <div className="grid gap-2">
+                    <ErrorAlert title="AI Assist couldn't propose a fix" error={fix.error} assist={false} />
+                    <Button size="sm" variant="outline" className="justify-self-start" onClick={proposeFix}>
+                      <RotateCcw /> Try again
+                    </Button>
+                  </div>
+                )}
+                {fix.data && <FixProposal fix={fix.data} applied={applied} />}
+                {fix.data && fix.data.changes.length > 0 && !applied?.length && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => void applyFix()}
+                      disabled={save.isPending || fix.data.changes.some((c) => c.problems.length > 0)}
+                    >
+                      {save.isPending ? <Loader2 className="animate-spin" /> : <Check />} Apply changes
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => fix.reset()} disabled={save.isPending}>
+                      Discard
+                    </Button>
+                  </div>
+                )}
+                {applyError != null && (
+                  <ErrorAlert title="Could not save the changes" error={applyError} assist={false} />
+                )}
+                {applied && applied.length > 0 && (
+                  <p className="flex items-start gap-2 text-emerald-700 dark:text-emerald-400">
+                    <Check className="mt-0.5 size-4 shrink-0" />
+                    Saved {applied.length} file{applied.length === 1 ? "" : "s"}. Use Run again to check the fix.
+                  </p>
+                )}
+              </section>
+            )}
           </div>
         ) : null}
 
@@ -231,5 +319,40 @@ export function AiAssistRunPanel({
         )}
       </div>
     </Card>
+  )
+}
+
+/** The changes AI Assist proposes: its summary, then each file's reason, problems and diff. */
+function FixProposal({ fix, applied }: { fix: AiAssistRunFix; applied: string[] | null }) {
+  return (
+    <div className="grid gap-3">
+      <p className="whitespace-pre-wrap">{fix.summary}</p>
+      {fix.changes.length === 0 ? (
+        <p className="text-muted-foreground text-xs">No file change can fix this; follow the steps above.</p>
+      ) : (
+        fix.changes.map((c) => (
+          <div key={c.path} className="grid gap-1.5">
+            <p className="flex items-center gap-1.5 font-mono text-xs font-medium">
+              <FileCode2 className="text-muted-foreground size-3.5 shrink-0" />
+              <span className="truncate">{c.path}</span>
+              {applied?.includes(c.path) && <Check className="size-3.5 shrink-0 text-emerald-600" />}
+            </p>
+            {c.reason && <p className="text-muted-foreground text-xs">{c.reason}</p>}
+            {c.problems.length > 0 && (
+              <ul className="text-destructive list-disc pl-4 text-xs">
+                {c.problems.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            )}
+            <FileDiff before={c.before} after={c.after} />
+          </div>
+        ))
+      )}
+      {fix.changes.some((c) => c.problems.length > 0) && (
+        <p className="text-destructive text-xs">A change doesn't pass the pipeline checks, so it can't be applied.</p>
+      )}
+      <p className="text-muted-foreground text-xs">Proposed by {fix.model}. Read the changes before you apply them.</p>
+    </div>
   )
 }

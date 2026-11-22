@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from .. import ai_assist
 from ..ai_assist import AiAssistError, AiAssistStore
 from ..runs import RunStore
-from .deps import CatalogPaths, get_catalog_paths, get_store
+from ..pipelines import Workspace
+from .deps import CatalogPaths, get_catalog_paths, get_store, get_workspace
 from .sql import _describe, _described_tables
 
 router = APIRouter(prefix="/api/ai-assist", tags=["ai-assist"])
@@ -140,6 +141,56 @@ def ask_about_run(
         )
     except AiAssistError as e:
         raise _fail(e) from None
+
+
+class RunFixIn(BaseModel):
+    explanation: RunExplanationIn | None = None  # what AI Assist answered first, if asked
+
+
+def _require_workspace_tab(request: Request) -> None:
+    """A fix changes workspace code: with users on, only users with the Workspace tab (or admins)."""
+    if not request.app.state.settings.auth:
+        return
+    user = getattr(request.state, "user", None)
+    if user is None or not (user.role == "admin" or "workspace" in user.tabs):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Fixing a run changes workspace files; it needs the Workspace tab, ask an admin"
+        )
+
+
+@router.post("/runs/{run_id}/fix")
+def propose_run_fix(
+    run_id: str,
+    body: RunFixIn,
+    request: Request,
+    store: RunStore = Depends(get_store),
+    ws: Workspace = Depends(get_workspace),
+) -> dict:
+    """Changes to the workspace files behind a failed run that would fix it, for the user to
+    review: ``{summary, changes: [{path, reason, before, after, modified, problems}], model}``.
+    Sends the run (masked), its pipelines' YAML and the Python files their tasks call (files
+    that look like they hold secrets are left out). Nothing is saved here: the user applies a
+    change with ``PUT /api/workspace/file`` (``modified`` refuses it if the file changed since).
+    Needs the Workspace tab when users are on."""
+    _require_workspace_tab(request)
+    tree = store.tree(run_id)
+    if tree is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Run '{run_id}' not found")
+    files = ai_assist.fix_files(ws, tree)
+    try:
+        result = ai_assist.propose_run_fix(
+            _store(request).get(), tree, body.explanation.model_dump() if body.explanation else None, files
+        )
+    except AiAssistError as e:
+        raise _fail(e) from None
+    # each change's file version (for the save's conflict check) and, for a pipeline, the validator's verdict
+    ids = {(ws.path_for(pid) or ws.root).resolve(): pid for pid in ws.list_ids()}
+    for change in result["changes"]:
+        target = (ws.root / change["path"]).resolve()
+        change["modified"] = target.stat().st_mtime
+        pid = ids.get(target)
+        change["problems"] = ws.validate_source(pid, change["after"]) if pid else []
+    return result
 
 
 @router.post("/runs/{run_id}/explain")

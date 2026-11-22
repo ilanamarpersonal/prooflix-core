@@ -8,6 +8,7 @@ import {
   type AlertChannel,
   type AiAssistSettings,
   type AiAssistSettingsIn,
+  type AiAssistRunFix,
   type AiAssistRunHelp,
   type AiAssistRunReply,
   type AiAssistRunTurn,
@@ -201,6 +202,11 @@ export const api = {
     request<AiAssistRunReply>("/ai-assist/ask", {
       method: "POST",
       body: JSON.stringify({ question, page, error, turns }),
+    }),
+  aiAssistRunFix: (runId: string, explanation: AiAssistRunHelp | null) =>
+    request<AiAssistRunFix>(`/ai-assist/runs/${encodeURIComponent(runId)}/fix`, {
+      method: "POST",
+      body: JSON.stringify({ explanation }),
     }),
   aiAssistRunAsk: (runId: string, question: string, explanation: AiAssistRunHelp | null, turns: AiAssistRunTurn[]) =>
     request<AiAssistRunReply>(`/ai-assist/runs/${encodeURIComponent(runId)}/ask`, {
@@ -503,6 +509,13 @@ export const useAiAssistAsk = () =>
       error: string
       turns: AiAssistRunTurn[]
     }) => api.aiAssistAsk(question, page, error, turns),
+  })
+
+/** Changes to the workspace files behind a failed run that would fix it, for the user to review (nothing saved). */
+export const useAiAssistRunFix = () =>
+  useMutation({
+    mutationFn: ({ runId, explanation }: { runId: string; explanation: AiAssistRunHelp | null }) =>
+      api.aiAssistRunFix(runId, explanation),
   })
 
 /** A follow-up question about a failed run, with its explanation and the earlier questions and answers. */

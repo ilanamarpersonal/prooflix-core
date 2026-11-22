@@ -531,3 +531,114 @@ def ask_general(s: Settings, page: str, error: str, turns: list[dict], question:
     response = _ask(client, s, GENERAL_SYSTEM, prompt, RunReply, history=messages)
     reply: RunReply = response.parsed_output
     return {"answer": reply.answer.strip(), "model": response.model}
+
+
+# ------------------------------------------------------------------ proposed fixes for a failed run
+class FileChange(BaseModel):
+    path: str = Field(description="One of the given files' paths, exactly as given.")
+    reason: str = Field(description="Why this file changes, in one short sentence.")
+    content: str = Field(description="The complete new content of the file, not a diff or an excerpt.")
+
+
+class RunFix(BaseModel):
+    """Claude's proposed changes to the workspace files for a failed run."""
+
+    summary: str = Field(description="What the fix does, or why no file change can fix it, in one to three sentences.")
+    changes: list[FileChange] = Field(description="Files to change; empty when the fix is not in these files.")
+
+
+RUN_FIX_SYSTEM = (
+    RUN_SYSTEM
+    + """
+
+Now the user asked you to fix it. You also get the workspace files behind the run: \
+the pipelines' YAML and the Python files their tasks call. Propose the smallest \
+change to these files that fixes the root cause:
+- Change only the files you are given, by their exact path; give each changed file's \
+complete new content, keeping everything else (comments, formatting) as it is.
+- Don't change behaviour you weren't asked about, don't add features, don't weaken \
+checks to hide an error unless the error is the check's purpose and the user clearly \
+wants it gone.
+- When the cause is outside these files (a service that is down, a setting, missing \
+data), change nothing and say in the summary what the user has to do.
+The user reviews every change before it is saved; nothing runs until they run it."""
+)
+
+MAX_FIX_FILE = 100_000  # characters per file sent for a fix
+MAX_FIX_FILES = 20
+
+
+def fix_files(ws, tree: dict) -> dict[str, str]:
+    """The workspace files behind a run: each pipeline's YAML in the run tree and the
+    Python files its python tasks call, as {path relative to the workspace: content}.
+    Files that look like they hold secrets, are not text or are too big are left out."""
+    pipelines: list[str] = []
+
+    def walk(node: dict) -> None:
+        if node and node.get("pipeline") and node["pipeline"] not in pipelines:
+            pipelines.append(node["pipeline"])
+        for child in node.get("children", []) or []:
+            if child:
+                walk(child)
+
+    walk(tree)
+    paths: list = []
+    for pid in pipelines:
+        path = ws.path_for(pid)
+        if path is None:
+            continue
+        paths.append(path)
+        try:
+            spec = ws.load(pid).spec
+        except Exception:  # an invalid pipeline still sends its YAML
+            spec = None
+        for task in getattr(spec, "tasks", []) or []:
+            if getattr(task, "type", None) != "python":
+                continue
+            module = task.entrypoint.split(":", 1)[0].replace(".", "/")
+            src = ws.src_dir_for(pid)
+            for candidate in (src / f"{module}.py", src / module / "__init__.py"):
+                if candidate.is_file():
+                    paths.append(candidate)
+                    break
+    out: dict[str, str] = {}
+    root = ws.root.resolve()
+    for path in paths:
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root) or len(out) >= MAX_FIX_FILES:
+            continue
+        rel = resolved.relative_to(root).as_posix()
+        if rel in out:
+            continue
+        try:
+            text = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        # never send a file with what looks like a secret: masking it would break the file when saved back
+        if len(text) > MAX_FIX_FILE or "\0" in text or _redact(text) != text:
+            continue
+        out[rel] = text
+    return out
+
+
+def propose_run_fix(s: Settings, tree: dict, explanation: dict | None, files: dict[str, str]) -> dict:
+    """Ask Claude for changes to the run's workspace files that fix it. Returns the
+    changes for the user to review; nothing is saved or run here."""
+    text = _failed_run_text(tree)
+    if not files:
+        raise AiAssistError("There are no workspace files behind this run that AI Assist can change", 422)
+    parts = [f"<run>\n{text}\n</run>"]
+    if explanation:
+        parts.append(f"<explanation>\n{_explanation_text(explanation)}\n</explanation>")
+    for path, content in files.items():
+        parts.append(f'<file path="{path}">\n{content}\n</file>')
+    client = _client(s)
+    response = _ask(client, s, RUN_FIX_SYSTEM, "\n\n".join(parts), RunFix)
+    fix: RunFix = response.parsed_output
+    changes = []
+    for c in fix.changes:
+        if c.path not in files or c.content == files[c.path] or any(x["path"] == c.path for x in changes):
+            continue  # only the files sent, once each, and only real changes
+        content = c.content if c.content.endswith("\n") or not files[c.path].endswith("\n") else c.content + "\n"
+        changes.append({"path": c.path, "reason": c.reason.strip(), "before": files[c.path], "after": content})
+    return {"summary": fix.summary.strip(), "changes": changes, "model": response.model}
