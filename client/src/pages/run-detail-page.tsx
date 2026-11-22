@@ -184,7 +184,7 @@ export function RunDetailPage() {
         {run.error && run.status !== "SUCCEEDED" && <ErrorAlert title="Run error" error={new Error(run.error)} />}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="grid min-w-0 content-start gap-4">
           <p className="text-muted-foreground -mb-2 text-xs">
             {selected ? "Showing one task's printout." : "Every task's output is shown below as it runs."} Click a task

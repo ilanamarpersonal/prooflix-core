@@ -3,7 +3,6 @@ import { useNavigate } from "react-router"
 import { Loader2, Play } from "lucide-react"
 
 import { ErrorAlert } from "@/components/error-alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -106,80 +105,76 @@ export function RunPipelineForm({
     <div className="grid gap-3">
       <div className="grid gap-0.5">
         <h3 className="text-sm font-semibold">Run with parameters</h3>
-        <p className="text-muted-foreground text-xs">
-          {keys.length
-            ? "Declared in the pipeline's YAML. The server checks each value before the run starts."
-            : "This pipeline declares no parameters."}
-        </p>
+        {!keys.length && <p className="text-muted-foreground text-xs">This pipeline declares no parameters.</p>}
       </div>
       <form onSubmit={submit} className="grid gap-3" noValidate>
-        {keys.map((k) => {
-          const p = parameters[k]
-          const id = `param-${k}`
-          const error = touched ? problems[k] : null
-          const hint = p.description || HINT[p.type]
-          return (
-            <div key={k} className="grid gap-1.5">
-              <Label htmlFor={id} className="flex flex-wrap items-center gap-2">
-                <span className="font-mono">{k}</span>
-                {p.required && <span className="text-status-failed">*</span>}
-                {p.type !== "any" && (
-                  <Badge variant="outline" className="font-normal">
-                    {p.type}
-                  </Badge>
-                )}
-              </Label>
-              {p.type === "boolean" ? (
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    id={id}
-                    type="checkbox"
-                    className="accent-primary size-4"
-                    checked={values[k] === "true"}
-                    onChange={(e) => set(k, e.target.checked ? "true" : "false")}
-                  />
-                  {values[k] === "true" ? "true" : "false"}
-                </label>
-              ) : p.choices ? (
-                <select
-                  id={id}
-                  className={selectClass}
-                  value={values[k] ?? ""}
-                  onChange={(e) => set(k, e.target.value)}
-                >
-                  {!p.required && <option value="">(none)</option>}
-                  {p.choices.map((c) => (
-                    <option key={toText(c)} value={toText(c)}>
-                      {toText(c)}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <Input
-                  id={id}
-                  type={INPUT_TYPE[p.type] ?? "text"}
-                  value={values[k] ?? ""}
-                  placeholder={p.default == null ? (p.required ? "required" : "optional") : toText(p.default)}
-                  onChange={(e) => set(k, e.target.value)}
-                  aria-invalid={!!error}
-                  aria-describedby={hint ? `${id}-hint` : undefined}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="font-mono"
-                />
-              )}
-              {error ? (
-                <p className="text-status-failed text-xs">{error}</p>
-              ) : (
-                hint && (
-                  <p id={`${id}-hint`} className="text-muted-foreground text-xs">
-                    {hint}
-                  </p>
-                )
-              )}
-            </div>
-          )
-        })}
+        {/* one row per parameter: its name on the left, the field and its hint on the right; the name
+            column is as wide as the longest name, up to 9rem, so the fields line up */}
+        <div className="grid grid-cols-[fit-content(9rem)_minmax(0,1fr)] items-start gap-x-3 gap-y-3">
+          {keys.map((k) => {
+            const p = parameters[k]
+            const id = `param-${k}`
+            const error = touched ? problems[k] : null
+            const hint = p.description || HINT[p.type]
+            return (
+              <div key={k} className="contents">
+                <Label htmlFor={id} className="min-w-0 items-baseline gap-1 pt-2 break-all">
+                  <span className="font-mono">{k}</span>
+                </Label>
+                <div className="grid min-w-0 gap-1">
+                  {p.type === "boolean" ? (
+                    <label className="flex h-9 items-center gap-2 text-sm">
+                      <input
+                        id={id}
+                        type="checkbox"
+                        className="accent-primary size-4"
+                        checked={values[k] === "true"}
+                        onChange={(e) => set(k, e.target.checked ? "true" : "false")}
+                      />
+                      {values[k] === "true" ? "true" : "false"}
+                    </label>
+                  ) : p.choices ? (
+                    <select
+                      id={id}
+                      className={selectClass}
+                      value={values[k] ?? ""}
+                      onChange={(e) => set(k, e.target.value)}
+                    >
+                      {!p.required && <option value="">(none)</option>}
+                      {p.choices.map((c) => (
+                        <option key={toText(c)} value={toText(c)}>
+                          {toText(c)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      id={id}
+                      type={INPUT_TYPE[p.type] ?? "text"}
+                      value={values[k] ?? ""}
+                      placeholder={p.default == null ? (p.required ? "required" : "optional") : toText(p.default)}
+                      onChange={(e) => set(k, e.target.value)}
+                      aria-invalid={!!error}
+                      aria-describedby={hint ? `${id}-hint` : undefined}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="font-mono"
+                    />
+                  )}
+                  {error ? (
+                    <p className="text-status-failed text-xs">{error}</p>
+                  ) : (
+                    hint && (
+                      <p id={`${id}-hint`} className="text-muted-foreground text-xs">
+                        {hint}
+                      </p>
+                    )
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
         {start.error && <ErrorAlert title="Could not start the run" error={start.error} />}
         <div className="flex justify-end gap-2">
           {onDone && (

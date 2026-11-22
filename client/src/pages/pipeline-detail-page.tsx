@@ -162,7 +162,7 @@ export function PipelineDetailPage() {
           <TabsTrigger value="runs">Runs</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="graph" className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <TabsContent value="graph" className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <div className="grid min-w-0 content-start gap-4">
             {pipeline.graph.nodes.length ? (
               <PipelineGraph
@@ -212,14 +212,14 @@ export function PipelineDetailPage() {
               </Card>
             )}
           </div>
-          <div className="grid content-start gap-4">
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4">
             <Card className="gap-3">
               <CardHeader>
                 <CardTitle className="text-sm">Parameters</CardTitle>
               </CardHeader>
               <CardContent>
                 {Object.keys(pipeline.parameter_specs).length ? (
-                  <dl className="grid gap-2 text-sm">
+                  <dl className="grid grid-cols-[minmax(0,1fr)] gap-2 text-sm">
                     {Object.entries(pipeline.parameter_specs).map(([k, p]) => (
                       <div key={k} className="flex justify-between gap-2" title={p.description ?? undefined}>
                         <dt className="flex min-w-0 items-center gap-1.5 font-mono">
@@ -227,7 +227,9 @@ export function PipelineDetailPage() {
                           {p.required && <span className="text-status-failed">*</span>}
                           {p.type !== "any" && <span className="text-muted-foreground text-xs">{p.type}</span>}
                         </dt>
-                        <dd className="text-muted-foreground truncate font-mono">{JSON.stringify(p.default)}</dd>
+                        <dd className="text-muted-foreground min-w-0 truncate font-mono">
+                          {JSON.stringify(p.default)}
+                        </dd>
                       </div>
                     ))}
                   </dl>

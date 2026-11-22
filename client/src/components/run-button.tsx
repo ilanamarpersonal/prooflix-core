@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router"
 import { ChevronDown, Loader2, Play, SlidersHorizontal } from "lucide-react"
 
@@ -8,7 +9,7 @@ import { useStartRun } from "@/lib/api"
 import type { ParameterSpec } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const PANEL_WIDTH = 320
+const PANEL_WIDTH = 420
 
 /** Closes a floating box on a click outside it, Escape, or the page scrolling (not scrolling inside it). */
 function useDismiss(box: React.RefObject<HTMLElement | null>, onClose: () => void, ignore?: HTMLElement | null) {
@@ -141,7 +142,8 @@ function RunMenu({
 }) {
   const box = useRef<HTMLDivElement>(null)
   useDismiss(box, onClose, ignore)
-  return (
+  // in <body>, so a table's scroll box or a transformed parent never clips or moves it
+  return createPortal(
     <div
       ref={box}
       role="menu"
@@ -158,7 +160,8 @@ function RunMenu({
         <SlidersHorizontal className="text-muted-foreground size-4" />
         Run with parameters…
       </button>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -177,7 +180,7 @@ function ParametersPanel({
   useDismiss(box, onClose, ignore)
   const width = Math.min(PANEL_WIDTH, window.innerWidth - 16)
   const left = Math.min(Math.max(8, anchor.right - width), window.innerWidth - width - 8)
-  return (
+  return createPortal(
     <div
       ref={box}
       role="dialog"
@@ -186,6 +189,7 @@ function ParametersPanel({
       style={{ left, top: anchor.bottom + 4, width, maxHeight: `calc(100vh - ${anchor.bottom + 16}px)` }}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   )
 }
