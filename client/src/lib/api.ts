@@ -9,6 +9,8 @@ import {
   type AiAssistSettings,
   type AiAssistSettingsIn,
   type AiAssistRunHelp,
+  type AiAssistRunReply,
+  type AiAssistRunTurn,
   type AiAssistSqlFix,
   type AiAssistStatus,
   type AlertChannelKind,
@@ -195,6 +197,11 @@ export const api = {
     request<{ ok: boolean; model: string; display_name: string }>("/ai-assist/settings/test", { method: "POST" }),
   aiAssistRunHelp: (runId: string) =>
     request<AiAssistRunHelp>(`/ai-assist/runs/${encodeURIComponent(runId)}/explain`, { method: "POST" }),
+  aiAssistRunAsk: (runId: string, question: string, explanation: AiAssistRunHelp | null, turns: AiAssistRunTurn[]) =>
+    request<AiAssistRunReply>(`/ai-assist/runs/${encodeURIComponent(runId)}/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question, explanation, turns }),
+    }),
   aiAssistSqlFix: (sql: string, error: string) =>
     request<AiAssistSqlFix>("/ai-assist/sql/fix", { method: "POST", body: JSON.stringify({ sql, error }) }),
   alertChannels: () => request<AlertChannel[]>("/alerts/channels"),
@@ -477,6 +484,21 @@ export function useSaveAiAssistSettings() {
 }
 export const useTestAiAssist = () => useMutation({ mutationFn: api.testAiAssist })
 export const useAiAssistRunHelp = () => useMutation({ mutationFn: api.aiAssistRunHelp })
+/** A follow-up question about a failed run, with its explanation and the earlier questions and answers. */
+export const useAiAssistRunAsk = () =>
+  useMutation({
+    mutationFn: ({
+      runId,
+      question,
+      explanation,
+      turns,
+    }: {
+      runId: string
+      question: string
+      explanation: AiAssistRunHelp | null
+      turns: AiAssistRunTurn[]
+    }) => api.aiAssistRunAsk(runId, question, explanation, turns),
+  })
 export const useAiAssistSqlFix = () =>
   useMutation({ mutationFn: ({ sql, error }: { sql: string; error: string }) => api.aiAssistSqlFix(sql, error) })
 

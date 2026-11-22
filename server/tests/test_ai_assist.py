@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from prooflix import ai_assist
-from prooflix.ai_assist import AiAssistStore, RunHelp, SqlFix
+from prooflix.ai_assist import AiAssistStore, RunHelp, RunReply, SqlFix
 from prooflix.config import Settings
 from prooflix.main import create_app
 
@@ -219,3 +219,53 @@ def test_a_failed_run_can_be_explained(client, fake):
     c.post("/api/auth/logout")
     c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
     assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 403
+
+
+
+def test_follow_up_questions_about_a_failed_run(client, fake):
+    c = client
+    root, ok = _failed_run(c.app.state.store)
+    explanation = {"diagnosis": "Unity Catalog is down.", "failed_task": "ingest (bronze)", "steps": ["Start it"]}
+    body = {"question": "How do I start it?", "explanation": explanation, "turns": []}
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = RunReply(answer="  Run docker start prooflix-uc.  ")
+
+    r = c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body)
+    assert r.status_code == 200 and r.json()["answer"] == "Run docker start prooflix-uc."
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert "Unity Catalog is not reachable" in msgs[0]["content"]  # the run is sent again
+    assert "hunter2xyz" not in msgs[0]["content"]  # still masked
+    assert "Unity Catalog is down." in msgs[1]["content"] and "1. Start it" in msgs[1]["content"]
+    assert msgs[2]["content"] == "How do I start it?"
+
+    # earlier turns go before the new question; secrets typed in a question are masked too
+    body = {"question": "And the token=abc999?", "explanation": explanation,
+            "turns": [{"question": "How do I start it?", "answer": "Run docker start prooflix-uc."}]}
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 200
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant", "user"]
+    assert msgs[3]["content"] == "Run docker start prooflix-uc." and "abc999" not in msgs[4]["content"]
+
+    # a question before any explanation: the run and the question are one user message
+    r = c.post(f"/api/ai-assist/runs/{root.id}/ask", json={"question": "Why did it fail?"})
+    assert r.status_code == 200
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user"]
+    assert msgs[0]["content"].startswith("<run>") and msgs[0]["content"].endswith("Why did it fail?")
+
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body | {"question": "  "}).status_code == 422
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body | {"question": "x" * 2001}).status_code == 413
+    assert c.post(f"/api/ai-assist/runs/{ok.id}/ask", json=body).status_code == 409  # only failed runs
+    assert c.post("/api/ai-assist/runs/nope/ask", json=body).status_code == 404
+
+    # Pipelines users may ask; others may not
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["pipelines"]})
+    c.post("/api/users", json={"username": "sam", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 200
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 403

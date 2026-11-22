@@ -616,6 +616,17 @@ export interface AiAssistStatus {
 }
 
 /** AI Assist's answer about a failed pipeline run */
+/** A follow-up question about a failed run and AI Assist's answer. */
+export interface AiAssistRunTurn {
+  question: string
+  answer: string
+}
+
+export interface AiAssistRunReply {
+  answer: string
+  model: string
+}
+
 export interface AiAssistRunHelp {
   diagnosis: string
   /** where the failure started, "task (pipeline)"; empty when unclear */

@@ -262,8 +262,17 @@ def check_select(sql: str) -> str | None:
     return None
 
 
-def _ask(client: anthropic.Anthropic, s: Settings, system: str, prompt: str, output_format: type[BaseModel]):
-    """One request to Claude whose answer must match ``output_format``; errors become AiAssistError."""
+def _ask(
+    client: anthropic.Anthropic,
+    s: Settings,
+    system: str,
+    prompt: str,
+    output_format: type[BaseModel],
+    history: list[dict] | None = None,
+):
+    """One request to Claude whose answer must match ``output_format``; errors become AiAssistError.
+    ``history`` holds the earlier turns of a conversation (alternating user and assistant
+    messages, starting with the user), sent before ``prompt``."""
     extra: dict = {}
     if s.model in FALLBACK_MODELS:
         extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"}
@@ -273,7 +282,7 @@ def _ask(client: anthropic.Anthropic, s: Settings, system: str, prompt: str, out
             max_tokens=16000,
             system=system,
             output_config={"effort": s.effort},
-            messages=[{"role": "user", "content": prompt}],
+            messages=[*(history or []), {"role": "user", "content": prompt}],
             output_format=output_format,
             **extra,
         )
@@ -379,13 +388,19 @@ def _run_text(node: dict, indent: str = "") -> list[str]:
     return lines
 
 
-def explain_run(s: Settings, tree: dict) -> dict:
-    """Ask Claude why the run failed and what to do about it. Nothing is changed or re-run here."""
+def _failed_run_text(tree: dict) -> str:
+    """The failed run as text for Claude, secrets masked and cut to MAX_TEXT; 409 if it didn't fail."""
     if tree.get("status") != "FAILED":
         raise AiAssistError("Only a failed run can be looked at", 409)
     text = _redact("\n".join(_run_text(tree)))
     if len(text) > MAX_TEXT:
         text = text[:MAX_TEXT] + "\n(cut off: the run is too long to send in full)"
+    return text
+
+
+def explain_run(s: Settings, tree: dict) -> dict:
+    """Ask Claude why the run failed and what to do about it. Nothing is changed or re-run here."""
+    text = _failed_run_text(tree)
     client = _client(s)
     response = _ask(client, s, RUN_SYSTEM, f"<run>\n{text}\n</run>", RunHelp)
     help_: RunHelp = response.parsed_output
@@ -396,3 +411,71 @@ def explain_run(s: Settings, tree: dict) -> dict:
         "confidence": help_.confidence,
         "model": response.model,
     }
+
+
+# ------------------------------------------------------------------ follow-up questions on a failed run
+class RunReply(BaseModel):
+    """Claude's answer to a follow-up question about a failed run."""
+
+    answer: str = Field(description="The answer, short and plain; numbered steps when the user should do something.")
+
+
+RUN_FOLLOW_UP_SYSTEM = (
+    RUN_SYSTEM
+    + """
+
+Answer the user's questions about this run (you may have explained the failure \
+already): what an error means, how to do one of the steps, what to check next. Use \
+only the run and the conversation; say so when they don't tell. You can't change \
+anything or run anything yourself: tell the user what to do. Stay on this run, \
+Prooflix and the data work it does; politely decline anything else."""
+)
+
+MAX_QUESTION = 2_000  # characters in one question
+MAX_TURNS = 20  # earlier questions and answers kept in a conversation
+
+
+def _explanation_text(explanation: dict) -> str:
+    """The first explanation as the assistant said it, for the conversation's history."""
+    steps = [str(x) for x in explanation.get("steps") or [] if str(x).strip()]
+    lines = [str(explanation.get("diagnosis") or "").strip()]
+    if explanation.get("failed_task"):
+        lines.append(f"Started in {explanation['failed_task']}.")
+    if steps:
+        lines.append("How to fix it:\n" + "\n".join(f"{i}. {step}" for i, step in enumerate(steps, 1)))
+    return "\n\n".join(line for line in lines if line) or "(no explanation)"
+
+
+def ask_about_run(s: Settings, tree: dict, explanation: dict | None, turns: list[dict], question: str) -> dict:
+    """Answer a question about a failed run. The run is sent again (masked, as in
+    explain_run), then the explanation when there is one and the earlier questions and
+    answers, which come from the browser and are only ever shown back to the same user.
+    Nothing is changed or re-run here."""
+    question = question.strip()
+    if not question:
+        raise AiAssistError("Type a question first", 422)
+    if len(question) > MAX_QUESTION:
+        raise AiAssistError(f"The question is too long ({MAX_QUESTION:,} characters at most)", 413)
+    turns = turns[-MAX_TURNS:]
+    earlier = sum(len(t.get("question", "")) + len(t.get("answer", "")) for t in turns)
+    if earlier > MAX_TEXT:
+        raise AiAssistError("The conversation is too long; reload the page to start a new one", 413)
+    text = _failed_run_text(tree)
+    messages: list[dict] = [{"role": "user", "content": f"<run>\n{text}\n</run>"}]
+    if explanation:
+        messages.append({"role": "assistant", "content": _explanation_text(explanation)})
+    for t in turns:
+        messages.append({"role": "user", "content": _redact(t.get("question", ""))})
+        messages.append({"role": "assistant", "content": t.get("answer", "") or "(no answer)"})
+    messages.append({"role": "user", "content": _redact(question)})
+    # without an explanation the run and the first question are one user message (roles alternate)
+    merged: list[dict] = []
+    for m in messages:
+        if merged and merged[-1]["role"] == m["role"]:
+            merged[-1] = {"role": m["role"], "content": merged[-1]["content"] + "\n\n" + m["content"]}
+        else:
+            merged.append(m)
+    client = _client(s)
+    response = _ask(client, s, RUN_FOLLOW_UP_SYSTEM, merged[-1]["content"], RunReply, history=merged[:-1])
+    reply: RunReply = response.parsed_output
+    return {"answer": reply.answer.strip(), "model": response.model}

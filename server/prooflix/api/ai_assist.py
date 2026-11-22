@@ -1,6 +1,6 @@
 """``/api/ai-assist`` routes: the Claude account settings (admins), the SQL editor's
 "ask AI Assist" for a failed query (users of the SQL tab) and the same for a failed
-pipeline run (users of the Pipelines and Ingestion tabs)."""
+pipeline run, with follow-up questions (users of the Pipelines and Ingestion tabs)."""
 
 from __future__ import annotations
 
@@ -79,6 +79,45 @@ def sql_fix(body: SqlFixIn, request: Request, paths: CatalogPaths = Depends(get_
     tables = [t.model_dump(by_alias=True) for t in _describe(_described_tables(paths))]
     try:
         return ai_assist.suggest_sql_fix(_store(request).get(), body.sql, body.error, tables)
+    except AiAssistError as e:
+        raise _fail(e) from None
+
+
+class RunExplanationIn(BaseModel):
+    diagnosis: str = Field("", max_length=ai_assist.MAX_TEXT)
+    failed_task: str = Field("", max_length=1_000)
+    steps: list[str] = Field(default_factory=list, max_length=50)
+
+
+class RunTurn(BaseModel):
+    question: str = Field(..., max_length=ai_assist.MAX_QUESTION)
+    answer: str = Field("", max_length=ai_assist.MAX_TEXT)
+
+
+class RunQuestionIn(BaseModel):
+    question: str = Field(..., min_length=1)
+    explanation: RunExplanationIn | None = None  # what AI Assist answered first (from /explain), if asked
+    turns: list[RunTurn] = Field(default_factory=list, max_length=100)  # earlier questions and answers
+
+
+@router.post("/runs/{run_id}/ask")
+def ask_about_run(
+    run_id: str, body: RunQuestionIn, request: Request, store: RunStore = Depends(get_store)
+) -> dict:
+    """A question about a failed run, with or without its explanation first: the run is sent
+    again (secrets masked), with the explanation and the earlier questions and answers. Returns
+    Claude's answer. Nothing is changed or re-run."""
+    tree = store.tree(run_id)
+    if tree is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Run '{run_id}' not found")
+    try:
+        return ai_assist.ask_about_run(
+            _store(request).get(),
+            tree,
+            body.explanation.model_dump() if body.explanation else None,
+            [t.model_dump() for t in body.turns],
+            body.question,
+        )
     except AiAssistError as e:
         raise _fail(e) from None
 
