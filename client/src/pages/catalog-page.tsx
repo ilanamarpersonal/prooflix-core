@@ -1,18 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
-import { ChevronDown, ChevronRight, Database, Download, Layers, Library, RefreshCw, Table2, Upload } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  CheckCircle2,
+  Database,
+  Download,
+  Eye,
+  EyeOff,
+  FolderOpen,
+  Layers,
+  Library,
+  RefreshCw,
+  Table2,
+  Trash2,
+  Upload,
+} from "lucide-react"
 
 import { CatalogImportPanel } from "@/components/catalog-import-panel"
 import { DataGrid } from "@/components/data-grid"
+import { DropSchemaPanel, type Dropped } from "@/components/drop-schema-panel"
 import { ErrorAlert } from "@/components/error-alert"
 import { PageHeader } from "@/components/page-header"
 import { ResizeDivider } from "@/components/resize-divider"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { catalogExportUrl, useCatalog, useSqlQuery } from "@/lib/api"
+import { catalogExportUrl, useCatalog, useHiddenSchemas, useRestoreSchema, useSqlQuery } from "@/lib/api"
 import type { CatalogSchema, SqlTable } from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
 import { cn } from "@/lib/utils"
@@ -39,6 +56,7 @@ export function CatalogPage() {
   const [params, setParams] = useSearchParams()
   const selectedKey = params.get("table") // "schema.table"
   const schemaParam = params.get("schema")
+  const catalogParam = params.get("catalog") // a catalog (tenant) selected in the tree
 
   const selected = useMemo(() => {
     for (const s of catalog.data ?? []) {
@@ -50,6 +68,17 @@ export function CatalogPage() {
   const selectedSchema = catalog.data?.find((s) => s.name === (selected?.schema ?? schemaParam)) ?? null
   const tableCount = catalog.data?.reduce((n, s) => n + s.tables.length, 0) ?? 0
   const [importing, setImporting] = useState(false)
+  const [dropped, setDropped] = useState<Dropped | null>(null)
+  const hidden = useHiddenSchemas()
+  const restore = useRestoreSchema()
+  const selectedCatalog =
+    !selected && !selectedSchema && catalogParam ? (catalog.data?.filter((s) => s.catalog === catalogParam) ?? []) : []
+  // Restore what was just hidden: one schema, or every schema of a catalog
+  const restoreDropped = async (d: Dropped) => {
+    for (const name of d.schemas) await restore.mutateAsync(name)
+    setParams(d.kind === "schema" ? { schema: d.name } : { catalog: d.name })
+    setDropped(null)
+  }
   // On md+ screens the tree and the detail fill the window and scroll inside.
   const panels = useRef<HTMLDivElement>(null)
   const panelsHeight = useFillHeight(panels)
@@ -124,6 +153,38 @@ export function CatalogPage() {
         />
       )}
       {catalog.error && <ErrorAlert error={catalog.error} />}
+      {dropped && (
+        <Alert className="mb-4">
+          {dropped.mode === "hide" ? <EyeOff /> : <CheckCircle2 />}
+          <AlertTitle>
+            {dropped.kind === "schema" ? "Schema" : "Catalog"} {dropped.name}{" "}
+            {dropped.mode === "hide" ? "is hidden" : "was deleted from the data lake"}
+          </AlertTitle>
+          <AlertDescription>
+            <p>
+              {dropped.mode === "hide"
+                ? `${dropped.kind === "schema" ? "Its data is" : `Its schemas (${dropped.schemas.join(", ")}) and their data are`} still in the data lake. Restore from Hidden schemas under the tree.`
+                : `Deleted the files of ${dropped.deletedTables.join(", ")}.`}
+            </p>
+            <div className="mt-2 flex gap-2">
+              {dropped.mode === "hide" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={restore.isPending}
+                  onClick={() => restoreDropped(dropped).catch(() => {})}
+                >
+                  <Eye /> Restore
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={() => setDropped(null)}>
+                Dismiss
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+      {restore.error && <ErrorAlert title="Could not restore the schema" error={restore.error} />}
       <div
         ref={panels}
         style={{ ...(panelsHeight ? { height: panelsHeight } : {}), ["--tree-width" as string]: `${treeWidth}px` }}
@@ -146,29 +207,42 @@ export function CatalogPage() {
             </div>
           ) : (
             groupByCatalog(catalog.data).map((group) => {
-              const node = (s: CatalogSchema) => (
-                <SchemaNode
-                  key={s.name}
-                  schema={s}
-                  nested={!!group.catalog}
-                  selectedKey={selectedKey}
-                  schemaSelected={!selected && schemaParam === s.name}
-                  onSelectTable={(t) => setParams({ table: `${s.name}.${t.name}` })}
-                  onSelectSchema={() => setParams({ schema: s.name })}
-                />
-              )
-              return group.catalog ? (
+              const picked = selectedKey ?? schemaParam
+              return (
                 <CatalogNode
-                  key={`catalog:${group.catalog}`}
+                  key={group.catalog ? `catalog:${group.catalog}` : "files"}
                   name={group.catalog}
-                  containsSelected={!!(selectedKey ?? schemaParam)?.startsWith(`${group.catalog}.`)}
+                  selected={!!group.catalog && selectedCatalog.length > 0 && catalogParam === group.catalog}
+                  onSelect={() => setParams({ catalog: group.catalog })}
+                  containsSelected={group.schemas.some((s) => picked === s.name || !!picked?.startsWith(`${s.name}.`))}
                 >
-                  {group.schemas.map(node)}
+                  {group.schemas.map((s) => (
+                    <SchemaNode
+                      key={s.name}
+                      schema={s}
+                      selectedKey={selectedKey}
+                      schemaSelected={!selected && schemaParam === s.name}
+                      onSelectTable={(t) => setParams({ table: `${s.name}.${t.name}` })}
+                      onSelectSchema={() => setParams({ schema: s.name })}
+                    />
+                  ))}
                 </CatalogNode>
-              ) : (
-                group.schemas.map(node)
               )
             })
+          )}
+          {!!hidden.data?.length && (
+            <HiddenSchemas
+              names={hidden.data}
+              restoring={restore.isPending ? restore.variables : undefined}
+              onRestore={(name) =>
+                restore.mutate(name, {
+                  onSuccess: () => {
+                    setParams({ schema: name })
+                    if (dropped?.schemas.includes(name)) setDropped(null)
+                  },
+                })
+              }
+            />
           )}
         </Card>
         <ResizeDivider
@@ -184,10 +258,29 @@ export function CatalogPage() {
         {selected ? (
           <TableDetail table={selected} />
         ) : selectedSchema ? (
-          <SchemaDetail schema={selectedSchema} onSelectTable={(t) => setParams({ table: `${t.schema}.${t.name}` })} />
+          <SchemaDetail
+            key={selectedSchema.name}
+            schema={selectedSchema}
+            onSelectTable={(t) => setParams({ table: `${t.schema}.${t.name}` })}
+            onDropped={(r) => {
+              setDropped(r)
+              setParams({})
+            }}
+          />
+        ) : selectedCatalog.length && catalogParam ? (
+          <CatalogDetail
+            key={catalogParam}
+            name={catalogParam}
+            schemas={selectedCatalog}
+            onSelectSchema={(s) => setParams({ schema: s.name })}
+            onDropped={(r) => {
+              setDropped(r)
+              setParams({})
+            }}
+          />
         ) : (
           <Card className="text-muted-foreground grid min-h-64 place-items-center p-6 text-center text-sm md:min-h-0">
-            Select a schema or a table.
+            Select a catalog, a schema or a table.
           </Card>
         )}
       </div>
@@ -266,24 +359,32 @@ function ExportMenu({
   )
 }
 
-/** Schemas in server order, with the schemas of each catalog gathered under it. */
+/**
+ * The tree's top level: each catalog (tenant1) with its schemas (bronze, silver, gold), in server order,
+ * then one group, catalog "", for the schemas outside a catalog (main, projects' data, imported datasets).
+ */
 function groupByCatalog(schemas: CatalogSchema[]): { catalog: string; schemas: CatalogSchema[] }[] {
-  const groups: { catalog: string; schemas: CatalogSchema[] }[] = []
+  const catalogs = new Map<string, CatalogSchema[]>()
+  const files: CatalogSchema[] = []
   for (const s of schemas) {
-    const last = groups[groups.length - 1]
-    if (s.catalog && last?.catalog === s.catalog) last.schemas.push(s)
-    else groups.push({ catalog: s.catalog, schemas: [s] })
+    if (s.catalog) catalogs.set(s.catalog, [...(catalogs.get(s.catalog) ?? []), s])
+    else files.push(s)
   }
-  return groups
+  const groups = [...catalogs].map(([catalog, list]) => ({ catalog, schemas: list }))
+  return files.length ? [...groups, { catalog: "", schemas: files }] : groups
 }
 
-/** A catalog (a tenant folder in data/) and its schemas, such as bronze. */
+/** A catalog (tenant1) and its schemas, or, with no name, the group of schemas outside a catalog. */
 function CatalogNode({
   name,
+  selected,
+  onSelect,
   containsSelected,
   children,
 }: {
   name: string
+  selected: boolean
+  onSelect: () => void
   containsSelected: boolean
   children: React.ReactNode
 }) {
@@ -293,34 +394,54 @@ function CatalogNode({
   }, [containsSelected])
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        aria-label={open ? `Collapse catalog ${name}` : `Expand catalog ${name}`}
-        className="hover:bg-accent flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-sm"
-      >
-        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
-        <Library className="text-primary size-4 shrink-0" />
-        <span className="truncate font-mono text-xs font-medium">{name}</span>
-        <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">catalog</span>
-      </button>
+      <div className={cn("hover:bg-accent flex items-center gap-1.5 px-2 text-sm", selected && "bg-accent")}>
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          aria-label={`${open ? "Collapse" : "Expand"} ${name ? `catalog ${name}` : FILES_GROUP}`}
+          className="grid size-4 shrink-0 place-items-center py-1.5"
+        >
+          <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+        </button>
+        <button
+          type="button"
+          // a catalog opens its panel; the files group only folds
+          onClick={name ? onSelect : () => setOpen(!open)}
+          title={name ? undefined : FILES_GROUP_HINT}
+          className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left"
+        >
+          {name ? (
+            <Library className="text-primary size-4 shrink-0" />
+          ) : (
+            <FolderOpen className="text-muted-foreground size-4 shrink-0" />
+          )}
+          <span className={cn("truncate text-xs font-medium", name && "font-mono", selected && "font-semibold")}>
+            {name || FILES_GROUP}
+          </span>
+          <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">
+            {name ? "catalog" : "parquet"}
+          </span>
+        </button>
+      </div>
       {open && children}
     </div>
   )
 }
 
+// the top-level group for schemas that are not in a catalog
+const FILES_GROUP = "Files and datasets"
+const FILES_GROUP_HINT =
+  "Parquet files outside a catalog: the workspace's data/ folder (main), projects' data and imported datasets"
+
 function SchemaNode({
   schema,
-  nested = false,
   selectedKey,
   schemaSelected,
   onSelectTable,
   onSelectSchema,
 }: {
   schema: CatalogSchema
-  /** inside a catalog: indented and labelled with the schema's own name ("bronze") */
-  nested?: boolean
   selectedKey: string | null
   schemaSelected: boolean
   onSelectTable: (t: SqlTable) => void
@@ -328,7 +449,7 @@ function SchemaNode({
 }) {
   const containsSelected = !!selectedKey?.startsWith(`${schema.name}.`)
   // "bronze" under catalog tenant1, the full name ("my_project") elsewhere
-  const label = nested && schema.catalog ? schema.name.slice(schema.catalog.length + 1) : schema.name
+  const label = schema.catalog ? schema.name.slice(schema.catalog.length + 1) : schema.name
   const [open, setOpen] = useState(true)
   useEffect(() => {
     if (containsSelected) setOpen(true)
@@ -338,8 +459,7 @@ function SchemaNode({
     <div>
       <div
         className={cn(
-          "hover:bg-accent flex items-center gap-1.5 px-2 text-sm",
-          nested && "pl-6",
+          "hover:bg-accent flex items-center gap-1.5 px-2 pl-6 text-sm",
           schemaSelected && "bg-accent font-medium",
         )}
       >
@@ -365,9 +485,7 @@ function SchemaNode({
       {open && (
         <div>
           {schema.tables.length === 0 ? (
-            <p className={cn("text-muted-foreground py-1 pr-2 text-xs italic", nested ? "pl-14" : "pl-10")}>
-              no tables
-            </p>
+            <p className="text-muted-foreground py-1 pr-2 pl-14 text-xs italic">no tables</p>
           ) : (
             schema.tables.map((t) => (
               <button
@@ -375,8 +493,7 @@ function SchemaNode({
                 type="button"
                 onClick={() => onSelectTable(t)}
                 className={cn(
-                  "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm",
-                  nested ? "pl-13" : "pl-9",
+                  "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-2 pl-13 text-left text-sm",
                   selectedKey === `${schema.name}.${t.name}` && "bg-accent font-medium",
                 )}
                 title={t.source}
@@ -392,7 +509,130 @@ function SchemaNode({
   )
 }
 
-function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSelectTable: (t: SqlTable) => void }) {
+/** Schemas hidden from the GUI, under the tree, each with a Restore button. */
+function HiddenSchemas({
+  names,
+  restoring,
+  onRestore,
+}: {
+  names: string[]
+  restoring?: string
+  onRestore: (name: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-2 border-t pt-1">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="text-muted-foreground hover:bg-accent flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs"
+      >
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <EyeOff className="size-3.5 shrink-0" />
+        Hidden schemas
+        <span className="ml-auto">{names.length}</span>
+      </button>
+      {open &&
+        names.map((name) => (
+          <div key={name} className="flex items-center gap-1.5 py-0.5 pr-2 pl-8 text-sm">
+            <Layers className="text-muted-foreground size-4 shrink-0" />
+            <span className="text-muted-foreground truncate font-mono text-xs">{name}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-7 px-2 text-xs"
+              disabled={restoring === name}
+              onClick={() => onRestore(name)}
+            >
+              <Eye /> Restore
+            </Button>
+          </div>
+        ))}
+    </div>
+  )
+}
+
+/** A catalog (a tenant such as tenant1): its schemas, and Drop catalog for all of them. */
+function CatalogDetail({
+  name,
+  schemas,
+  onSelectSchema,
+  onDropped,
+}: {
+  name: string
+  schemas: CatalogSchema[]
+  onSelectSchema: (s: CatalogSchema) => void
+  onDropped: (result: Dropped) => void
+}) {
+  const [dropping, setDropping] = useState(false)
+  const tables = schemas.reduce((n, s) => n + s.tables.length, 0)
+  return (
+    <Card className="min-h-0 min-w-0 gap-0 self-start overflow-hidden py-0 md:max-h-full">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-3">
+        <Library className="text-primary size-4" />
+        <span className="font-mono font-medium">{name}</span>
+        <Badge variant="secondary">catalog</Badge>
+        <span className="text-muted-foreground text-sm">
+          {schemas.length} schema{schemas.length === 1 ? "" : "s"} · {tables} table{tables === 1 ? "" : "s"}
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-destructive hover:text-destructive ml-auto"
+          onClick={() => setDropping(true)}
+          disabled={dropping}
+        >
+          <Trash2 /> Drop catalog
+        </Button>
+      </div>
+      {dropping && (
+        <DropSchemaPanel
+          kind="catalog"
+          name={name}
+          schemas={schemas}
+          onClose={() => setDropping(false)}
+          onDropped={onDropped}
+        />
+      )}
+      <div className="min-h-0 overflow-y-auto">
+        <Table>
+          <TableHeader className="bg-card sticky top-0 z-[1]">
+            <TableRow>
+              <TableHead className="pl-4">Schema</TableHead>
+              <TableHead>Tables</TableHead>
+              <TableHead>Rows</TableHead>
+              <TableHead>Folder</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {schemas.map((s) => (
+              <TableRow key={s.name} className="cursor-pointer" onClick={() => onSelectSchema(s)}>
+                <TableCell className="pl-4 font-mono text-xs font-medium">{s.name.slice(name.length + 1)}</TableCell>
+                <TableCell className="tabular-nums">{s.tables.length}</TableCell>
+                <TableCell className="tabular-nums">
+                  {s.tables.reduce((n, t) => n + t.row_count, 0).toLocaleString()}
+                </TableCell>
+                <TableCell className="text-muted-foreground font-mono text-xs">{s.data_dir}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </Card>
+  )
+}
+
+function SchemaDetail({
+  schema,
+  onSelectTable,
+  onDropped,
+}: {
+  schema: CatalogSchema
+  onSelectTable: (t: SqlTable) => void
+  onDropped: (result: Dropped) => void
+}) {
+  const [dropping, setDropping] = useState(false)
   return (
     <Card className="min-h-0 min-w-0 gap-0 self-start overflow-hidden py-0 md:max-h-full">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-3">
@@ -418,7 +658,25 @@ function SchemaDetail({ schema, onSelectTable }: { schema: CatalogSchema; onSele
             "the workspace's own data"
           )}
         </span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-destructive hover:text-destructive ml-auto"
+          onClick={() => setDropping(true)}
+          disabled={dropping}
+        >
+          <Trash2 /> Drop schema
+        </Button>
       </div>
+      {dropping && (
+        <DropSchemaPanel
+          kind="schema"
+          name={schema.name}
+          schemas={[schema]}
+          onClose={() => setDropping(false)}
+          onDropped={onDropped}
+        />
+      )}
       {schema.tables.length === 0 ? (
         <div className="text-muted-foreground p-4 text-sm">
           No tables yet. Add Parquet files to{" "}

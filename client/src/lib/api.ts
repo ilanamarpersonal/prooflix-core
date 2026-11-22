@@ -37,6 +37,9 @@ import {
   type TaskCode,
   type CatalogImportResult,
   type CatalogSchema,
+  type DropSchemaMode,
+  type DropSchemaResult,
+  type DropCatalogResult,
   type LinkedFolder,
   type LinkedFolderKind,
   type FoundFolder,
@@ -166,6 +169,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ schema, files, overwrite }),
     }),
+  dropSchema: (schema: string, mode: DropSchemaMode) =>
+    request<DropSchemaResult>(`/catalog/schemas/${encodeURIComponent(schema)}?${new URLSearchParams({ mode })}`, {
+      method: "DELETE",
+    }),
+  dropCatalog: (catalog: string, mode: DropSchemaMode) =>
+    request<DropCatalogResult>(`/catalog/catalogs/${encodeURIComponent(catalog)}?${new URLSearchParams({ mode })}`, {
+      method: "DELETE",
+    }),
+  hiddenSchemas: () => request<string[]>("/catalog/hidden"),
+  restoreSchema: (schema: string) =>
+    request<void>(`/catalog/hidden/${encodeURIComponent(schema)}`, { method: "DELETE" }),
   sqlTables: () => request<SqlTable[]>("/sql/tables"),
   sqlQuery: (sql: string, limit = 1000) =>
     request<SqlResult>("/sql/query", { method: "POST", body: JSON.stringify({ sql, limit }) }),
@@ -689,6 +703,36 @@ export function catalogExportUrl(target: { table?: string; schema?: string; form
   if (target.format && target.format !== "csv") q.set("format", target.format)
   const qs = q.toString()
   return `${BASE}/catalog/export${qs ? `?${qs}` : ""}`
+}
+
+/** Schemas hidden from the GUI (their data is still in the data lake). */
+export const useHiddenSchemas = () => useQuery({ queryKey: ["sql", "catalog", "hidden"], queryFn: api.hiddenSchemas })
+
+/** Drop a schema: hide it from the GUI, or delete its tables' files permanently. */
+export function useDropSchema() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ schema, mode }: { schema: string; mode: DropSchemaMode }) => api.dropSchema(schema, mode),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sql"] }),
+  })
+}
+
+/** Drop every schema of a catalog (a tenant): hide them from the GUI, or delete their tables' files. */
+export function useDropCatalog() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ catalog, mode }: { catalog: string; mode: DropSchemaMode }) => api.dropCatalog(catalog, mode),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sql"] }),
+  })
+}
+
+/** Show a hidden schema in the GUI again. */
+export function useRestoreSchema() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (schema: string) => api.restoreSchema(schema),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sql"] }),
+  })
 }
 
 export function useCatalogImport() {

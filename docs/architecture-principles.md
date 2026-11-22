@@ -17,7 +17,10 @@ changing one is fine, but on purpose: update this file in the same change and sa
 3. **Delta in Unity Catalog through Spark is the storage of record.** Bronze, silver
    and gold are external Delta tables registered in Unity Catalog, written by Spark.
    DuckDB in the server reads them only for the SQL Editor, Catalog and ClickHouse
-   copies, at their current version (`delta_log.py`), and never writes them.
+   copies, at their current version (`delta_log.py`), and never writes them. The one
+   exception is the Catalog's **Drop schema → Delete permanently** (admins only when
+   users are on): on an explicit request it deletes the schema's table folders; Unity
+   Catalog registrations are left for Spark to drop.
 4. **The GUI configures; generated files are an output.** What a tab manages
    (ingestion jobs, schedules, parameters) is configured there and saved as plain
    files (pipeline YAML, JSON in `PROOFLIX_HOME`) that stay readable and

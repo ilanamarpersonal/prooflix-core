@@ -263,6 +263,25 @@ export interface CatalogImportResult {
   created_schema: boolean
 }
 
+/** How a schema is dropped: hide it from the GUI (its data stays), or delete its tables' files. */
+export type DropSchemaMode = "hide" | "delete"
+
+export interface DropSchemaResult {
+  schema: string
+  mode: DropSchemaMode
+  /** with mode "delete": the tables whose files were deleted */
+  deleted_tables: string[]
+}
+
+export interface DropCatalogResult {
+  catalog: string
+  mode: DropSchemaMode
+  /** the catalog's schemas that were hidden or deleted */
+  schemas: string[]
+  /** with mode "delete": qualified names ("tenant1.bronze.accounts") of the tables whose files were deleted */
+  deleted_tables: string[]
+}
+
 export interface SqlResult {
   columns: string[]
   rows: unknown[][]

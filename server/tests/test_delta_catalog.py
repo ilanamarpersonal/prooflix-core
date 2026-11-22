@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pyarrow as pa
@@ -72,3 +73,37 @@ def test_catalog_lists_nested_delta_tables_under_their_schema(sample_workspace, 
         res = c.post("/api/sql/query", json={"sql": "SELECT count(*) AS n, sum(id) AS s FROM tenant9.bronze.accounts"})
         assert res.status_code == 200, res.text
         assert res.json()["rows"] == [[3, 60]]  # only the current version: b.parquet
+
+
+def test_data_lake_inside_a_catalog_keeps_catalog_and_schema_names(sample_workspace, tmp_path):
+    """data/ linked to <lake>/tenant7/lakehouse (as PROOFLIX_DATA_LAKE may point): the tables
+    are still tenant7.<schema>.<table>, and a Delta table's files are never tables of their own."""
+    lakehouse = tmp_path / "lake" / "tenant7" / "lakehouse"
+    make_table(lakehouse / "bronze" / "accounts")
+    make_table(lakehouse / "gold" / "daily")
+    shutil.rmtree(sample_workspace / "data")  # the sample's own data/: the link takes its place
+    settings = Settings(
+        workspace=sample_workspace, client_dist=tmp_path / "no-client", scheduler=False, data_lake=lakehouse
+    )
+    with TestClient(create_app(settings)) as c:
+        listed = c.get("/api/catalog").json()
+        delta = {s["name"]: (s["catalog"], [t["name"] for t in s["tables"]]) for s in listed if s["catalog"]}
+        assert delta == {"tenant7.bronze": ("tenant7", ["accounts"]), "tenant7.gold": ("tenant7", ["daily"])}
+        names = {t["qualified"] for t in c.get("/api/sql/tables").json()}
+        assert {"tenant7.bronze.accounts", "tenant7.gold.daily"} <= names
+        assert not [n for n in names if n.split(".")[-1] in ("a", "b")]  # no data files as tables
+        res = c.post("/api/sql/query", json={"sql": "SELECT count(*) FROM tenant7.bronze.accounts"})
+        assert res.status_code == 200, res.text
+        assert res.json()["rows"] == [[3]]
+
+
+def test_dropping_a_delta_schema_deletes_its_table_folders(sample_workspace, tmp_path):
+    bronze = sample_workspace / "data" / "tenant1" / "lakehouse" / "bronze"
+    make_table(bronze / "accounts")
+    (bronze / "notes.txt").write_text("not a table")
+    settings = Settings(workspace=sample_workspace, client_dist=tmp_path / "no-client", scheduler=False)
+    with TestClient(create_app(settings)) as c:
+        r = c.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "delete"})
+        assert r.status_code == 200 and r.json()["deleted_tables"] == ["accounts"]
+    assert not (bronze / "accounts").exists()
+    assert (bronze / "notes.txt").is_file()  # other files in the schema's folder are kept

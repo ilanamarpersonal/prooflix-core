@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FolderOpen,
   Layers,
   Library,
   Loader2,
@@ -1044,19 +1045,13 @@ function TableList({
           <p className="text-muted-foreground p-3 text-sm">No tables yet. Import Parquet files in the Catalog tab.</p>
         ) : (
           <div className="py-1">
-            {groupByCatalog(bySchema).map(({ catalog, schemas }) =>
-              catalog ? (
-                <CatalogItem key={`catalog:${catalog}`} catalog={catalog}>
-                  {schemas.map(([schema, list]) => (
-                    <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} catalog={catalog} />
-                  ))}
-                </CatalogItem>
-              ) : (
-                schemas.map(([schema, list]) => (
-                  <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} />
-                ))
-              ),
-            )}
+            {groupByCatalog(bySchema).map(({ catalog, schemas }) => (
+              <CatalogItem key={catalog ? `catalog:${catalog}` : "files"} catalog={catalog}>
+                {schemas.map(([schema, list]) => (
+                  <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} catalog={catalog} />
+                ))}
+              </CatalogItem>
+            ))}
           </div>
         )}
       </div>
@@ -1067,19 +1062,28 @@ function TableList({
   )
 }
 
-/** Schemas in server order, with the schemas of each catalog gathered under it. */
+/**
+ * The tree's top level: each catalog (tenant1) with its schemas (bronze, silver, gold), in server order,
+ * then one group, catalog "", for the schemas outside a catalog (main, projects' data, imported datasets).
+ */
 function groupByCatalog(bySchema: Map<string, SqlTable[]>): { catalog: string; schemas: [string, SqlTable[]][] }[] {
-  const groups: { catalog: string; schemas: [string, SqlTable[]][] }[] = []
+  const catalogs = new Map<string, [string, SqlTable[]][]>()
+  const files: [string, SqlTable[]][] = []
   for (const entry of bySchema) {
     const catalog = entry[1][0]?.catalog ?? ""
-    const last = groups[groups.length - 1]
-    if (catalog && last?.catalog === catalog) last.schemas.push(entry)
-    else groups.push({ catalog, schemas: [entry] })
+    if (catalog) catalogs.set(catalog, [...(catalogs.get(catalog) ?? []), entry])
+    else files.push(entry)
   }
-  return groups
+  const groups = [...catalogs].map(([catalog, schemas]) => ({ catalog, schemas }))
+  return files.length ? [...groups, { catalog: "", schemas: files }] : groups
 }
 
-/** A catalog (a tenant folder in data/) and its schemas, such as bronze and gold. */
+// the top-level group for schemas that are not in a catalog
+const FILES_GROUP = "Files and datasets"
+const FILES_GROUP_HINT =
+  "Parquet files outside a catalog: the workspace's data/ folder (main), projects' data and imported datasets"
+
+/** A catalog (tenant1) and its schemas, or, with no name, the group of schemas outside a catalog. */
 function CatalogItem({ catalog, children }: { catalog: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(true)
   return (
@@ -1088,13 +1092,20 @@ function CatalogItem({ catalog, children }: { catalog: string; children: React.R
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        aria-label={open ? `Collapse catalog ${catalog}` : `Expand catalog ${catalog}`}
+        aria-label={`${open ? "Collapse" : "Expand"} ${catalog ? `catalog ${catalog}` : FILES_GROUP}`}
+        title={catalog ? undefined : FILES_GROUP_HINT}
         className="hover:bg-accent flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-sm"
       >
         <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
-        <Library className="text-primary size-4 shrink-0" />
-        <span className="truncate font-mono text-xs font-medium">{catalog}</span>
-        <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">catalog</span>
+        {catalog ? (
+          <Library className="text-primary size-4 shrink-0" />
+        ) : (
+          <FolderOpen className="text-muted-foreground size-4 shrink-0" />
+        )}
+        <span className={cn("truncate text-xs font-medium", catalog && "font-mono")}>{catalog || FILES_GROUP}</span>
+        <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">
+          {catalog ? "catalog" : "parquet"}
+        </span>
       </button>
       {open && children}
     </div>
@@ -1110,11 +1121,10 @@ function SchemaItem({
   schema: string
   tables: SqlTable[]
   onInsert: (text: string) => void
-  /** set inside a catalog: indented and labelled with the schema's own name ("bronze") */
+  /** set inside a catalog: labelled with the schema's own name ("bronze") */
   catalog?: string
 }) {
   const [open, setOpen] = useState(true)
-  const nested = !!catalog
   return (
     <div>
       <button
@@ -1122,32 +1132,21 @@ function SchemaItem({
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         title={schema}
-        className={cn(
-          "hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-1.5 text-left text-sm",
-          nested ? "pl-5" : "pl-1.5",
-        )}
+        className="hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-1.5 pl-5 text-left text-sm"
       >
         <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
         <Layers className="text-primary size-4 shrink-0" />
         <span className="truncate font-mono text-xs font-medium">
-          {nested ? schema.slice(catalog.length + 1) : schema}
+          {catalog ? schema.slice(catalog.length + 1) : schema}
         </span>
         <span className="text-muted-foreground ml-auto text-xs">{tables.length}</span>
       </button>
-      {open && tables.map((t) => <TableItem key={t.qualified} table={t} onInsert={onInsert} nested={nested} />)}
+      {open && tables.map((t) => <TableItem key={t.qualified} table={t} onInsert={onInsert} />)}
     </div>
   )
 }
 
-function TableItem({
-  table,
-  onInsert,
-  nested = false,
-}: {
-  table: SqlTable
-  onInsert: (text: string) => void
-  nested?: boolean
-}) {
+function TableItem({ table, onInsert }: { table: SqlTable; onInsert: (text: string) => void }) {
   const [open, setOpen] = useState(false)
   return (
     <div>
@@ -1158,10 +1157,7 @@ function TableItem({
         aria-expanded={open}
         aria-label={open ? `Hide columns of ${table.name}` : `Show columns of ${table.name}`}
         title={`${table.qualified} · ${table.row_count} rows · ${table.source}`}
-        className={cn(
-          "hover:bg-accent flex w-full items-center gap-1 py-1 pr-2 text-left text-sm",
-          nested ? "pl-9" : "pl-5",
-        )}
+        className="hover:bg-accent flex w-full items-center gap-1 py-1 pr-2 pl-9 text-left text-sm"
       >
         <span className="grid size-5 shrink-0 place-items-center">
           <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
@@ -1177,10 +1173,7 @@ function TableItem({
               type="button"
               onClick={() => onInsert(c.name)}
               title={`Insert ${c.name}`}
-              className={cn(
-                "hover:bg-accent flex w-full items-center justify-between gap-2 py-0.5 pr-3 text-left",
-                nested ? "pl-20" : "pl-16",
-              )}
+              className="hover:bg-accent flex w-full items-center justify-between gap-2 py-0.5 pr-3 pl-20 text-left"
             >
               <span className="truncate font-mono text-xs">{c.name}</span>
               <span className="text-muted-foreground text-[10px] uppercase">{c.type}</span>

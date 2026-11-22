@@ -407,3 +407,27 @@ def test_short_session_key_refuses_to_start(tmp_path: Path):
     (tmp_path / "session.key").write_text("")
     with pytest.raises(RuntimeError, match="32-byte"):
         UserStore(tmp_path)
+
+
+def test_only_admins_delete_a_schemas_data(client, tmp_path: Path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = tmp_path / "ws" / "data" / "tenant1" / "bronze" / "orders"
+    table.mkdir(parents=True)
+    pq.write_table(pa.table({"id": [1]}), table / "part-0.parquet")
+    c = client
+    c.post("/api/auth/setup", json={"username": "boss", "password": GOOD})
+    c.post("/api/users", json={"username": "dana", "password": GOOD, "tabs": ["catalog"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "dana", "password": GOOD})
+    r = c.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "delete"})
+    assert r.status_code == 403 and (table / "part-0.parquet").is_file()
+    r = c.delete("/api/catalog/catalogs/tenant1", params={"mode": "delete"})
+    assert r.status_code == 403 and (table / "part-0.parquet").is_file()
+    assert c.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "hide"}).status_code == 200
+    assert c.delete("/api/catalog/hidden/tenant1.bronze").status_code == 204
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "boss", "password": GOOD})
+    assert c.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "delete"}).status_code == 200
+    assert not table.exists()

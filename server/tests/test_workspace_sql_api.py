@@ -461,3 +461,78 @@ def test_large_results_are_cut_at_the_limit(client):
 def test_catalog_folder_files_outside_schema_folders_are_ignored(client, sample_workspace):
     write_parquet(sample_workspace / "data" / "tenant1" / "loose.parquet", [{"a": 1}])
     assert "loose" not in {t["name"] for t in client.get("/api/sql/tables").json()}
+
+
+# ---------------------------------------------------------------- drop a schema
+def _schema_names(client) -> list[str]:
+    return [s["name"] for s in client.get("/api/catalog").json()]
+
+
+def test_drop_schema_hide_keeps_data_and_can_be_restored(client, sample_workspace):
+    folder = sample_workspace / "data" / "tenant1" / "bronze"
+    r = client.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "hide"})
+    assert r.status_code == 200 and r.json() == {"schema": "tenant1.bronze", "mode": "hide", "deleted_tables": []}
+    assert "tenant1.bronze" not in _schema_names(client)
+    assert all(t["schema"] != "tenant1.bronze" for t in client.get("/api/sql/tables").json())
+    assert client.get("/api/catalog/hidden").json() == ["tenant1.bronze"]
+    assert (folder / "clean_orders" / "part-0.parquet").is_file()  # the data lake is untouched
+    # still queryable by name
+    res = client.post("/api/sql/query", json={"sql": "SELECT count(*) FROM tenant1.bronze.clean_orders"})
+    assert res.status_code == 200 and res.json()["rows"] == [[2]]
+
+    assert client.delete("/api/catalog/hidden/tenant1.bronze").status_code == 204
+    assert "tenant1.bronze" in _schema_names(client)
+    assert client.get("/api/catalog/hidden").json() == []
+    assert client.delete("/api/catalog/hidden/tenant1.bronze").status_code == 404
+
+
+def test_drop_schema_delete_removes_only_its_tables(client, sample_workspace):
+    tenant = sample_workspace / "data" / "tenant1"
+    client.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "hide"})  # hidden, then deleted
+    r = client.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "delete"})
+    assert r.status_code == 200
+    assert r.json()["deleted_tables"] == ["clean_orders", "summary"]
+    assert not (tenant / "bronze").exists()
+    # other folders of the catalog (no tables) are kept
+    assert (tenant / "source" / "orders.avro").is_file()
+    assert (tenant / "checkpoint" / "last_checkpoint.txt").is_file()
+    assert "tenant1.bronze" not in _schema_names(client)
+    assert client.get("/api/catalog/hidden").json() == []
+    assert client.delete("/api/catalog/schemas/tenant1.bronze", params={"mode": "delete"}).status_code == 404
+
+
+def test_drop_schema_delete_of_main_keeps_the_data_folder(client, sample_workspace):
+    data = sample_workspace / "data"
+    r = client.delete("/api/catalog/schemas/main", params={"mode": "delete"})
+    assert r.status_code == 200 and r.json()["deleted_tables"] == ["orders"]
+    assert not (data / "orders.parquet").exists()
+    assert (data / "orders.csv").is_file() and (data / "tenant1" / "bronze").is_dir()
+
+
+@pytest.mark.parametrize("params", [{}, {"mode": "purge"}])
+def test_drop_schema_needs_a_valid_mode(client, params):
+    assert client.delete("/api/catalog/schemas/tenant1.bronze", params=params).status_code == 422
+
+
+def test_drop_unknown_schema_is_404(client):
+    assert client.delete("/api/catalog/schemas/nope", params={"mode": "hide"}).status_code == 404
+
+
+def test_drop_catalog_hides_or_deletes_all_its_schemas(client, sample_workspace):
+    tenant = sample_workspace / "data" / "tenant2"
+    write_parquet(tenant / "bronze" / "a" / "part-0.parquet", [{"id": 1}])
+    write_parquet(tenant / "silver" / "b" / "part-0.parquet", [{"id": 2}])
+    r = client.delete("/api/catalog/catalogs/tenant2", params={"mode": "hide"})
+    assert r.status_code == 200 and r.json()["schemas"] == ["tenant2.bronze", "tenant2.silver"]
+    assert not any(n.startswith("tenant2.") for n in _schema_names(client))
+    assert "tenant1.bronze" in _schema_names(client)  # other tenants stay
+    assert client.get("/api/catalog/hidden").json() == ["tenant2.bronze", "tenant2.silver"]
+    assert (tenant / "bronze" / "a" / "part-0.parquet").is_file()
+
+    r = client.delete("/api/catalog/catalogs/tenant2", params={"mode": "delete"})
+    assert r.status_code == 200
+    assert r.json()["deleted_tables"] == ["tenant2.bronze.a", "tenant2.silver.b"]
+    assert not tenant.exists()  # nothing else was in it, so the tenant's folder is gone
+    assert client.get("/api/catalog/hidden").json() == []
+    assert (sample_workspace / "data" / "tenant1" / "bronze").is_dir()
+    assert client.delete("/api/catalog/catalogs/tenant2", params={"mode": "hide"}).status_code == 404

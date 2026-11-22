@@ -105,7 +105,7 @@ flowchart TB
 | `engine/executor.py` | Creates runs, schedules task DAGs, runs sub-pipelines as child runs, handles retries, timeouts and cancellation |
 | `engine/runners.py` | Executes `python` (import + call, printout captured) and `shell` (subprocess) tasks |
 | `engine/scheduler.py` | Starts runs on their cron schedules: ticks every second, no catch-up, no overlap |
-| `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB. Delta tables (a folder with `_delta_log`) are tables of the schema named after their parent folder, read at their current version |
+| `api/sql.py` | Catalog listing, SQL queries, import and export over the data lake with DuckDB. Delta tables (a folder with `_delta_log`, at any depth under `data/`) are always one table each, read at their current version: the schema is their parent folder and the catalog the first folder in `data/` (`data/tenant1/lakehouse/bronze/accounts` is `tenant1.bronze.accounts`, as Spark registers it in Unity Catalog). When the data lake folder points inside a catalog (`PROOFLIX_DATA_LAKE=…/tenant1/lakehouse`), the catalog is the folder above it, so the names stay the same; only folder names are read there |
 | `clickhouse.py` | Copies a catalog table into ClickHouse over its HTTP interface: maps the columns to ClickHouse types (`Int64`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, ..., each `Nullable`), loads the rows as Parquet into a staging table and swaps it in (`EXCHANGE TABLES`) |
 | `auth.py` | Users (`PROOFLIX_HOME/users.json`, scrypt hashes), the password rules, signed session cookies, the lockout after wrong passwords, and which API paths each tab opens |
 | `api/auth.py` | Sign in and out, the first admin, changing your password, and the Users tab's routes |
@@ -389,6 +389,10 @@ The Ingestion tab runs jobs through `POST /api/ingestion/jobs/{id}/runs` (no dat
 | POST | `/api/sql/query` | `{sql, limit}` | `{columns, rows, row_count, truncated, elapsed_ms}`: one read-only `SELECT` |
 | POST | `/api/catalog/import` | `{schema, files, overwrite}` | Adds CSV or JSON files as Parquet tables |
 | GET | `/api/catalog/export?table=&schema=&format=` | | A table as CSV, or a ZIP (Parquet) of a table, a schema or the whole catalog |
+| DELETE | `/api/catalog/schemas/{schema}?mode=hide\|delete` | | Drops a schema. `hide`: the Catalog and the SQL Editor's table list stop showing it (its data stays and it can still be queried by name), saved in `<workspace>/.prooflix/catalog.json`. `delete`: permanently deletes the folder (or file) of each of its tables and the folders left empty; other files are kept and Unity Catalog is not touched. With `PROOFLIX_AUTH` on, `delete` is for admins only (403) |
+| DELETE | `/api/catalog/catalogs/{catalog}?mode=hide\|delete` | | Drops every schema of a catalog (a tenant such as `tenant1`) the same way; `delete` also removes the folders left empty up to the data lake folder. Returns the schemas and the deleted tables (qualified) |
+| GET | `/api/catalog/hidden` | | Names of the hidden schemas |
+| DELETE | `/api/catalog/hidden/{schema}` | | Shows a hidden schema again (204; 404 if it isn't hidden) |
 
 ### AI Assist
 

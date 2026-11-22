@@ -14,10 +14,13 @@ The catalog reads data lake files only (Parquet):
 A folder of Parquet files is one table (its files are read together), and a Parquet
 file directly in a schema's folder is a table of its own.
 
-Delta tables (a folder with a ``_delta_log``) anywhere under ``data/<catalog>/`` are
-tables of the schema named after their parent folder:
-``data/tenant1/lakehouse/bronze/accounts/`` is ``tenant1.bronze.accounts``. Only the
-files of their current version are read (see ``delta_log.py``), so overwritten rows
+Delta tables (a folder with a ``_delta_log``) anywhere under ``data/`` are tables of
+the schema named after their parent folder, in the catalog named after the first
+folder in ``data/``: ``data/tenant1/lakehouse/bronze/accounts/`` is
+``tenant1.bronze.accounts``, as in Unity Catalog. When ``data/`` points inside a
+catalog (at ``tenant1/lakehouse``), the catalog is the folder above (see
+``delta_location``). A Delta table's data files are never tables of their own; only
+the files of its current version are read (see ``delta_log.py``), so overwritten rows
 are not counted twice.
 
 Queries run in DuckDB, which reads the Parquet files directly: every table is a view
@@ -35,6 +38,7 @@ import datetime as dt
 import decimal
 import io
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -50,7 +54,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .. import delta_log
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -172,6 +176,7 @@ class _Table:
     row_count: int
     in_workspace: bool = True
     catalog: str = ""
+    path: Path | None = None  # the table's folder, or its file when it sits directly in the schema's folder
     columns: list[tuple[str, str]] = field(default_factory=list)  # (name, DuckDB type), filled by describe
 
     @property
@@ -197,6 +202,11 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
     - one per folder inside each folder of the workspace's ``data/`` folder: the outer
       folder is the catalog (a tenant ID), the inner one the schema (a layer), so
       ``data/tenant1/bronze/customers/`` is ``tenant1.bronze.customers``
+    - one per folder holding Delta tables, at any depth: the catalog and schema come
+      from the tables' location (``delta_location``), so
+      ``data/tenant1/lakehouse/bronze/accounts/`` is ``tenant1.bronze.accounts``, the
+      name Spark registers in Unity Catalog. A Delta table is always one table, never
+      a folder of Parquet files
     - one per project (a workspace folder with ``pipelines/``): its ``data/``
       folder, named after the project, so ``my-project/data/orders.parquet`` is
       ``my_project.orders``
@@ -222,23 +232,46 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
         return [f for f in sorted(parent.iterdir()) if f.is_dir() and not f.name.startswith((".", "_"))]
 
     if data.is_dir():
+        # Delta tables, at any depth: each one is a table of the schema named after its
+        # parent folder, in the catalog its location says (see delta_location)
+        delta_schemas: set[tuple[str, Path]] = set()  # (catalog folder name, schema folder)
+        for table in delta_tables(data, include_root=True):
+            where = delta_location(data, table)
+            if where is not None:
+                delta_schemas.add((where[0], table.parent))
+        delta_folders = {folder for _, folder in delta_schemas}
+
+        def has_delta(folder: Path) -> bool:
+            """folder is a Delta table, a Delta schema, or inside one of those."""
+            return delta_log.is_delta_table(folder) or any(folder.is_relative_to(f) for f in delta_folders)
+
+        catalogs: dict[str, str] = {}  # catalog folder name -> its SQL name
+        names: set[str] = set()
+
+        def catalog_of(folder_name: str) -> str:
+            if folder_name not in catalogs:
+                catalogs[folder_name] = unique(schema_name(folder_name))
+            return catalogs[folder_name]
+
+        def schema_named(cat: str, folder_name: str) -> str:
+            name = f"{cat}.{schema_name(folder_name)}"
+            while name in names:
+                name += "_"
+            names.add(name)
+            return name
+
+        # folders of Parquet files: data/<catalog>/<schema>/ (not Delta tables or their schemas)
         for catalog_folder in folders(data):
-            cat = unique(schema_name(catalog_folder.name))
-            delta_parents = sorted({t.parent for t in delta_tables(catalog_folder)})
-            names = set()
+            if has_delta(catalog_folder):
+                continue
+            cat = catalog_of(catalog_folder.name)
             for schema_folder in folders(catalog_folder):
-                if schema_folder in delta_parents:
+                if schema_folder in delta_folders or delta_log.is_delta_table(schema_folder):
                     continue  # its Delta tables are listed below
-                name = f"{cat}.{schema_name(schema_folder.name)}"
-                names.add(name)
-                out.append(_Schema(name, "workspace", "", schema_folder, catalog=cat))
-            # Delta tables: the schema is the folder holding them, at any depth
-            for parent in delta_parents:
-                name = f"{cat}.{schema_name(parent.name)}"
-                while name in names:
-                    name += "_"
-                names.add(name)
-                out.append(_Schema(name, "workspace", "", parent, catalog=cat, delta=True))
+                out.append(_Schema(schema_named(cat, schema_folder.name), "workspace", "", schema_folder, catalog=cat))
+        for catalog_folder_name, folder in sorted(delta_schemas, key=lambda cf: (cf[0], str(cf[1]))):
+            cat = catalog_of(catalog_folder_name)
+            out.append(_Schema(schema_named(cat, folder.name), "workspace", "", folder, catalog=cat, delta=True))
 
     for project in Workspace(root).projects():
         if project != root:
@@ -249,8 +282,9 @@ def schemas(paths: CatalogPaths) -> list[_Schema]:
     return out
 
 
-def delta_tables(folder: Path) -> list[Path]:
-    """Delta table folders under folder (not looking inside a table or hidden folders)."""
+def delta_tables(folder: Path, include_root: bool = False) -> list[Path]:
+    """Delta table folders under folder (not looking inside a table or hidden folders);
+    with include_root, folder itself when it is one."""
     out: list[Path] = []
 
     def walk(d: Path) -> None:
@@ -262,9 +296,35 @@ def delta_tables(folder: Path) -> list[Path]:
             else:
                 walk(child)
 
+    if include_root and delta_log.is_delta_table(folder):
+        return [folder]
     if folder.is_dir():
         walk(folder)
     return out
+
+
+def delta_location(data: Path, table: Path) -> tuple[str, str] | None:
+    """(catalog, schema) folder names of a Delta table found under the data lake folder.
+
+    The layout is ``<catalog>/[<folders>/]<schema>/<table>``, as Spark writes it:
+    ``data/tenant1/lakehouse/bronze/accounts`` is catalog ``tenant1``, schema
+    ``bronze``. The schema is always the table's parent folder; the catalog is the
+    first folder in the data lake folder. When the data lake folder points inside a
+    catalog (at ``tenant1/lakehouse`` or at a schema folder), the catalog is not in
+    it, so it is the folder above the schema's parent folder
+    (``<catalog>/<folder>/<schema>/<table>``), outside the data lake folder; only
+    folder names are read there. None for a data lake folder that is a table itself.
+    """
+    rel = table.relative_to(data).parts
+    if len(rel) >= 3:
+        return rel[0], table.parent.name
+    if not rel:
+        return None
+    schema_folder = table.parent.resolve()
+    above = schema_folder.parent.parent
+    if above == above.parent:  # no folder above (the file system's root)
+        return None
+    return above.name, schema_folder.name
 
 
 def _display_path(paths: CatalogPaths, path: Path, in_workspace: bool) -> str:
@@ -292,7 +352,11 @@ def find_tables(paths: CatalogPaths) -> list[_Table]:
         if sch.delta:
             tables += _delta_schema_tables(paths, sch)
             continue
-        inside_delta = {t for t in delta_tables(sch.data_dir)} if sch.recursive else set()
+        # a Delta table's files are read through its log, never as tables of their own
+        if sch.recursive:
+            inside_delta = set(delta_tables(sch.data_dir, include_root=True))
+        else:
+            inside_delta = {sch.data_dir} if delta_log.is_delta_table(sch.data_dir) else set()
         groups: dict[Path, list[tuple[Path, int]]] = {}
         found = sch.data_dir.rglob(f"*{DATA_SUFFIX}") if sch.recursive else sch.data_dir.glob(f"*{DATA_SUFFIX}")
         for path in sorted(found, key=lambda p: p.as_posix()):
@@ -318,6 +382,7 @@ def find_tables(paths: CatalogPaths) -> list[_Table]:
                     schema=sch.name,
                     name=name,
                     source=_display_path(paths, sch.data_dir / key, in_workspace),
+                    path=sch.data_dir / key,
                     files=[p for p, _ in files],
                     row_count=sum(r for _, r in files),
                     in_workspace=in_workspace,
@@ -345,6 +410,7 @@ def _delta_schema_tables(paths: CatalogPaths, sch: _Schema) -> list[_Table]:
                 schema=sch.name,
                 name=table_name(Path(folder.name)),
                 source=_display_path(paths, folder, True),
+                path=folder,
                 files=[f.path for f in files],
                 row_count=sum(rows),
                 in_workspace=True,
@@ -453,7 +519,10 @@ def _described_tables(paths: CatalogPaths) -> list[_Table]:
 
 @router.get("/tables", response_model=list[SqlTable], response_model_by_alias=True)
 def list_tables(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[SqlTable]:
-    return _describe(_described_tables(paths))
+    """The tables the SQL Editor lists: those of hidden schemas are left out (they can
+    still be queried by name)."""
+    hidden = set(hidden_schemas(paths))
+    return [t for t in _describe(_described_tables(paths)) if t.schema_name not in hidden]
 
 
 catalog_router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -461,10 +530,14 @@ catalog_router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
 @catalog_router.get("", response_model=list[CatalogSchema], response_model_by_alias=True)
 def catalog(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[CatalogSchema]:
-    """Schemas and their tables. Only schemas that have at least one table are listed."""
+    """Schemas and their tables. Only schemas that have at least one table are listed;
+    hidden schemas are left out (see ``GET /api/catalog/hidden``)."""
     described = _describe(_described_tables(paths))
+    hidden = set(hidden_schemas(paths))
     out = []
     for sch in schemas(paths):
+        if sch.name in hidden:
+            continue
         tables = [t for t in described if t.schema_name == sch.name]
         if not tables:
             continue
@@ -694,3 +767,190 @@ def import_tables(
         tables=sorted(names.values()),
         created_schema=created,
     )
+
+
+# ------------------------------------------------------------------ drop a schema
+# Dropping a schema either hides it (the GUI no longer lists it; its data stays in the
+# data lake and it can be restored) or deletes its tables' files permanently.
+HIDDEN_FILE = Path(".prooflix") / "catalog.json"  # {"hidden_schemas": ["tenant1.bronze", ...]}
+_hidden_lock = threading.Lock()
+
+
+def _hidden_file(paths: CatalogPaths) -> Path:
+    return paths.root / HIDDEN_FILE
+
+
+def hidden_schemas(paths: CatalogPaths) -> list[str]:
+    """Schemas the user hid from the GUI, for the active workspace."""
+    file = _hidden_file(paths)
+    if not file.is_file():
+        return []
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+        names = data.get("hidden_schemas", [])
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise ValueError
+    except (OSError, ValueError, AttributeError) as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Can't read {HIDDEN_FILE.as_posix()} in the workspace; fix or delete it",
+        ) from exc
+    return sorted(set(names))
+
+
+def _set_hidden(paths: CatalogPaths, name: str, hidden: bool) -> list[str]:
+    """Hide or show a schema (read-modify-write under one lock, written atomically)."""
+    with _hidden_lock:
+        names = set(hidden_schemas(paths))
+        names = names | {name} if hidden else names - {name}
+        file = _hidden_file(paths)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=file.parent, prefix=".catalog.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"hidden_schemas": sorted(names)}, fh, indent=2)
+            os.replace(tmp, file)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+        return sorted(names)
+
+
+def _require_admin_when_signed_in(request: Request) -> None:
+    """With PROOFLIX_AUTH on, only an admin may delete data (the middleware already
+    checked the user has the Catalog tab)."""
+    if not request.app.state.settings.auth:
+        return
+    user = getattr(request.state, "user", None)
+    if user is None or user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only an admin can delete a schema's data; ask an admin")
+
+
+def _delete_schema_tables(paths: CatalogPaths, sch: _Schema, tables: list[_Table]) -> list[str]:
+    """Delete each table's folder (or file) inside the schema's folder, then the
+    folders left empty. Other files in the schema's folder are kept."""
+    root = sch.data_dir.resolve()
+    targets = []
+    for t in tables:
+        if t.path is None:
+            continue
+        target = t.path
+        # never anything outside the schema's folder, nor the folder itself
+        if target.resolve() == root or not target.resolve().is_relative_to(root):
+            raise HTTPException(status.HTTP_409_CONFLICT, f"Table {t.qualified} is outside {sch.name}'s folder")
+        targets.append((t, target))
+    deleted = []
+    for t, target in targets:
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.is_dir():
+            shutil.rmtree(target)
+        deleted.append(t.name)
+    # folders left empty inside the schema's folder, deepest first
+    for folder in sorted((p for p in sch.data_dir.rglob("*") if p.is_dir() and not p.is_symlink()),
+                         key=lambda p: len(p.parts), reverse=True):
+        if not any(folder.iterdir()):
+            folder.rmdir()
+    # the schema's own folder, when it is only that schema's (not main or a project's data/)
+    if sch.name != MAIN and not sch.project and sch.data_dir.is_dir() and not any(sch.data_dir.iterdir()):
+        sch.data_dir.rmdir()
+        # and, for a schema in a catalog, the folders above it left empty, up to the data lake folder
+        data = (paths.root / "data").resolve()
+        folder = sch.data_dir.parent
+        while sch.catalog and folder.resolve().is_relative_to(data) and folder.resolve() != data:
+            if any(folder.iterdir()):
+                break
+            folder.rmdir()
+            folder = folder.parent
+    return sorted(deleted)
+
+
+class DropSchemaResult(BaseModel):
+    schema_name: str = Field(serialization_alias="schema")
+    mode: Literal["hide", "delete"]
+    deleted_tables: list[str]  # with mode=delete; [] when hidden
+
+
+@catalog_router.get("/hidden", response_model=list[str])
+def list_hidden(paths: CatalogPaths = Depends(get_catalog_paths)) -> list[str]:
+    """Hidden schemas that still exist (their data is still in the data lake)."""
+    existing = {sch.name for sch in schemas(paths)}
+    return [n for n in hidden_schemas(paths) if n in existing]
+
+
+@catalog_router.delete("/hidden/{schema}", status_code=status.HTTP_204_NO_CONTENT)
+def restore_schema(schema: str, paths: CatalogPaths = Depends(get_catalog_paths)) -> Response:
+    """Show a hidden schema in the GUI again."""
+    if schema not in hidden_schemas(paths):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Schema '{schema}' is not hidden")
+    _set_hidden(paths, schema, False)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@catalog_router.delete("/schemas/{schema}", response_model=DropSchemaResult, response_model_by_alias=True)
+def drop_schema(
+    schema: str,
+    request: Request,
+    mode: Literal["hide", "delete"] = Query(..., description="hide: only from the GUI; delete: its tables' files"),
+    paths: CatalogPaths = Depends(get_catalog_paths),
+) -> DropSchemaResult:
+    """Drop a schema from the catalog.
+
+    ``mode=hide`` leaves the data lake as it is: the Catalog and the SQL Editor's table
+    list stop showing the schema (it can still be queried by name) until it is restored
+    with ``DELETE /api/catalog/hidden/{schema}``. ``mode=delete`` permanently deletes
+    the folder (or file) of every table in the schema, then the folders left empty;
+    admins only when users are on. Unity Catalog registrations are not touched.
+    """
+    sch = next((s for s in schemas(paths) if s.name == schema), None)
+    tables = [t for t in find_tables(paths) if t.schema == schema]
+    if sch is None or not tables:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Schema '{schema}' not found")
+    if mode == "hide":
+        _set_hidden(paths, schema, True)
+        return DropSchemaResult(schema_name=schema, mode="hide", deleted_tables=[])
+    _require_admin_when_signed_in(request)
+    deleted = _delete_schema_tables(paths, sch, tables)
+    if schema in hidden_schemas(paths):
+        _set_hidden(paths, schema, False)
+    return DropSchemaResult(schema_name=schema, mode="delete", deleted_tables=deleted)
+
+
+class DropCatalogResult(BaseModel):
+    catalog: str
+    mode: Literal["hide", "delete"]
+    schemas: list[str]  # the catalog's schemas that were hidden or deleted
+    deleted_tables: list[str]  # with mode=delete, qualified ("tenant1.bronze.accounts"); [] when hidden
+
+
+@catalog_router.delete("/catalogs/{catalog}", response_model=DropCatalogResult)
+def drop_catalog(
+    catalog: str,
+    request: Request,
+    mode: Literal["hide", "delete"] = Query(..., description="hide: only from the GUI; delete: its tables' files"),
+    paths: CatalogPaths = Depends(get_catalog_paths),
+) -> DropCatalogResult:
+    """Drop every schema of a catalog (a tenant such as ``tenant1``), as
+    ``DELETE /api/catalog/schemas/{schema}`` does for one: ``mode=hide`` hides each
+    schema that has tables; ``mode=delete`` (admins only when users are on) deletes
+    their tables' files, then the folders left empty up to the data lake folder.
+    """
+    tables = find_tables(paths)
+    picked = [(sch, [t for t in tables if t.schema == sch.name]) for sch in schemas(paths) if sch.catalog == catalog]
+    picked = [(sch, ts) for sch, ts in picked if ts]
+    if not picked:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Catalog '{catalog}' not found")
+    names = [sch.name for sch, _ in picked]
+    if mode == "hide":
+        for name in names:
+            _set_hidden(paths, name, True)
+        return DropCatalogResult(catalog=catalog, mode="hide", schemas=names, deleted_tables=[])
+    _require_admin_when_signed_in(request)
+    deleted: list[str] = []
+    for sch, ts in picked:
+        deleted += [f"{sch.name}.{name}" for name in _delete_schema_tables(paths, sch, ts)]
+    hidden = set(hidden_schemas(paths))
+    for name in names:
+        if name in hidden:
+            _set_hidden(paths, name, False)
+    return DropCatalogResult(catalog=catalog, mode="delete", schemas=names, deleted_tables=deleted)
