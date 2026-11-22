@@ -269,3 +269,36 @@ def test_follow_up_questions_about_a_failed_run(client, fake):
     c.post("/api/auth/logout")
     c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
     assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 403
+
+
+def test_general_questions_from_any_screen(client, fake):
+    c = client
+    body = {"question": "What is a schema?", "page": "Catalog (/catalog)"}
+    assert c.post("/api/ai-assist/ask", json=body).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = RunReply(answer=" A folder of tables. ")
+
+    r = c.post("/api/ai-assist/ask", json=body)
+    assert r.status_code == 200 and r.json()["answer"] == "A folder of tables."
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user"]
+    assert "<screen>Catalog (/catalog)</screen>" in msgs[0]["content"] and "error_on_screen" not in msgs[0]["content"]
+
+    # the screen's error goes along, masked; earlier turns come first
+    body = {"question": "Why?", "page": "System (/system)", "error": "Could not save: password=hunter2xyz rejected",
+            "turns": [{"question": "Hi", "answer": "Hello"}]}
+    assert c.post("/api/ai-assist/ask", json=body).status_code == 200
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert "Could not save" in msgs[2]["content"] and "hunter2xyz" not in str(msgs)
+    assert "<screen>System (/system)</screen>" in msgs[2]["content"]
+
+    assert c.post("/api/ai-assist/ask", json={"question": " "}).status_code == 422
+    assert c.post("/api/ai-assist/ask", json={"question": "x" * 2001}).status_code == 413
+
+    # any signed-in user may ask, whatever their tabs
+    c.post("/api/users", json={"username": "sam", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/auth/logout")
+    assert c.post("/api/ai-assist/ask", json={"question": "Hi"}).status_code == 401
+    c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
+    assert c.post("/api/ai-assist/ask", json={"question": "Hi"}).status_code == 200

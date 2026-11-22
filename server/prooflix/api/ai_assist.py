@@ -100,6 +100,26 @@ class RunQuestionIn(BaseModel):
     turns: list[RunTurn] = Field(default_factory=list, max_length=100)  # earlier questions and answers
 
 
+class GeneralQuestionIn(BaseModel):
+    question: str = Field(..., min_length=1)
+    page: str = Field("", max_length=ai_assist.MAX_PAGE)  # the screen asked from, e.g. "Catalog (/catalog)"
+    error: str = ""  # the error the screen shows, if any
+    turns: list[RunTurn] = Field(default_factory=list, max_length=100)
+
+
+@router.post("/ask")
+def ask_general(body: GeneralQuestionIn, request: Request) -> dict:
+    """A question from the AI Assist panel on any screen (any signed-in user): the screen's
+    name, the error it shows and the earlier questions and answers go with it, secrets
+    masked. No data, files or runs are sent; nothing is changed or run."""
+    try:
+        return ai_assist.ask_general(
+            _store(request).get(), body.page, body.error, [t.model_dump() for t in body.turns], body.question
+        )
+    except AiAssistError as e:
+        raise _fail(e) from None
+
+
 @router.post("/runs/{run_id}/ask")
 def ask_about_run(
     run_id: str, body: RunQuestionIn, request: Request, store: RunStore = Depends(get_store)

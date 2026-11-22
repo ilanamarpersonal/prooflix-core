@@ -1,14 +1,32 @@
 import { AlertCircle, Check, Copy } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import { useAiAssistDock } from "@/components/ai-assist-dock"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { ApiError } from "@/lib/api"
 
-export function ErrorAlert({ title = "Something went wrong", error }: { title?: string; error: unknown }) {
+/**
+ * An error shown on a screen. It is also offered to AI Assist, which opens on the right with an offer to
+ * explain it (once per error and screen); assist={false} for AI Assist's own errors.
+ */
+export function ErrorAlert({
+  title = "Something went wrong",
+  error,
+  assist = true,
+}: {
+  title?: string
+  error: unknown
+  assist?: boolean
+}) {
   const messages =
     error instanceof ApiError && error.errors.length
       ? error.errors
       : [error instanceof Error ? error.message : String(error)]
+  const { reportError } = useAiAssistDock()
+  const text = messages.join("\n")
+  useEffect(() => {
+    if (assist) reportError({ title, messages: text.split("\n") })
+  }, [assist, title, text, reportError])
   return (
     <Alert variant="destructive" className="pr-12">
       <AlertCircle />

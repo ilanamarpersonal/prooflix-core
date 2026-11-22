@@ -6,6 +6,7 @@ import { ChevronDown, Loader2, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun 
 import prooflixLogo from "@/assets/prooflix-logo.svg"
 import prooflixLogoDark from "@/assets/prooflix-logo-dark.svg"
 import { LoginPage } from "@/components/auth/login-page"
+import { AiAssistDockPanel, AiAssistDockProvider, AiAssistToggle } from "@/components/ai-assist-dock"
 import { CommandPalette } from "@/components/command-palette"
 import { UserMenu } from "@/components/auth/user-menu"
 import { ErrorAlert } from "@/components/error-alert"
@@ -93,78 +94,88 @@ function Shell({ sections, user }: { sections: Section[]; user: AppUser | null }
   }, [])
 
   return (
-    <div className="flex min-h-svh flex-col">
-      {/* full-width top bar: logo, search, user */}
-      <header className="bg-background sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b px-4">
-        <div className="mr-2 flex shrink-0 items-center">
-          {/* the wordmark's navy letters, swapped for light ones in dark mode */}
-          <img src={prooflixLogo} alt="Prooflix" width={105} height={24} className="h-6 w-auto dark:hidden" />
-          <img src={prooflixLogoDark} alt="Prooflix" width={105} height={24} className="hidden h-6 w-auto dark:block" />
-        </div>
-        {/* on small screens the menu sits in the top bar, as icons */}
-        <nav className="flex items-center gap-0.5 overflow-x-auto md:hidden" aria-label="Sections">
-          {sections.map(({ id, label, icon, color }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => tabs.select(id)}
-              aria-label={label}
-              title={label}
-              aria-current={tabs.active === id ? "page" : undefined}
-              className={cn("rounded-md p-1.5", tabs.active === id && "bg-accent")}
-            >
-              <IconTile icon={icon} color={color} />
-            </button>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-2">
-          <SearchButton onClick={() => setPaletteOpen(true)} />
-          {user && <UserMenu user={user} />}
-          <div className="md:hidden">
-            <ThemeToggle compact />
+    <AiAssistDockProvider>
+      <div className="flex min-h-svh flex-col">
+        {/* full-width top bar: logo, search, user */}
+        <header className="bg-background sticky top-0 z-40 flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <div className="mr-2 flex shrink-0 items-center">
+            {/* the wordmark's navy letters, swapped for light ones in dark mode */}
+            <img src={prooflixLogo} alt="Prooflix" width={105} height={24} className="h-6 w-auto dark:hidden" />
+            <img
+              src={prooflixLogoDark}
+              alt="Prooflix"
+              width={105}
+              height={24}
+              className="hidden h-6 w-auto dark:block"
+            />
           </div>
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        <aside
-          className={cn(
-            "bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-14 hidden h-[calc(100svh-3.5rem)] shrink-0 flex-col border-r pt-3 transition-[width] md:flex",
-            collapsed ? "w-14" : "w-56",
-          )}
-        >
-          <SideNav sections={sections} active={tabs.active} collapsed={collapsed} onSelect={tabs.select} />
-          <div className={cn("mt-auto grid gap-1 p-2", collapsed && "justify-items-center")}>
-            <ThemeToggle compact={collapsed} />
-            <Button
-              variant="ghost"
-              size={collapsed ? "icon" : "sm"}
-              onClick={toggleCollapsed}
-              className={collapsed ? "" : "w-full justify-start"}
-              aria-label={collapsed ? "Expand the menu" : "Collapse the menu"}
-              title={collapsed ? "Expand the menu" : "Collapse the menu"}
-            >
-              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-              {!collapsed && "Collapse"}
-            </Button>
+          {/* on small screens the menu sits in the top bar, as icons */}
+          <nav className="flex items-center gap-0.5 overflow-x-auto md:hidden" aria-label="Sections">
+            {sections.map(({ id, label, icon, color }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => tabs.select(id)}
+                aria-label={label}
+                title={label}
+                aria-current={tabs.active === id ? "page" : undefined}
+                className={cn("rounded-md p-1.5", tabs.active === id && "bg-accent")}
+              >
+                <IconTile icon={icon} color={color} />
+              </button>
+            ))}
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <AiAssistToggle />
+            <SearchButton onClick={() => setPaletteOpen(true)} />
+            {user && <UserMenu user={user} />}
+            <div className="md:hidden">
+              <ThemeToggle compact />
+            </div>
           </div>
-        </aside>
+        </header>
 
-        <main className="w-full min-w-0 flex-1 p-4 md:p-6">
-          {sections.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              No tabs have been given to your account yet. Ask an admin to choose the tabs you can see.
-            </p>
-          ) : tabs.active && sections.some((s) => s.id === tabs.active) ? (
-            <Outlet />
-          ) : (
-            // the start page is the first section the user has (Pipelines when they have it)
-            <Navigate to={sections[0].home} replace />
-          )}
-        </main>
+        <div className="flex min-h-0 flex-1">
+          <aside
+            className={cn(
+              "bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-14 hidden h-[calc(100svh-3.5rem)] shrink-0 flex-col border-r pt-3 transition-[width] md:flex",
+              collapsed ? "w-14" : "w-56",
+            )}
+          >
+            <SideNav sections={sections} active={tabs.active} collapsed={collapsed} onSelect={tabs.select} />
+            <div className={cn("mt-auto grid gap-1 p-2", collapsed && "justify-items-center")}>
+              <ThemeToggle compact={collapsed} />
+              <Button
+                variant="ghost"
+                size={collapsed ? "icon" : "sm"}
+                onClick={toggleCollapsed}
+                className={collapsed ? "" : "w-full justify-start"}
+                aria-label={collapsed ? "Expand the menu" : "Collapse the menu"}
+                title={collapsed ? "Expand the menu" : "Collapse the menu"}
+              >
+                {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+                {!collapsed && "Collapse"}
+              </Button>
+            </div>
+          </aside>
+
+          <main className="w-full min-w-0 flex-1 p-4 md:p-6">
+            {sections.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No tabs have been given to your account yet. Ask an admin to choose the tabs you can see.
+              </p>
+            ) : tabs.active && sections.some((s) => s.id === tabs.active) ? (
+              <Outlet />
+            ) : (
+              // the start page is the first section the user has (Pipelines when they have it)
+              <Navigate to={sections[0].home} replace />
+            )}
+          </main>
+          <AiAssistDockPanel />
+        </div>
+        {paletteOpen && <CommandPalette sections={sections} user={user} onClose={() => setPaletteOpen(false)} />}
       </div>
-      {paletteOpen && <CommandPalette sections={sections} user={user} onClose={() => setPaletteOpen(false)} />}
-    </div>
+    </AiAssistDockProvider>
   )
 }
 

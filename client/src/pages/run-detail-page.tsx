@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link, Navigate, useNavigate, useParams } from "react-router"
 import { ArrowUpRight, FileCode2, List, PanelRightOpen, RotateCw, ScrollText, Square, Workflow } from "lucide-react"
 
+import { AiAssistSlot, useAiAssistDock } from "@/components/ai-assist-dock"
 import { AiAssistRunPanel } from "@/components/ai-assist-run-panel"
 import { ErrorAlert } from "@/components/error-alert"
 import { KeyValues } from "@/components/key-values"
@@ -15,15 +16,7 @@ import { TaskRunPanel } from "@/components/task-run-panel"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  useAiAssistStatus,
-  useAuthStatus,
-  useCancelRun,
-  usePipeline,
-  usePipelines,
-  useRunTree,
-  useStartRun,
-} from "@/lib/api"
+import { useCancelRun, usePipeline, usePipelines, useRunTree, useStartRun } from "@/lib/api"
 import { TERMINAL_STATUSES, type GraphEdge, type GraphNode, type RunStatus } from "@/lib/types"
 import { formatDateTime, formatDuration } from "@/lib/utils"
 
@@ -37,11 +30,13 @@ export function RunDetailPage() {
   const pipelines = usePipelines()
   // the pipeline's definition, for each python task's source file
   const definition = usePipeline(run?.pipeline ?? "")
-  // AI Assist offers to explain a failed run: shown on its own, hidden with its arrow or "Not now"
-  const aiAssist = useAiAssistStatus()
-  const auth = useAuthStatus()
-  const canSetUp = auth.data ? !auth.data.enabled || auth.data.user?.role === "admin" : false
-  const [assistHiddenFor, setAssistHiddenFor] = useState<string | null>(null)
+  // AI Assist offers to explain a failed run, in the panel on the right, which opens by itself when the run fails
+  const dock = useAiAssistDock()
+  const failed = run?.status === "FAILED"
+  const { popUp } = dock
+  useEffect(() => {
+    if (failed) popUp()
+  }, [failed, run?.id, popUp])
 
   const graph = useMemo(() => {
     const tasks = Object.values(run?.tasks ?? {})
@@ -76,11 +71,7 @@ export function RunDetailPage() {
     tasks[0]?.key ??
     null
   const selected = picked ? run.tasks[picked] : undefined
-  const aiAssistReady = !!aiAssist.data?.ready
-  const showAssist =
-    run.status === "FAILED" &&
-    assistHiddenFor !== run.id &&
-    (aiAssistReady || (canSetUp && aiAssist.data?.enabled !== false))
+  const showAssist = run.status === "FAILED" && dock.available
 
   // A task's links: its source code, its sub-run and the pipeline it calls.
   const taskLinks = (key: string): TaskAction[] => {
@@ -178,6 +169,17 @@ export function RunDetailPage() {
         }
       />
 
+      {showAssist && (
+        <AiAssistSlot>
+          <AiAssistRunPanel
+            key={run.id}
+            runId={run.id}
+            ready={dock.ready}
+            canSetUp={dock.canSetUp}
+            onClose={() => dock.setOpen(false)}
+          />
+        </AiAssistSlot>
+      )}
       <div className="mb-4 grid gap-4">
         {cancel.error && <ErrorAlert title="Could not stop" error={cancel.error} />}
         {rerun.error && <ErrorAlert title="Could not start the run" error={rerun.error} />}
@@ -223,15 +225,6 @@ export function RunDetailPage() {
         </div>
 
         <div className="grid min-w-0 content-start gap-4">
-          {showAssist && (
-            <AiAssistRunPanel
-              key={run.id}
-              runId={run.id}
-              ready={aiAssistReady}
-              canSetUp={canSetUp}
-              onClose={() => setAssistHiddenFor(run.id)}
-            />
-          )}
           <Card className="gap-3">
             <CardHeader>
               <CardTitle className="text-sm">Run hierarchy</CardTitle>

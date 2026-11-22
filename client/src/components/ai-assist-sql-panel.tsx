@@ -66,13 +66,9 @@ export function AiAssistSqlPanel({
   const answer = fix.data
 
   return (
-    // on wide screens a column next to the editor; on narrower ones it slides over from the right
-    <div className="fixed inset-y-0 right-0 z-40 w-full max-w-sm p-3 xl:static xl:z-auto xl:max-w-none xl:p-0 xl:pl-4">
-      <Card
-        aria-label="AI Assist"
-        className="flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0 shadow-xl xl:shadow-none"
-        data-ai-assist-panel
-      >
+    // shown in the AI Assist panel on the right of the screen (AiAssistSlot)
+    <div className="flex flex-1 flex-col">
+      <Card aria-label="AI Assist" className="flex flex-1 flex-col gap-0 overflow-hidden py-0" data-ai-assist-panel>
         <div className="flex items-center gap-2 border-b px-3 py-2.5">
           <AiAssistIcon className="size-5" />
           <span className="flex-1 text-sm font-semibold">AI Assist</span>
@@ -134,7 +130,7 @@ export function AiAssistSqlPanel({
             </div>
           ) : fix.error ? (
             <div className="grid gap-3">
-              <ErrorAlert title="AI Assist couldn't answer" error={fix.error} />
+              <ErrorAlert title="AI Assist couldn't answer" error={fix.error} assist={false} />
               <Button size="sm" variant="outline" className="justify-self-start" onClick={ask}>
                 <RotateCcw /> Try again
               </Button>

@@ -197,6 +197,11 @@ export const api = {
     request<{ ok: boolean; model: string; display_name: string }>("/ai-assist/settings/test", { method: "POST" }),
   aiAssistRunHelp: (runId: string) =>
     request<AiAssistRunHelp>(`/ai-assist/runs/${encodeURIComponent(runId)}/explain`, { method: "POST" }),
+  aiAssistAsk: (question: string, page: string, error: string, turns: AiAssistRunTurn[]) =>
+    request<AiAssistRunReply>("/ai-assist/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, page, error, turns }),
+    }),
   aiAssistRunAsk: (runId: string, question: string, explanation: AiAssistRunHelp | null, turns: AiAssistRunTurn[]) =>
     request<AiAssistRunReply>(`/ai-assist/runs/${encodeURIComponent(runId)}/ask`, {
       method: "POST",
@@ -484,6 +489,22 @@ export function useSaveAiAssistSettings() {
 }
 export const useTestAiAssist = () => useMutation({ mutationFn: api.testAiAssist })
 export const useAiAssistRunHelp = () => useMutation({ mutationFn: api.aiAssistRunHelp })
+/** A question from the AI Assist panel on any screen, with the screen's name and the error it shows. */
+export const useAiAssistAsk = () =>
+  useMutation({
+    mutationFn: ({
+      question,
+      page,
+      error,
+      turns,
+    }: {
+      question: string
+      page: string
+      error: string
+      turns: AiAssistRunTurn[]
+    }) => api.aiAssistAsk(question, page, error, turns),
+  })
+
 /** A follow-up question about a failed run, with its explanation and the earlier questions and answers. */
 export const useAiAssistRunAsk = () =>
   useMutation({

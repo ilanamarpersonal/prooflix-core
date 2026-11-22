@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 import {
-  ChevronLeft,
   ChevronRight,
   Download,
   FolderOpen,
@@ -18,7 +17,7 @@ import {
   X,
 } from "lucide-react"
 
-import { AiAssistIcon } from "@/components/ai-assist-icon"
+import { AiAssistSlot, useAiAssistDock } from "@/components/ai-assist-dock"
 import { AiAssistSqlPanel, type SqlFailure } from "@/components/ai-assist-sql-panel"
 import { DataGrid } from "@/components/data-grid"
 import { ErrorAlert } from "@/components/error-alert"
@@ -27,7 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
-import { ApiError, useAuthStatus, useAiAssistStatus, useSqlQuery, useSqlTables } from "@/lib/api"
+import { ApiError, useSqlQuery, useSqlTables } from "@/lib/api"
 import { caretPosition, completeAt, type Completion, type Suggestion } from "@/lib/sql-completion"
 import type { SqlResult, SqlTable } from "@/lib/types"
 import { useFillHeight } from "@/lib/use-fill-height"
@@ -74,16 +73,6 @@ function saveEditorHeight(h: number) {
     localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(h)))
   } catch {
     /* storage unavailable */
-  }
-}
-
-const ASSIST_OPEN_KEY = "prooflix-sql-ai-assist-open" // the user's choice to show the AI Assist panel; a failed query opens it too
-
-function loadAssistOpen() {
-  try {
-    return localStorage.getItem(ASSIST_OPEN_KEY) === "1" // hidden unless the user showed it
-  } catch {
-    return false
   }
 }
 
@@ -192,21 +181,10 @@ export function SqlEditorPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const editorApi = useRef<EditorApi | null>(null)
-  // AI Assist: the last failed query, offered for a suggested fix in the panel on the right
-  const aiAssist = useAiAssistStatus()
-  const auth = useAuthStatus()
-  const canSetUp = auth.data ? !auth.data.enabled || auth.data.user?.role === "admin" : false
+  // AI Assist: the last failed query, offered for a suggested fix in the AI Assist panel on the right
+  const dock = useAiAssistDock()
   const [failure, setFailure] = useState<SqlFailure | null>(null)
   const [fixRan, setFixRan] = useState(false)
-  const [assistOpen, setAssistOpenState] = useState(loadAssistOpen)
-  const setAssistOpen = (open: boolean) => {
-    setAssistOpenState(open)
-    try {
-      localStorage.setItem(ASSIST_OPEN_KEY, open ? "1" : "0")
-    } catch {
-      /* storage unavailable */
-    }
-  }
   const pendingFix = useRef<string | null>(null)
   // On md+ screens the schemas and the editor column fill the window; the
   // divider splits the column between the editor and the results.
@@ -237,11 +215,7 @@ export function SqlEditorPage() {
   }, [state])
 
   const active = state.tabs.find((t) => t.id === state.active) ?? state.tabs[0]
-  const aiAssistReady = !!aiAssist.data?.ready
-  // offered to anyone when it's set up, and to admins so they can set it up
-  const assistAvailable = aiAssistReady || (canSetUp && aiAssist.data?.enabled !== false)
   const tabFailure = failure && failure.tabId === active.id ? failure : null
-  const showPanel = assistAvailable && assistOpen
 
   const onQueryDone = (tabId: string, sql: string, error: unknown) => {
     if (error) {
@@ -250,8 +224,8 @@ export function SqlEditorPage() {
       pendingFix.current = null
       setFixRan(false)
       setFailure((prev) => ({ id: (prev?.id ?? 0) + 1, tabId, sql, error: text }))
-      // a failed query opens the panel with the offer (for this visit; nothing is sent until the user agrees)
-      setAssistOpenState(true)
+      // a failed query opens the panel with the offer (nothing is sent until the user agrees)
+      dock.popUp()
     } else if (pendingFix.current !== null && pendingFix.current === sql) {
       pendingFix.current = null
       setFixRan(true)
@@ -315,14 +289,7 @@ export function SqlEditorPage() {
             "--schemas-w": `${schemasWidth}px`,
           } as React.CSSProperties
         }
-        className={cn(
-          "grid items-start gap-4 md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0",
-          showPanel
-            ? "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] xl:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)_minmax(20rem,26rem)]"
-            : assistAvailable
-              ? "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)_auto]"
-              : "md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)]",
-        )}
+        className="grid items-start gap-4 md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0"
       >
         <TableList
           tables={tables.data}
@@ -362,39 +329,22 @@ export function SqlEditorPage() {
             onQueryDone={(sql, error) => onQueryDone(active.id, sql, error)}
           />
         </div>
-        {assistAvailable && !showPanel && (
-          // the AI Assist panel is hidden: a small tab on the right edge opens it
-          <button
-            type="button"
-            onClick={() => setAssistOpen(true)}
-            title="Show AI Assist"
-            aria-label="Show AI Assist"
-            className="bg-card text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring relative flex flex-col items-center gap-1 self-start rounded-md border px-1 py-1.5 shadow-xs transition-colors focus-visible:ring-2 focus-visible:outline-none max-md:fixed max-md:top-1/2 max-md:right-0 max-md:z-30 max-md:rounded-r-none md:ml-2"
-          >
-            <ChevronLeft className="size-3.5" />
-            <AiAssistIcon className="size-4" />
-            {tabFailure && (
-              <span
-                aria-label="a query failed"
-                className="bg-destructive ring-background absolute -top-1 -left-1 size-2.5 rounded-full ring-2"
-              />
-            )}
-          </button>
-        )}
-        {showPanel && (
-          <AiAssistSqlPanel
-            failure={tabFailure}
-            ready={aiAssistReady}
-            canSetUp={canSetUp}
-            fixRan={fixRan}
-            onRun={(sql) => {
-              pendingFix.current = sql
-              editorApi.current?.runSql(sql)
-            }}
-            onPaste={(sql) => editorApi.current?.setSql(sql)}
-            onDismiss={() => setFailure(null)}
-            onClose={() => setAssistOpen(false)}
-          />
+        {dock.available && (
+          <AiAssistSlot>
+            <AiAssistSqlPanel
+              failure={tabFailure}
+              ready={dock.ready}
+              canSetUp={dock.canSetUp}
+              fixRan={fixRan}
+              onRun={(sql) => {
+                pendingFix.current = sql
+                editorApi.current?.runSql(sql)
+              }}
+              onPaste={(sql) => editorApi.current?.setSql(sql)}
+              onDismiss={() => setFailure(null)}
+              onClose={() => dock.setOpen(false)}
+            />
+          </AiAssistSlot>
         )}
       </div>
     </>

@@ -63,7 +63,7 @@ export function AiAssistRunPanel({
   }
 
   return (
-    <Card aria-label="AI Assist" className="gap-0 overflow-hidden py-0" data-ai-assist-panel>
+    <Card aria-label="AI Assist" className="flex-1 gap-0 overflow-hidden py-0" data-ai-assist-panel>
       <div className="flex items-center gap-2 border-b px-3 py-2.5">
         <AiAssistIcon className="size-5" />
         <span className="flex-1 text-sm font-semibold">AI Assist</span>
@@ -79,7 +79,8 @@ export function AiAssistRunPanel({
         </Button>
       </div>
 
-      <div className="grid gap-4 p-3 text-sm">
+      {/* the question box sits at the bottom of the panel */}
+      <div className="flex flex-1 flex-col gap-4 p-3 text-sm">
         {!ready ? (
           <div className="grid gap-2">
             <p>The run failed. AI Assist can explain why and how to fix it, but it isn't set up yet.</p>
@@ -118,7 +119,7 @@ export function AiAssistRunPanel({
           </div>
         ) : help.error ? (
           <div className="grid gap-3">
-            <ErrorAlert title="AI Assist couldn't answer" error={help.error} />
+            <ErrorAlert title="AI Assist couldn't answer" error={help.error} assist={false} />
             <Button size="sm" variant="outline" className="justify-self-start" onClick={ask}>
               <RotateCcw /> Try again
             </Button>
@@ -192,11 +193,11 @@ export function AiAssistRunPanel({
                 )}
               </section>
             )}
-            {followUp.error && <ErrorAlert title="AI Assist couldn't answer" error={followUp.error} />}
+            {followUp.error && <ErrorAlert title="AI Assist couldn't answer" error={followUp.error} assist={false} />}
             <div ref={end} />
 
             <form
-              className="grid gap-2 border-t pt-3"
+              className="mt-auto grid gap-2 border-t pt-3"
               onSubmit={(e) => {
                 e.preventDefault()
                 send()

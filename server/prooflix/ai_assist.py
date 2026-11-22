@@ -479,3 +479,55 @@ def ask_about_run(s: Settings, tree: dict, explanation: dict | None, turns: list
     response = _ask(client, s, RUN_FOLLOW_UP_SYSTEM, merged[-1]["content"], RunReply, history=merged[:-1])
     reply: RunReply = response.parsed_output
     return {"answer": reply.answer.strip(), "model": response.model}
+
+
+# ------------------------------------------------------------------ general questions, from any screen
+GENERAL_SYSTEM = """You are AI Assist, the assistant built into Prooflix, a data platform. \
+Prooflix orchestrates pipelines (DAGs of Python, shell and sub-pipeline tasks) whose data \
+work runs in Spark, writing Delta tables registered in Unity Catalog (catalog = tenant, \
+schemas bronze, silver, gold). Its screens: Pipelines (pipelines, runs, Run with \
+parameters), Ingestion (jobs copying source databases into bronze), Workspace (the \
+project files), SQL Editor (read-only DuckDB SQL over the data lake), Catalog (catalogs, \
+schemas and tables; import, export, drop), Semantic model, ClickHouse (copies of gold \
+tables), Alerts, System (server parameters), Users and AI Assist (admins).
+
+The user asks from one of these screens; you get which one and, when the screen shows \
+an error, its text. Answer questions about using Prooflix, about that error, and about \
+the data engineering it does (SQL, Spark, Delta, Unity Catalog). You can't see their \
+data or files and can't change or run anything: tell the user what to do and where. \
+Don't invent settings, screens or commands you have no evidence for; when unsure, say \
+what to check. Politely decline unrelated requests. Write short and plain, no preamble."""
+
+MAX_PAGE = 200  # characters naming the screen
+
+
+def ask_general(s: Settings, page: str, error: str, turns: list[dict], question: str) -> dict:
+    """Answer a question asked from the AI Assist panel of any screen: the screen's name,
+    the error it shows (if any), the earlier questions and answers (from the browser,
+    shown back only to the same user) and the question, secret-looking values masked.
+    Nothing is changed or run here."""
+    question = question.strip()
+    if not question:
+        raise AiAssistError("Type a question first", 422)
+    if len(question) > MAX_QUESTION:
+        raise AiAssistError(f"The question is too long ({MAX_QUESTION:,} characters at most)", 413)
+    if len(error) > MAX_TEXT:
+        raise AiAssistError("The error is too long to send (100,000 characters at most)", 413)
+    turns = turns[-MAX_TURNS:]
+    if sum(len(t.get("question", "")) + len(t.get("answer", "")) for t in turns) > MAX_TEXT:
+        raise AiAssistError("The conversation is too long; reload the page to start a new one", 413)
+    context = f"<screen>{page.strip()[:MAX_PAGE] or 'unknown'}</screen>"
+    if error.strip():
+        context += f"\n<error_on_screen>\n{_redact(error.strip())}\n</error_on_screen>"
+    messages: list[dict] = []
+    for i, t in enumerate(turns):
+        q = _redact(t.get("question", ""))
+        messages.append({"role": "user", "content": f"{context}\n\n{q}" if i == 0 else q})
+        messages.append({"role": "assistant", "content": t.get("answer", "") or "(no answer)"})
+    prompt = _redact(question) if turns else f"{context}\n\n{_redact(question)}"
+    if turns:  # the screen may have changed since the first question: say where the user is now
+        prompt = f"{context}\n\n{prompt}"
+    client = _client(s)
+    response = _ask(client, s, GENERAL_SYSTEM, prompt, RunReply, history=messages)
+    reply: RunReply = response.parsed_output
+    return {"answer": reply.answer.strip(), "model": response.model}
