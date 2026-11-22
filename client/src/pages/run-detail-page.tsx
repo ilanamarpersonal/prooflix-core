@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Link, Navigate, useNavigate, useParams } from "react-router"
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
 import { ArrowUpRight, FileCode2, List, PanelRightOpen, RotateCw, ScrollText, Square, Workflow } from "lucide-react"
 
 import { AiAssistSlot, useAiAssistDock } from "@/components/ai-assist-dock"
@@ -40,7 +40,9 @@ export function RunDetailPage() {
   const { data: run, isLoading, error } = useRunTree(runId)
   const cancel = useCancelRun()
   const rerun = useStartRun()
-  const [picked, setPicked] = useState<string | null>(null)
+  // ?task=<key> (the runs list's "Show error") opens with that task's printout and error shown
+  const [searchParams] = useSearchParams()
+  const [picked, setPicked] = useState<string | null>(searchParams.get("task"))
   // the side column's width (run hierarchy, parameters, outputs), set with the divider, remembered in the browser
   const [sideWidth, setSideWidth] = useState(loadSideWidth)
   const resizeSide = (w: number, save = false) => {

@@ -90,8 +90,8 @@ export function DropSchemaPanel({
   }
 
   return (
-    <Card className="border-destructive/40 m-4 gap-0 py-4">
-      <CardContent className="grid gap-4 px-4">
+    <Card className="border-destructive/40 m-4 min-w-0 gap-0 py-4">
+      <CardContent className="grid min-w-0 gap-4 px-4 [overflow-wrap:anywhere]">
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="font-medium">
@@ -153,6 +153,14 @@ export function DropSchemaPanel({
                     </span>
                   ))}
                   . Other files in those folders are kept. Tables registered in Unity Catalog stay registered there.
+                </p>
+                <p className="mt-2">
+                  <strong>Pipelines that stream from these tables will fail</strong> until their streaming checkpoints
+                  are deleted too: their next run re-creates the tables empty, and a stream reading them stops on
+                  <code className="font-mono break-all">DIFFERENT_DELTA_TABLE_READ_BY_STREAMING_SOURCE</code>.
+                  Checkpoints are kept, wherever the workspace's code puts them (often a{" "}
+                  <code className="font-mono">checkpoint/</code> folder next to the tables). To only stop seeing{" "}
+                  {kind === "schema" ? "this schema" : "these schemas"}, choose Hide from the GUI.
                 </p>
               </AlertDescription>
             </Alert>

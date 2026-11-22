@@ -64,6 +64,7 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/system": ("system",),
     "/api/ai-assist/status": TABS,  # whether AI Assist can answer: any signed-in user
     "/api/ai-assist/ask": TABS,  # general questions from the AI Assist panel on any screen
+    "/api/ai-assist/fix": ("system",),  # proposed setting changes: the System tab's power
     "/api/ai-assist/sql": ("sql",),  # ask AI Assist about a failed query
     "/api/ai-assist/runs": ("pipelines", "ingestion"),  # ask AI Assist about a failed run
 }

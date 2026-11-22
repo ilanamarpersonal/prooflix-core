@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
 import { ArrowUpRight, FileCode2, List, Loader2, PanelRightOpen, Trash2, Workflow, X } from "lucide-react"
 
@@ -7,6 +7,7 @@ import { KeyValues } from "@/components/key-values"
 import { PageHeader } from "@/components/page-header"
 import { PipelineGraph } from "@/components/pipeline-graph"
 import { RunButton } from "@/components/run-button"
+import { RunOutput } from "@/components/run-output"
 import { RunsTable } from "@/components/runs-table"
 import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
 import { StatusBadge } from "@/components/status-badge"
@@ -16,12 +17,11 @@ import { StopButton } from "@/components/stop-button"
 import { TaskCodeView } from "@/components/task-code-view"
 import { TriggerCard } from "@/components/trigger-card"
 import { YamlEditor } from "@/components/yaml-editor"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiError, useDeletePipeline, usePipeline, useRuns } from "@/lib/api"
+import { ApiError, useDeletePipeline, usePipeline, useRunTree, useRuns } from "@/lib/api"
 import type { RunStatus } from "@/lib/types"
 import { cn, formatDateTime } from "@/lib/utils"
 
@@ -33,6 +33,12 @@ export function PipelineDetailPage() {
   const del = useDeletePipeline()
   const [params] = useSearchParams()
   const [selected, setSelected] = useState<string | null>(null)
+  // a run of this pipeline that is (or was, on this visit) running: its printout shows under the graph
+  const activeId = runs.data?.find((r) => r.pipeline === pipelineId && isRunActive(r))?.id
+  const [watched, setWatched] = useState<string | null>(null)
+  useEffect(() => {
+    if (activeId) setWatched(activeId)
+  }, [activeId])
 
   if (isLoading) return <Skeleton className="h-96 w-full" />
   // The pipeline was removed from the workspace: show the list (empty if none are left).
@@ -162,7 +168,7 @@ export function PipelineDetailPage() {
           <TabsTrigger value="runs">Runs</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="graph" className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <TabsContent value="graph" className="grid grid-cols-[minmax(0,1fr)] gap-4">
           <div className="grid min-w-0 content-start gap-4">
             {pipeline.graph.nodes.length ? (
               <PipelineGraph
@@ -211,35 +217,7 @@ export function PipelineDetailPage() {
                 </CardContent>
               </Card>
             )}
-          </div>
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4">
-            <Card className="gap-3">
-              <CardHeader>
-                <CardTitle className="text-sm">Parameters</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {Object.keys(pipeline.parameter_specs).length ? (
-                  <dl className="grid grid-cols-[minmax(0,1fr)] gap-2 text-sm">
-                    {Object.entries(pipeline.parameter_specs).map(([k, p]) => (
-                      <div key={k} className="flex justify-between gap-2" title={p.description ?? undefined}>
-                        <dt className="flex min-w-0 items-center gap-1.5 font-mono">
-                          {k}
-                          {p.required && <span className="text-status-failed">*</span>}
-                          {p.type !== "any" && <span className="text-muted-foreground text-xs">{p.type}</span>}
-                        </dt>
-                        <dd className="text-muted-foreground min-w-0 truncate font-mono">
-                          {JSON.stringify(p.default)}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                ) : (
-                  <p className="text-muted-foreground text-sm">None</p>
-                )}
-              </CardContent>
-            </Card>
-            <PipelineLinks title="Calls" ids={pipeline.sub_pipelines} />
-            <PipelineLinks title="Used by" ids={pipeline.used_by} />
+            {watched && <LiveRunOutput runId={watched} />}
           </div>
         </TabsContent>
 
@@ -260,23 +238,15 @@ export function PipelineDetailPage() {
   )
 }
 
-function PipelineLinks({ title, ids }: { title: string; ids: string[] }) {
+/** The printout of a run of this pipeline, live while it runs (the same Output panel as the run's page). */
+function LiveRunOutput({ runId }: { runId: string }) {
+  const tree = useRunTree(runId)
+  if (tree.error) return <ErrorAlert title="Could not load the run's printout" error={tree.error} assist={false} />
+  if (!tree.data) return <Skeleton className="h-40 w-full" />
   return (
-    <Card className="gap-3">
-      <CardHeader>
-        <CardTitle className="text-sm">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-wrap gap-1">
-        {ids.length ? (
-          ids.map((id) => (
-            <Badge key={id} variant="secondary" asChild>
-              <Link to={`/pipelines/${id}`}>{id}</Link>
-            </Badge>
-          ))
-        ) : (
-          <span className="text-muted-foreground text-sm">None</span>
-        )}
-      </CardContent>
-    </Card>
+    <RunOutput
+      run={tree.data}
+      description={`What each task of run ${runId} printed, in the order they ran. Open tasks and printout shows one task's own.`}
+    />
   )
 }

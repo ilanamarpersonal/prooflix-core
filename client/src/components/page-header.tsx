@@ -18,8 +18,9 @@ export function PageHeader({
   // the tab this page belongs to: its coloured tile, as in the menu, goes before the title
   const section = sectionFor(useLocation().pathname)
   return (
-    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="flex min-w-0 items-start gap-3">
+    // the buttons sit beside the title while there is room for both, else they move below it
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+      <div className="flex min-w-[min(100%,18rem)] flex-1 items-start gap-3">
         {section && (
           <IconTile icon={section.icon} color={section.color} className="mt-0.5 size-7 rounded-md [&>svg]:size-4" />
         )}

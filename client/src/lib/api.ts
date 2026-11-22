@@ -9,6 +9,7 @@ import {
   type AiAssistSettings,
   type AiAssistSettingsIn,
   type AiAssistRunFix,
+  type AiAssistSettingsFix,
   type AiAssistRunHelp,
   type AiAssistRunReply,
   type AiAssistRunTurn,
@@ -203,6 +204,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, page, error, turns }),
     }),
+  aiAssistFix: (page: string, error: string, turns: AiAssistRunTurn[]) =>
+    request<AiAssistSettingsFix>("/ai-assist/fix", { method: "POST", body: JSON.stringify({ page, error, turns }) }),
   aiAssistRunFix: (runId: string, explanation: AiAssistRunHelp | null) =>
     request<AiAssistRunFix>(`/ai-assist/runs/${encodeURIComponent(runId)}/fix`, {
       method: "POST",
@@ -509,6 +512,13 @@ export const useAiAssistAsk = () =>
       error: string
       turns: AiAssistRunTurn[]
     }) => api.aiAssistAsk(question, page, error, turns),
+  })
+
+/** Setting changes (and manual steps) that would fix what a screen shows, for the user to review (nothing saved). */
+export const useAiAssistFix = () =>
+  useMutation({
+    mutationFn: ({ page, error, turns }: { page: string; error: string; turns: AiAssistRunTurn[] }) =>
+      api.aiAssistFix(page, error, turns),
   })
 
 /** Changes to the workspace files behind a failed run that would fix it, for the user to review (nothing saved). */

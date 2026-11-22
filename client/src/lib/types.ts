@@ -641,6 +641,25 @@ export interface AiAssistRunFix {
   model: string
 }
 
+/** A System tab setting AI Assist proposes to change; saved only when the user applies it. */
+export interface AiAssistSettingChange {
+  name: string
+  current: string | null
+  /** "" removes the saved value (back to the default) */
+  value: string
+  reason: string
+  /** applied by Restart server (otherwise only a restart of the server process applies it) */
+  live: boolean
+}
+
+export interface AiAssistSettingsFix {
+  summary: string
+  changes: AiAssistSettingChange[]
+  /** what the user has to do by hand */
+  steps: string[]
+  model: string
+}
+
 export interface AiAssistRunReply {
   answer: string
   model: string

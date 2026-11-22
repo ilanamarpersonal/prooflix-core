@@ -121,6 +121,36 @@ def ask_general(body: GeneralQuestionIn, request: Request) -> dict:
         raise _fail(e) from None
 
 
+class SettingsFixIn(BaseModel):
+    page: str = Field("", max_length=ai_assist.MAX_PAGE)
+    error: str = ""
+    turns: list[RunTurn] = Field(default_factory=list, max_length=100)
+
+
+@router.post("/fix")
+def propose_settings_fix(body: SettingsFixIn, request: Request) -> dict:
+    """Setting changes (and manual steps) that would fix the problem shown on a screen, for the user
+    to review: ``{summary, changes: [{name, current, value, reason, live}], steps, model}``. Sends the
+    screen's name, its error, the conversation and the System tab's parameters without secrets.
+    Nothing is saved: the client applies each change with ``PUT /api/system/parameters/{name}``
+    and then restarts. Needs the System tab when users are on."""
+    if request.app.state.settings.auth:
+        user = getattr(request.state, "user", None)
+        if user is None or not (user.role == "admin" or "system" in user.tabs):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Fixing this changes server settings; it needs the System tab, ask an admin"
+            )
+    from .system import _boot, _list  # the System tab's own view of the parameters
+
+    params = [p.model_dump() for p in _list(request.app.state.settings, _boot(request))]
+    try:
+        return ai_assist.propose_settings_fix(
+            _store(request).get(), body.page, body.error, [t.model_dump() for t in body.turns], params
+        )
+    except AiAssistError as e:
+        raise _fail(e) from None
+
+
 @router.post("/runs/{run_id}/ask")
 def ask_about_run(
     run_id: str, body: RunQuestionIn, request: Request, store: RunStore = Depends(get_store)

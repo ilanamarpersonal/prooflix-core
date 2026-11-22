@@ -97,7 +97,7 @@ export function AiAssistRunPanel({
   }
 
   return (
-    <Card aria-label="AI Assist" className="flex-1 gap-0 overflow-hidden py-0" data-ai-assist-panel>
+    <Card aria-label="AI Assist" className="flex-[1_0_auto] gap-0 overflow-hidden py-0" data-ai-assist-panel>
       <div className="flex items-center gap-2 border-b px-3 py-2.5">
         <AiAssistIcon className="size-5" />
         <span className="flex-1 text-sm font-semibold">AI Assist</span>
@@ -210,7 +210,7 @@ export function AiAssistRunPanel({
                       sends those files to Claude. You see every change first; nothing is saved until you apply it.
                     </p>
                     <Button size="sm" className="justify-self-start" onClick={proposeFix}>
-                      <Wrench /> Yes, propose a fix
+                      <Wrench /> Fix it
                     </Button>
                   </>
                 )}

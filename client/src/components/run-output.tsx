@@ -34,7 +34,13 @@ const NEAR_BOTTOM_PX = 40
  * What every task of a run printed, in one place and updating live: while the run
  * is going it keeps the newest line in view, unless you scroll up to read.
  */
-export function RunOutput({ run }: { run: RunTree }) {
+export function RunOutput({
+  run,
+  description = "What each task printed, in the order they ran. Click a task above to see only its own.",
+}: {
+  run: RunTree
+  description?: string
+}) {
   const live = !TERMINAL_STATUSES.includes(run.status)
   const all = sections(run)
   const box = useRef<HTMLDivElement>(null)
@@ -62,7 +68,7 @@ export function RunOutput({ run }: { run: RunTree }) {
             </span>
           )}
         </CardTitle>
-        <CardDescription>What each task printed, in the order they ran. Click a task above to see only its own.</CardDescription>
+        <CardDescription>{description}</CardDescription>
         {live && !follow && (
           <CardAction>
             <Button variant="outline" size="sm" onClick={() => setFollow(true)}>
@@ -85,11 +91,23 @@ export function RunOutput({ run }: { run: RunTree }) {
             const Icon = STATUS_STYLE[task.status].icon
             return (
               <section key={id} style={{ paddingLeft: depth * 20 }} className="mb-3 last:mb-0">
-                <div className={cn("flex items-center gap-1.5 text-xs", started ? "text-muted-foreground" : "text-muted-foreground/60")}>
-                  <Icon className={cn("size-3.5", STATUS_STYLE[task.status].className.split(" ")[0], running && "animate-spin")} />
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 text-xs",
+                    started ? "text-muted-foreground" : "text-muted-foreground/60",
+                  )}
+                >
+                  <Icon
+                    className={cn(
+                      "size-3.5",
+                      STATUS_STYLE[task.status].className.split(" ")[0],
+                      running && "animate-spin",
+                    )}
+                  />
                   <span className="text-foreground font-semibold">{task.key}</span>
                   <span>
-                    {task.type === "pipeline" ? `sub-pipeline ${task.pipeline}` : task.type} · {task.status.toLowerCase()}
+                    {task.type === "pipeline" ? `sub-pipeline ${task.pipeline}` : task.type} ·{" "}
+                    {task.status.toLowerCase()}
                   </span>
                 </div>
                 {task.error && <div className="text-destructive whitespace-pre-wrap">{task.error}</div>}

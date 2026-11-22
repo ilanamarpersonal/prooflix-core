@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { Link, useLocation } from "react-router"
-import { AlertCircle, ChevronRight, Loader2, SendHorizontal } from "lucide-react"
+import { AlertCircle, Check, ChevronRight, Loader2, RotateCcw, RotateCw, SendHorizontal, Wrench } from "lucide-react"
 
 import { AiAssistIcon } from "@/components/ai-assist-icon"
 import { ErrorAlert } from "@/components/error-alert"
@@ -9,9 +9,16 @@ import { ResizeDivider } from "@/components/resize-divider"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { useAiAssistAsk, useAiAssistStatus, useAuthStatus } from "@/lib/api"
+import {
+  useAiAssistAsk,
+  useAiAssistFix,
+  useAiAssistStatus,
+  useAuthStatus,
+  useRestartServer,
+  useSetSystemParameter,
+} from "@/lib/api"
 import { sectionFor } from "@/lib/tabs"
-import type { AiAssistRunTurn } from "@/lib/types"
+import type { AiAssistRunTurn, AiAssistSettingsFix } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /** An error a screen shows (an ErrorAlert), offered to AI Assist. */
@@ -289,7 +296,7 @@ function GeneralPanel({
   }
 
   return (
-    <Card aria-label="AI Assist" className="flex-1 gap-0 overflow-hidden py-0">
+    <Card aria-label="AI Assist" className="flex-[1_0_auto] gap-0 overflow-hidden py-0">
       <AiAssistHeader onClose={() => dock.setOpen(false)} />
       {/* the question box sits at the bottom of the panel */}
       <div className="flex flex-1 flex-col gap-4 p-3 text-sm">
@@ -319,19 +326,24 @@ function GeneralPanel({
                     <p className="text-muted-foreground line-clamp-4 text-xs break-words">{error.messages.join(" ")}</p>
                   </div>
                 </div>
-                <p>This screen shows an error. Do you want AI Assist to explain it and how to fix it?</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => send("Explain this error and how to fix it.")}
-                    disabled={ask.isPending}
-                  >
-                    <AiAssistIcon /> Yes, explain it
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={onDismissError}>
-                    Not now
-                  </Button>
-                </div>
+                {/* step 1: the offer to explain; once asked, the explanation follows below */}
+                {!turns.length && !ask.isPending && (
+                  <>
+                    <p>This screen shows an error. Do you want AI Assist to explain it?</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => send("Explain this error and how it can be fixed.")}
+                        disabled={ask.isPending}
+                      >
+                        <AiAssistIcon /> Yes, explain it
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={onDismissError}>
+                        Not now
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               !turns.length &&
@@ -363,6 +375,8 @@ function GeneralPanel({
               </section>
             )}
             {ask.error && <ErrorAlert title="AI Assist couldn't answer" error={ask.error} assist={false} />}
+            {/* step 2, after an answer: the offer to fix it */}
+            {turns.length > 0 && !ask.isPending && <SettingsFixOffer page={page} error={errorText} turns={turns} />}
             <div ref={end} />
 
             <form
@@ -402,5 +416,142 @@ function GeneralPanel({
         )}
       </div>
     </Card>
+  )
+}
+
+/**
+ * "Do you want AI Assist to fix it?" on any screen: it proposes System tab settings to change (never secrets)
+ * and the steps to do by hand. Apply saves the settings; Restart server applies them. Users with the System tab.
+ */
+function SettingsFixOffer({ page, error, turns }: { page: string; error: string; turns: AiAssistRunTurn[] }) {
+  const auth = useAuthStatus().data
+  const canFix = !auth?.enabled || auth.user?.role === "admin" || !!auth.user?.visible_tabs.includes("system")
+  const fix = useAiAssistFix()
+  const save = useSetSystemParameter()
+  const restart = useRestartServer()
+  const [applied, setApplied] = useState(false)
+  const [applyError, setApplyError] = useState<unknown>(null)
+  if (!canFix) return null
+
+  const propose = () => {
+    setApplied(false)
+    setApplyError(null)
+    restart.reset()
+    fix.mutate({ page, error, turns })
+  }
+  const apply = async (proposal: AiAssistSettingsFix) => {
+    setApplyError(null)
+    try {
+      for (const c of proposal.changes) await save.mutateAsync({ name: c.name, value: c.value || null })
+      setApplied(true)
+    } catch (e) {
+      setApplyError(e)
+    }
+  }
+
+  return (
+    <section className="grid gap-3 border-t pt-3" aria-label="Fix with AI Assist">
+      {!fix.data && !fix.isPending && (
+        <>
+          <p>Do you want AI Assist to fix it?</p>
+          <p className="text-muted-foreground text-xs">
+            It proposes changes to the server's settings (the System tab, never passwords or keys) and the steps to do
+            yourself, and sends the settings to Claude. You see every change first; nothing is saved until you apply it.
+          </p>
+          <Button size="sm" className="justify-self-start" onClick={propose}>
+            <Wrench /> Fix it
+          </Button>
+        </>
+      )}
+      {fix.isPending && (
+        <p className="text-muted-foreground flex items-center gap-2">
+          <Loader2 className="size-4 animate-spin" /> AI Assist is preparing a fix…
+        </p>
+      )}
+      {fix.error && (
+        <div className="grid gap-2">
+          <ErrorAlert title="AI Assist couldn't propose a fix" error={fix.error} assist={false} />
+          <Button size="sm" variant="outline" className="justify-self-start" onClick={propose}>
+            <RotateCcw /> Try again
+          </Button>
+        </div>
+      )}
+      {fix.data && (
+        <div className="grid gap-3">
+          <p className="whitespace-pre-wrap">{fix.data.summary}</p>
+          {fix.data.changes.length > 0 && (
+            <div className="grid gap-2">
+              <h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Settings to change</h3>
+              {fix.data.changes.map((c) => (
+                <div key={c.name} className="grid gap-1 rounded-md border p-2">
+                  <p className="flex items-center gap-1.5 font-mono text-xs font-medium break-all">
+                    {c.name}
+                    {applied && <Check className="size-3.5 shrink-0 text-emerald-600" />}
+                  </p>
+                  <p className="font-mono text-xs break-all">
+                    <span className="text-red-700 line-through dark:text-red-400">{c.current || "(not set)"}</span>
+                    {" → "}
+                    <span className="text-emerald-700 dark:text-emerald-400">{c.value || "(default)"}</span>
+                  </p>
+                  {c.reason && <p className="text-muted-foreground text-xs">{c.reason}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          {fix.data.steps.length > 0 && (
+            <div className="grid gap-1">
+              <h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Do yourself</h3>
+              <ol className="grid list-decimal gap-1 pl-5">
+                {fix.data.steps.map((step, i) => (
+                  <li key={i} className="whitespace-pre-wrap">
+                    {step}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {fix.data.changes.length === 0 && fix.data.steps.length === 0 && (
+            <p className="text-muted-foreground text-xs">AI Assist found nothing it can change here.</p>
+          )}
+          <p className="text-muted-foreground text-xs">
+            Proposed by {fix.data.model}. Read the changes before you apply them.
+          </p>
+          {fix.data.changes.length > 0 && !applied && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => void apply(fix.data)} disabled={save.isPending}>
+                {save.isPending ? <Loader2 className="animate-spin" /> : <Check />} Apply changes
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => fix.reset()} disabled={save.isPending}>
+                Discard
+              </Button>
+            </div>
+          )}
+          {applyError != null && <ErrorAlert title="Could not save the settings" error={applyError} assist={false} />}
+          {applied && !restart.isSuccess && (
+            <div className="grid gap-2">
+              <p className="text-emerald-700 dark:text-emerald-400">
+                Saved. They take effect when the server restarts.
+                {fix.data.changes.some((c) => !c.live) &&
+                  " Some only apply after the server process itself is restarted."}
+              </p>
+              <Button
+                size="sm"
+                className="justify-self-start"
+                onClick={() => restart.mutate()}
+                disabled={restart.isPending}
+              >
+                {restart.isPending ? <Loader2 className="animate-spin" /> : <RotateCw />} Restart server
+              </Button>
+              {restart.error && <ErrorAlert title="Could not restart" error={restart.error} assist={false} />}
+            </div>
+          )}
+          {restart.isSuccess && (
+            <p className="flex items-start gap-2 text-emerald-700 dark:text-emerald-400">
+              <Check className="mt-0.5 size-4 shrink-0" /> Restarted with the new settings. Try again on this screen.
+            </p>
+          )}
+        </div>
+      )}
+    </section>
   )
 }

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from prooflix import ai_assist
-from prooflix.ai_assist import AiAssistStore, FileChange, RunFix, RunHelp, RunReply, SqlFix
+from prooflix.ai_assist import AiAssistStore, FileChange, RunFix, RunHelp, RunReply, SettingChange, SettingsFix, SqlFix
 from prooflix.config import Settings
 from prooflix.main import create_app
 
@@ -383,3 +383,41 @@ def test_a_failed_run_gets_proposed_fixes_to_review(client, fake):
     c.post("/api/auth/login", json={"username": "wes", "password": GOOD})
     assert c.post(url, json={}).status_code == 200
     assert c.post("/api/ai-assist/runs/nope/fix", json={}).status_code == 404
+
+
+
+def test_any_screen_gets_proposed_setting_changes(client, fake):
+    c = client
+    body = {"page": "ClickHouse (/clickhouse)", "error": "ClickHouse is not reachable at http://localhost:8123"}
+    assert c.post("/api/ai-assist/fix", json=body).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    c.put("/api/system/parameters/PROOFLIX_CLICKHOUSE_PASSWORD", json={"value": "hunter2xyz"})
+    fake.answer = SettingsFix(summary="Point Prooflix at port 18123 and start ClickHouse.", changes=[
+        SettingChange(name="PROOFLIX_CLICKHOUSE_URL", value="http://localhost:18123", reason="it listens there"),
+        SettingChange(name="PROOFLIX_CLICKHOUSE_PASSWORD", value="x", reason="secret: dropped"),
+        SettingChange(name="PROOFLIX_NOPE", value="1", reason="unknown: dropped"),
+    ], steps=["Start the ClickHouse container", " "])
+
+    r = c.post("/api/ai-assist/fix", json=body)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["steps"] == ["Start the ClickHouse container"]
+    assert [ch["name"] for ch in out["changes"]] == ["PROOFLIX_CLICKHOUSE_URL"]
+    assert out["changes"][0]["value"] == "http://localhost:18123"
+    sent = fake.calls[-1]["messages"][0]["content"]
+    assert "PROOFLIX_CLICKHOUSE_URL" in sent and "ClickHouse is not reachable" in sent
+    assert "PROOFLIX_CLICKHOUSE_PASSWORD" not in sent and "hunter2xyz" not in sent  # secrets never sent
+
+    # applying is the System tab's own save
+    assert c.put("/api/system/parameters/PROOFLIX_CLICKHOUSE_URL", json={"value": "http://localhost:18123"}).status_code == 200
+    assert c.post("/api/ai-assist/fix", json={"page": "Catalog"}).status_code == 422  # nothing to fix
+
+    # only users with the System tab may ask
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["clickhouse"]})
+    c.post("/api/users", json={"username": "sys", "password": GOOD, "tabs": ["system"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post("/api/ai-assist/fix", json=body).status_code == 403
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "sys", "password": GOOD})
+    assert c.post("/api/ai-assist/fix", json=body).status_code == 200

@@ -1,5 +1,5 @@
 import { Link } from "react-router"
-import { AlarmClock, CornerDownRight, MousePointerClick } from "lucide-react"
+import { AlarmClock, CircleAlert, CornerDownRight, MousePointerClick } from "lucide-react"
 
 import { Pager } from "@/components/pager"
 import { StatusBadge } from "@/components/status-badge"
@@ -64,7 +64,10 @@ export function RunsTable({
                   </TableCell>
                 )}
                 <TableCell>
-                  <StatusBadge status={run.status} />
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <StatusBadge status={run.status} />
+                    {run.status === "FAILED" && <ErrorLink run={run} />}
+                  </div>
                 </TableCell>
                 <TableCell className="text-muted-foreground text-xs">
                   <TriggerLabel run={run} />
@@ -104,5 +107,20 @@ function TriggerLabel({ run }: { run: Run }) {
     <span className="inline-flex items-center gap-1">
       <MousePointerClick className="size-3.5" /> manual
     </span>
+  )
+}
+
+/** A failed run's link to its error: the run page with the task that failed selected (its error and printout). */
+function ErrorLink({ run }: { run: Run }) {
+  const failed = Object.entries(run.tasks).find(([, t]) => t.status === "FAILED")?.[0]
+  const to = failed ? `/runs/${run.id}?${new URLSearchParams({ task: failed })}` : `/runs/${run.id}`
+  return (
+    <Link
+      to={to}
+      title={run.error ?? "Show the error"}
+      className="text-destructive inline-flex items-center gap-1 text-xs hover:underline"
+    >
+      <CircleAlert className="size-3.5" /> Show error
+    </Link>
   )
 }

@@ -642,3 +642,72 @@ def propose_run_fix(s: Settings, tree: dict, explanation: dict | None, files: di
         content = c.content if c.content.endswith("\n") or not files[c.path].endswith("\n") else c.content + "\n"
         changes.append({"path": c.path, "reason": c.reason.strip(), "before": files[c.path], "after": content})
     return {"summary": fix.summary.strip(), "changes": changes, "model": response.model}
+
+
+# ------------------------------------------------------------------ proposed setting changes, from any screen
+class SettingChange(BaseModel):
+    name: str = Field(description="One of the given parameters' names, exactly as given.")
+    value: str = Field(description="The new value; an empty string removes the saved value (back to the default).")
+    reason: str = Field(description="Why this setting changes, in one short sentence.")
+
+
+class SettingsFix(BaseModel):
+    """Claude's proposed fix from any screen: setting changes and the steps the user does by hand."""
+
+    summary: str = Field(description="What the fix does, in one to three sentences.")
+    changes: list[SettingChange] = Field(description="Settings to change; empty when no setting fixes it.")
+    steps: list[str] = Field(description="What the user has to do by hand (start a service, ...); short imperative.")
+
+
+SETTINGS_FIX_SYSTEM = (
+    GENERAL_SYSTEM
+    + """
+
+Now the user asked you to fix the problem. You get the server's settings (the System \
+tab's parameters, without secrets): name, current value, default and what each does. \
+Propose the smallest fix:
+- Change a setting only when the error shows it is wrong (a wrong URL, folder or \
+port); give the exact new value. Never guess values you have no evidence for.
+- Everything you can't change (a service that is down, a password, data) goes in \
+steps, as concrete actions the user takes.
+The user reviews every change before it is saved, then restarts the server."""
+)
+
+
+def propose_settings_fix(s: Settings, page: str, error: str, turns: list[dict], params: list[dict]) -> dict:
+    """Ask Claude for setting changes (and manual steps) that fix the problem shown on a screen.
+    Only editable, non-secret parameters are sent and may change; nothing is saved here."""
+    usable = {p["name"]: p for p in params if p.get("editable") and p.get("kind") != "secret"}
+    if not error.strip() and not turns:
+        raise AiAssistError("There is nothing to fix yet: ask a question or open a screen that shows an error", 422)
+    if len(error) > MAX_TEXT:
+        raise AiAssistError("The error is too long to send (100,000 characters at most)", 413)
+    turns = turns[-MAX_TURNS:]
+    lines = [f"<screen>{page.strip()[:MAX_PAGE] or 'unknown'}</screen>"]
+    if error.strip():
+        lines.append(f"<error_on_screen>\n{_redact(error.strip())}\n</error_on_screen>")
+    for t in turns:
+        lines.append(f"<question>{_redact(t.get('question', ''))}</question>\n<answer>{t.get('answer', '')}</answer>")
+    rows = [
+        f"- {p['name']} = {_redact(p.get('value') or '') or '(not set)'} (default {p.get('default') or 'none'}): "
+        f"{p.get('description', '')}"
+        for p in usable.values()
+    ]
+    lines.append("<settings>\n" + "\n".join(rows) + "\n</settings>")
+    client = _client(s)
+    response = _ask(client, s, SETTINGS_FIX_SYSTEM, "\n\n".join(lines), SettingsFix)
+    fix: SettingsFix = response.parsed_output
+    changes = []
+    for c in fix.changes:
+        p = usable.get(c.name)
+        value = c.value.strip()
+        if p is None or value == (p.get("saved") or p.get("value") or "") or any(x["name"] == c.name for x in changes):
+            continue  # only the settings sent, once each, and only real changes
+        changes.append({"name": c.name, "current": p.get("value"), "value": value, "reason": c.reason.strip(),
+                        "live": bool(p.get("live"))})
+    return {
+        "summary": fix.summary.strip(),
+        "changes": changes,
+        "steps": [x.strip() for x in fix.steps if x.strip()],
+        "model": response.model,
+    }

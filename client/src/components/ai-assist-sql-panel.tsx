@@ -68,7 +68,11 @@ export function AiAssistSqlPanel({
   return (
     // shown in the AI Assist panel on the right of the screen (AiAssistSlot)
     <div className="flex flex-1 flex-col">
-      <Card aria-label="AI Assist" className="flex flex-1 flex-col gap-0 overflow-hidden py-0" data-ai-assist-panel>
+      <Card
+        aria-label="AI Assist"
+        className="flex flex-[1_0_auto] flex-col gap-0 overflow-hidden py-0"
+        data-ai-assist-panel
+      >
         <div className="flex items-center gap-2 border-b px-3 py-2.5">
           <AiAssistIcon className="size-5" />
           <span className="flex-1 text-sm font-semibold">AI Assist</span>
