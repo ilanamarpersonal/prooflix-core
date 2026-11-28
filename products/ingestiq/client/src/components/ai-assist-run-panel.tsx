@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react"
-import { Check, ChevronRight, FileCode2, Loader2, RotateCcw, SendHorizontal, Wrench } from "lucide-react"
+import { Check, FileCode2, Loader2, RotateCcw, SendHorizontal, Wrench } from "lucide-react"
 
 import { productHref } from "@prooflix/ui/lib/products"
 import { AiAssistIcon } from "@prooflix/ui/ai-assist/icon"
 import { ErrorAlert } from "@prooflix/ui/app/error-alert"
 import { FileDiff } from "@/components/file-diff"
-import { useAiAssistDock } from "@prooflix/ui/ai-assist/dock"
+import { AiAssistHeader, useAiAssistDock } from "@prooflix/ui/ai-assist/dock"
 import { Badge } from "@prooflix/ui/components/ui/badge"
 import { Button } from "@prooflix/ui/components/ui/button"
 import { Card } from "@prooflix/ui/components/ui/card"
@@ -111,20 +111,7 @@ export function AiAssistRunPanel({
 
   return (
     <Card aria-label="AI Assist" className="flex-[1_0_auto] gap-0 overflow-hidden py-0" data-ai-assist-panel>
-      <div className="flex items-center gap-2 border-b px-3 py-2.5">
-        <AiAssistIcon className="size-5" />
-        <span className="flex-1 text-sm font-semibold">AI Assist</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          onClick={onClose}
-          aria-label="Hide AI Assist"
-          title="Hide AI Assist"
-        >
-          <ChevronRight />
-        </Button>
-      </div>
+      <AiAssistHeader onClose={onClose} />
 
       {/* the question box sits at the bottom of the panel */}
       <div className="flex flex-1 flex-col gap-4 p-3 text-sm">

@@ -6,6 +6,8 @@ import {
   Check,
   ChevronRight,
   Loader2,
+  Maximize2,
+  Minimize2,
   PanelRightClose,
   PanelRightOpen,
   RotateCcw,
@@ -70,6 +72,9 @@ interface Dock {
   takers: number
   /** the general chat was asked on a screen with its own panel (SQL Editor): shown under it */
   generalWanted: boolean
+  /** the panel fills the screen under the top bar (the page is hidden); remembered in the browser */
+  expanded: boolean
+  setExpanded: (expanded: boolean) => void
 }
 
 const NOOP_DOCK: Dock = {
@@ -92,12 +97,24 @@ const NOOP_DOCK: Dock = {
   takeQuestions: () => () => {},
   takers: 0,
   generalWanted: false,
+  expanded: false,
+  setExpanded: () => {},
 }
 
 const DockContext = createContext<Dock>(NOOP_DOCK)
 
 /** The AI Assist panel on the right of every screen (outside the app shell, a no-op). */
 export const useAiAssistDock = () => useContext(DockContext)
+
+const EXPANDED_KEY = "prooflix-ai-assist-expanded"
+
+function loadExpanded(): boolean {
+  try {
+    return localStorage.getItem(EXPANDED_KEY) === "1"
+  } catch {
+    return false
+  }
+}
 
 const errorKey = (e: ScreenError) => `${e.title}\n${e.messages.join("\n")}`
 
@@ -122,13 +139,35 @@ export function AiAssistDockProvider({ children }: { children: React.ReactNode }
   const [question, setQuestion] = useState<{ id: number; text: string } | null>(null)
   const [takers, setTakers] = useState(0)
   const [generalWanted, setGeneralWanted] = useState(false)
+  const [expanded, setExpandedState] = useState(loadExpanded)
+  const setExpanded = useCallback((next: boolean) => {
+    setExpandedState(next)
+    try {
+      localStorage.setItem(EXPANDED_KEY, next ? "1" : "0")
+    } catch {
+      /* storage unavailable */
+    }
+  }, [])
 
-  // a new screen starts without the last one's error
+  // a new screen starts without the last one's error, and shows the page (an object link in an answer opens it)
+  const firstPath = useRef(true)
   useEffect(() => {
     setError(null)
     seen.current = new Set()
     setGeneralWanted(false)
-  }, [location.pathname])
+    if (firstPath.current) firstPath.current = false
+    else setExpanded(false)
+  }, [location.pathname, setExpanded])
+
+  // Esc shrinks the full-screen panel back beside the page
+  useEffect(() => {
+    if (!expanded || !open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector("[role=dialog]")) setExpanded(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [expanded, open, setExpanded])
 
   const popUp = useCallback(() => {
     if (available) setOpen(true)
@@ -185,6 +224,8 @@ export function AiAssistDockProvider({ children }: { children: React.ReactNode }
       takeQuestions,
       takers,
       generalWanted,
+      expanded,
+      setExpanded,
     }),
     [
       available,
@@ -204,6 +245,8 @@ export function AiAssistDockProvider({ children }: { children: React.ReactNode }
       takeQuestions,
       takers,
       generalWanted,
+      expanded,
+      setExpanded,
     ],
   )
   return <DockContext.Provider value={dock}>{children}</DockContext.Provider>
@@ -282,7 +325,7 @@ function loadWidth(): number {
 
 /** The AI Assist panel itself, on the right of the page (placed next to the page in the app shell). */
 export function AiAssistDockPanel() {
-  const { available, open, claims, setSlot, error, dismissError, takers, generalWanted } = useAiAssistDock()
+  const { available, open, claims, setSlot, error, dismissError, takers, generalWanted, expanded } = useAiAssistDock()
   const location = useLocation()
   const page = useCurrentSection()
   const [width, setWidth] = useState(loadWidth)
@@ -301,28 +344,42 @@ export function AiAssistDockPanel() {
     // kept mounted while hidden, so a conversation survives closing and opening the panel
     <aside
       aria-label="AI Assist panel"
+      data-assist-expanded={open && expanded ? "" : undefined}
       style={{ ["--assist-w" as string]: `${width}px` }}
       className={cn(
         "bg-background z-30 flex shrink-0",
-        // a column beside the page on wide screens; over the page from the right on narrower ones
-        "max-xl:fixed max-xl:top-14 max-xl:right-0 max-xl:bottom-0 max-xl:w-full max-xl:shadow-xl sm:max-xl:w-(--assist-w)",
-        "xl:sticky xl:top-14 xl:h-[calc(100svh-3.5rem)] xl:w-(--assist-w)",
+        open && expanded
+          ? // in the page's place, between the menu and the right edge (the shell hides the page)
+            "sticky top-14 h-[calc(100svh-3.5rem)] min-w-0 flex-1"
+          : [
+              // a column beside the page on wide screens; over the page from the right on narrower ones
+              "max-xl:fixed max-xl:top-14 max-xl:right-0 max-xl:bottom-0 max-xl:w-full max-xl:shadow-xl sm:max-xl:w-(--assist-w)",
+              "xl:sticky xl:top-14 xl:h-[calc(100svh-3.5rem)] xl:w-(--assist-w)",
+            ],
         !open && "hidden",
       )}
     >
       {/* drag the bar between the page and the panel to make the panel wider or narrower */}
-      <ResizeDivider
-        orientation="vertical"
-        after
-        className="-mr-2 max-sm:hidden"
-        label="Resize the AI Assist panel"
-        value={width}
-        onResize={(w) => resize(w)}
-        onDone={(w) => resize(w, true)}
-        onReset={() => resize(DEFAULT_WIDTH, true)}
-      />
+      {!expanded && (
+        <ResizeDivider
+          orientation="vertical"
+          after
+          className="-mr-2 max-sm:hidden"
+          label="Resize the AI Assist panel"
+          value={width}
+          onResize={(w) => resize(w)}
+          onDone={(w) => resize(w, true)}
+          onReset={() => resize(DEFAULT_WIDTH, true)}
+        />
+      )}
       {/* a column: the panel inside grows to the bottom of the screen */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-3 max-sm:border-l">
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 flex-col overflow-y-auto p-3",
+          // full screen: a readable column in the middle
+          expanded ? "mx-auto w-full max-w-3xl md:py-6" : "max-sm:border-l",
+        )}
+      >
         <div ref={setSlot} className={cn("flex flex-1 flex-col", !claims && "hidden")} />
         {/* the general chat; on a screen with its own panel, under it once asked from the top bar */}
         {(!claims || (!takers && generalWanted)) && (
@@ -344,12 +401,24 @@ export function AiAssistSlot({ children }: { children: React.ReactNode }) {
   return slot ? createPortal(children, slot) : null
 }
 
-/** The header every AI Assist panel shares: the icon, its name and › to hide it. */
+/** The header every AI Assist panel shares: the icon, its name, expand to full screen, and › to hide it. */
 export function AiAssistHeader({ onClose }: { onClose: () => void }) {
+  const { expanded, setExpanded } = useAiAssistDock()
   return (
     <div className="flex items-center gap-2 border-b px-3 py-2.5">
       <AiAssistIcon className="size-5" />
       <span className="flex-1 text-sm font-semibold">AI Assist</span>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 max-md:hidden"
+        onClick={() => setExpanded(!expanded)}
+        aria-pressed={expanded}
+        aria-label={expanded ? "Shrink AI Assist (Esc)" : "Expand AI Assist to full screen"}
+        title={expanded ? "Shrink beside the page (Esc)" : "Expand to full screen"}
+      >
+        {expanded ? <Minimize2 /> : <Maximize2 />}
+      </Button>
       <Button
         variant="ghost"
         size="icon"

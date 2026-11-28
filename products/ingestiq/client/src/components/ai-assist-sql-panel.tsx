@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
-import { AlertTriangle, CheckCircle2, ChevronRight, ClipboardPaste, Loader2, Play, RotateCcw } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ClipboardPaste, Loader2, Play, RotateCcw } from "lucide-react"
 
 import { productHref } from "@prooflix/ui/lib/products"
+import { AiAssistHeader } from "@prooflix/ui/ai-assist/dock"
 import { AiAssistIcon } from "@prooflix/ui/ai-assist/icon"
 import { ErrorAlert } from "@prooflix/ui/app/error-alert"
 import { Badge } from "@prooflix/ui/components/ui/badge"
@@ -73,20 +74,7 @@ export function AiAssistSqlPanel({
         className="flex flex-[1_0_auto] flex-col gap-0 overflow-hidden py-0"
         data-ai-assist-panel
       >
-        <div className="flex items-center gap-2 border-b px-3 py-2.5">
-          <AiAssistIcon className="size-5" />
-          <span className="flex-1 text-sm font-semibold">AI Assist</span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={onClose}
-            aria-label="Hide AI Assist"
-            title="Hide AI Assist"
-          >
-            <ChevronRight />
-          </Button>
-        </div>
+        <AiAssistHeader onClose={onClose} />
 
         <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto p-3 text-sm">
           {!ready ? (

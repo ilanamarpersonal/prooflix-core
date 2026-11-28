@@ -135,7 +135,8 @@ export function ProductShell<Id extends string>({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      {/* while AI Assist fills the screen, the page is hidden (still mounted, so it keeps its state) */}
+      <div className="flex min-h-0 flex-1 [&:has(>[data-assist-expanded])>main]:hidden">
         {items.length > 0 && (
           <aside
             className={cn(
