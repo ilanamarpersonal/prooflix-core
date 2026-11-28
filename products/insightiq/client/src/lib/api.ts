@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { request } from "@prooflix/ui/app/request"
 
 import type {
+  AssistReply,
   AuditEvent,
   CheckResult,
   DatabaseStatus,
@@ -92,6 +93,8 @@ export const api = {
       ...json({ type, modified }),
     }),
 
+  assist: (question: string, turns: { question: string; answer: string }[]) =>
+    request<AssistReply>("/ontology/objects/assist", { method: "POST", ...json({ question, turns }) }),
   objectTypes: () => request<PublishedType[]>("/ontology/objects/types"),
   search: (q: string, type?: string, limit = 10) =>
     request<{
@@ -213,3 +216,9 @@ export const useExports = () =>
     refetchInterval: (q) => (q.state.data?.some((e) => e.state === "queued" || e.state === "running") ? 2000 : false),
   })
 export const exportFileUrl = (id: string) => `/api/ontology/exports/${id}/file`
+
+export const useAssist = () =>
+  useMutation({
+    mutationFn: ({ question, turns }: { question: string; turns: { question: string; answer: string }[] }) =>
+      api.assist(question, turns),
+  })

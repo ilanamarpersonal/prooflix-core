@@ -14,6 +14,7 @@ import { LayerBadge, show, TypeAvatar, useDebounced } from "@/components/ontolog
 import { useHistory, useLinked, useObject, useObjectTypes, useRunAction, useSearch, useSuggest } from "@/lib/api"
 import type { Action, ObjectLink, OntologyObject, PublishedType } from "@/lib/types"
 import { cn, formatDateTime } from "@/lib/utils"
+import { ObjectAssistPanel } from "@/components/object-assist-panel"
 import { ObjectsNav } from "@/pages/sets-page"
 
 const objectPath = (o: OntologyObject) => `/objects/${o.type}/${encodeURIComponent(o.pk ?? "")}`
@@ -39,6 +40,7 @@ export function ObjectsPage() {
 
   return (
     <div>
+      <ObjectAssistPanel />
       <PageHeader
         title="Objects"
         description="Search the published object types: customers, accounts, anything the object model defines. Open an object to see its properties and follow its links."
@@ -228,7 +230,12 @@ function ObjectRow({ obj, type }: { obj: OntologyObject; type: PublishedType }) 
 /** The object page, fresh for every object (so the chosen tab and link don't carry over). */
 export function ObjectRoute() {
   const { type, pk } = useParams()
-  return <ObjectPage key={`${type}/${pk}`} />
+  return (
+    <>
+      <ObjectAssistPanel context={`the ${type} object with key ${pk}`} />
+      <ObjectPage key={`${type}/${pk}`} />
+    </>
+  )
 }
 
 /** One object: its properties and its links, both ways. */

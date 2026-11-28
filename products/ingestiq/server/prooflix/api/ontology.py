@@ -21,7 +21,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import delta_log, link_pipelines, object_sets, ontology
+from .. import delta_log, link_pipelines, object_assist, object_sets, ontology
+from ..ai_assist import AiAssistError
+from ..object_assist import ToolError
 from ..exports import Exports
 from ..auth import User
 from ..pipelines import PipelineValidationError
@@ -377,6 +379,8 @@ def publish(body: PublishIn, request: Request, engine: _Engine = Depends(_engine
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 f"Only an admin can publish new or changed computed links ({', '.join(changed)}): "
                                 "their SQL runs on Spark")
+        if t.ai and not (old and old.ai):  # its objects' values then go to Claude
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Only an admin can open {t.api_name} to AI Assist")
     try:
         result = ontology.check(t, engine.run, engine.tables, _published(root))
     except CheckFailed as e:
@@ -633,6 +637,44 @@ class ActionIn(BaseModel):
     reason: str = Field("", max_length=1000)
 
 
+class _ActionRefused(Exception):
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
+
+
+def _checked_action(t: ObjectType, action: str, given: dict, reason: str, user) -> tuple:
+    """The action and its values, checked as a run checks them (the user may run it, a reason when it
+    asks for one, required values, choices, types). _ActionRefused otherwise."""
+    a = next((x for x in t.actions if x.api_name == action), None)
+    if a is None:
+        raise _ActionRefused(f"{t.api_name} has no action {action}", status.HTTP_404_NOT_FOUND)
+    if not ontology.can_run(user, a):
+        raise _ActionRefused(f"You may not run {a.label or a.api_name}", status.HTTP_403_FORBIDDEN)
+    if a.require_reason and not reason.strip():
+        raise _ActionRefused("Give a reason: it goes into the audit log", status.HTTP_422_UNPROCESSABLE_CONTENT)
+    params = {x.property: x for x in a.parameters}
+    unknown = sorted(set(given) - set(params))
+    if unknown:
+        raise _ActionRefused(f"{a.api_name} doesn't set {', '.join(unknown)}", status.HTTP_422_UNPROCESSABLE_CONTENT)
+    values = {}
+    for prop, x in params.items():
+        raw = given.get(prop)
+        if raw is None or str(raw).strip() == "":
+            if x.required:
+                raise _ActionRefused(f"{x.label or prop} is required", status.HTTP_422_UNPROCESSABLE_CONTENT)
+            if prop not in given:
+                continue
+        if x.choices and raw not in (None, "") and str(raw) not in x.choices:
+            raise _ActionRefused(f"{x.label or prop}: choose one of {', '.join(x.choices)}",
+                                 status.HTTP_422_UNPROCESSABLE_CONTENT)
+        try:
+            values[prop] = ontology.coerce(t.prop(prop), raw)
+        except ValueError as e:
+            raise _ActionRefused(str(e), status.HTTP_422_UNPROCESSABLE_CONTENT) from None
+    return a, values
+
+
 @router.post("/objects/{type}/{pk}/actions/{action}")
 def run_action(type: str, pk: str, action: str, body: ActionIn, request: Request,
                engine: _Engine = Depends(_engine)) -> dict:
@@ -640,32 +682,10 @@ def run_action(type: str, pk: str, action: str, body: ActionIn, request: Request
     lake), and audited. ``403`` when the user may not run it."""
     store = _need_store(request)
     t = _visible_type(request, type)
-    a = next((x for x in t.actions if x.api_name == action), None)
-    if a is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{type} has no action {action}")
-    if not ontology.can_run(_user(request), a):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You may not run {a.label or a.api_name}")
-    if a.require_reason and not body.reason.strip():
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Give a reason: it goes into the audit log")
-    params = {x.property: x for x in a.parameters}
-    unknown = sorted(set(body.values) - set(params))
-    if unknown:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{a.api_name} doesn't set {', '.join(unknown)}")
-    values = {}
-    for prop, x in params.items():
-        raw = body.values.get(prop)
-        if raw is None or str(raw).strip() == "":
-            if x.required:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{x.label or prop} is required")
-            if prop not in body.values:
-                continue
-        if x.choices and raw not in (None, "") and str(raw) not in x.choices:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                f"{x.label or prop}: choose one of {', '.join(x.choices)}")
-        try:
-            values[prop] = ontology.coerce(t.prop(prop), raw)
-        except ValueError as e:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+    try:
+        a, values = _checked_action(t, action, body.values, body.reason, _user(request))
+    except _ActionRefused as e:
+        raise HTTPException(e.status, str(e)) from None
     try:
         cols, rows = engine.query(ontology.by_value_sql(t, t.primary_key, pk, 2))
     except CheckFailed as e:
@@ -917,3 +937,143 @@ def export_file(export_id: str, request: Request) -> FileResponse:
 def delete_export(export_id: str, request: Request) -> None:
     folder, e = _own_export(request, export_id)
     request.app.state.exports.delete(folder, e)
+
+
+# ------------------------------------------------------------ AI Assist on objects
+class AssistTurn(BaseModel):
+    question: str = ""
+    answer: str = ""
+
+
+class AssistIn(BaseModel):
+    question: str = Field(..., min_length=1)
+    turns: list[AssistTurn] = Field(default_factory=list, max_length=100)
+
+
+@router.post("/objects/assist")
+def assist(body: AssistIn, request: Request, engine: _Engine = Depends(_engine)) -> dict:
+    """AI Assist answers a question about objects by calling tools (``object_assist.py``) that run as
+    the user, on the types an admin opened to AI Assist, with sensitive properties always masked. Actions
+    are only proposed. Every tool call is audited."""
+    me = _user(request)
+    types = {n: t for n, t in _visible(request).items() if t.ai}
+    if not types:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No object type is open to AI Assist yet: an admin turns it on "
+                                                       "in the type's Access step")
+
+    def typ(name: str) -> ObjectType:
+        if name not in types:
+            raise ToolError(f"there is no type {name} you can use (call list_object_types)")
+        return types[name]
+
+    def rows_to_objects(t: ObjectType, cols: list[str], rows: list[list]) -> list[dict]:
+        pk_at = cols.index(t.primary_key)
+        pks = [str(r[pk_at]) for r in rows if r[pk_at] is not None]
+        edits, _ = _edits(request, t, pks)
+        out = []
+        for r in rows:
+            o = ontology.to_object(t, cols, r, False, edits.get(str(r[pk_at])))  # sensitive: never to Claude
+            out.append({"type": t.api_name, "key": o["pk"], "title": o["title"], "properties": o["properties"]})
+        return out
+
+    def query(sql: str) -> tuple[list[str], list[list]]:
+        try:
+            return engine.query(sql)
+        except CheckFailed as e:
+            raise ToolError(str(e)) from None
+
+    def limit(n) -> int:
+        return max(1, min(int(n or 10), object_assist.MAX_ROWS))
+
+    def list_object_types(_: dict) -> dict:
+        return {"types": [{
+            "type": t.api_name, "plural": t.plural, "description": t.description, "key": t.primary_key,
+            "title": t.title, "layer": t.source.layer,
+            "properties": [{"name": p.api_name, "type": p.type, "unit": p.unit, "description": p.description,
+                            "searchable": p.searchable, "sensitive": p.sensitive} for p in t.properties],
+            "links": [{"name": k["name"], "to": k["target"], "many": k["many"]} for k in ontology.links_of(n, types)],
+            "actions": [{"name": a.api_name, "label": a.label, "description": a.description,
+                         "sets": [{"property": x.property, "choices": x.choices, "required": x.required}
+                                  for x in a.parameters], "needs_reason": a.require_reason}
+                        for a in t.actions if ontology.can_run(me, a)],
+        } for n, t in types.items()]}
+
+    def search_objects(i: dict) -> dict:
+        t = typ(i["type"])
+        cols, rows = query(ontology.search_sql(t, i.get("text", ""), limit(i.get("limit")), 0))
+        return {"objects": rows_to_objects(t, cols, rows)}
+
+    def find(t: ObjectType, key: str) -> tuple[list[str], list]:
+        cols, rows = query(ontology.by_value_sql(t, t.primary_key, str(key), 2))
+        if not rows:
+            raise ToolError(f"no {t.api_name} {key}")
+        return cols, rows[0]
+
+    def get_object(i: dict) -> dict:
+        t = typ(i["type"])
+        cols, row = find(t, i["key"])
+        raw = dict(zip(cols, row))
+        links = []
+        for k in ontology.links_of(t.api_name, types):
+            target, value = types.get(k["target"]), raw.get(k["here"])
+            if target is None or value is None or (k["via"] and k["via"]["table"] not in engine.tables):
+                continue
+            count = query(ontology.linked_sql(target, k, str(value), count=True))[1][0][0]
+            links.append({"name": k["name"], "to": k["target"], "count": count})
+        return {"object": rows_to_objects(t, cols, [row])[0], "links": links}
+
+    def list_links(i: dict) -> dict:
+        t = typ(i["type"])
+        k = next((x for x in ontology.links_of(t.api_name, types) if x["name"] == i["link"]), None)
+        if k is None or k["target"] not in types:
+            raise ToolError(f"{t.api_name} has no link {i['link']}")
+        if k["via"] and k["via"]["table"] not in engine.tables:
+            raise ToolError(f"the link {i['link']} isn't built yet")
+        cols, row = find(t, i["key"])
+        value = dict(zip(cols, row)).get(k["here"])
+        if value is None:
+            return {"objects": []}
+        target = types[k["target"]]
+        tcols, trows = query(ontology.linked_sql(target, k, str(value), limit(i.get("limit"))))
+        return {"objects": rows_to_objects(target, tcols, trows)}
+
+    def run_object_set(i: dict) -> dict:
+        try:
+            s = object_sets.ObjectSet.model_validate({"type": i["type"], "filters": i.get("filters", []),
+                                                      "steps": i.get("steps", [])})
+            stages = object_sets.compile(s, types, me, sensitive_ok=False)
+        except (ValidationError, object_sets.SetError) as e:
+            raise ToolError(ontology.errors(e) if isinstance(e, ValidationError) else str(e)) from None
+        missing = [x for x in object_sets.link_tables(s, types) if x not in engine.tables]
+        if missing:
+            raise ToolError(f"{', '.join(missing)} isn't built yet")
+        steps = [{"type": st["type"], "link": st["link"], "count": int(query(object_sets.count_sql(st))[1][0][0])}
+                 for st in stages]
+        t = types[stages[-1]["type"]]
+        cols, rows = query(object_sets.page_sql(stages[-1], t, limit(i.get("limit")), 0))
+        return {"steps": steps, "objects": rows_to_objects(t, cols, rows)}
+
+    def propose_action(i: dict) -> dict:
+        t = typ(i["type"])
+        given = {v["property"]: v["value"] for v in i.get("values", [])}
+        try:
+            a, values = _checked_action(t, i["action"], given, i.get("reason", ""), me)
+        except _ActionRefused as e:
+            raise ToolError(str(e)) from None
+        cols, row = find(t, i["key"])
+        title = dict(zip(cols, row)).get(t.title)
+        return {"type": t.api_name, "key": str(i["key"]), "title": None if title is None else str(title),
+                "action": a.api_name, "label": a.label or a.api_name, "values": values,
+                "reason": i.get("reason", "").strip()}
+
+    def on_tool(name: str, given: dict, error: str | None) -> None:
+        _audit(request, "ai_tool", given.get("type"), given.get("key"), {"tool": name, "input": given, "error": error})
+
+    tools = {"list_object_types": list_object_types, "search_objects": search_objects, "get_object": get_object,
+             "list_links": list_links, "run_object_set": run_object_set, "propose_action": propose_action}
+    _audit(request, "ai_question", detail={"question": body.question[:2000]})
+    try:
+        return object_assist.ask(request.app.state.ai_assist.get(), body.question,
+                                 [t.model_dump() for t in body.turns], tools, on_tool)
+    except AiAssistError as e:
+        raise HTTPException(e.status, str(e)) from None

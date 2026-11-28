@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react"
 
+import { AiAssistIcon } from "@prooflix/ui/ai-assist/icon"
 import { ErrorAlert } from "@prooflix/ui/app/error-alert"
 import { PageHeader } from "@prooflix/ui/app/page-header"
 import { Badge } from "@prooflix/ui/components/ui/badge"
@@ -1198,6 +1199,8 @@ function changes(
       out.push({ sign: "~", what: k.replace("_", " "), note: `${original[k] || "—"} → ${def[k] || "—"}` })
   if (!!def.index !== !!original.index)
     out.push({ sign: "~", what: "Fast search", note: def.index ? "turned on" : "turned off (its index is removed)" })
+  if (!!def.ai !== !!original.ai)
+    out.push({ sign: "~", what: "AI Assist", note: def.ai ? "opened (an admin only)" : "closed" })
   if (!same(def.access ?? { view: [], sensitive: [] }, original.access ?? { view: [], sensitive: [] }))
     out.push({ sign: "~", what: "Access", note: `seen by ${who(def.access?.view ?? [], "everyone")}` })
   for (const a of def.actions ?? []) {
@@ -1616,6 +1619,7 @@ function ActionsStep({ def, update, result, checking }: StepProps) {
 // ------------------------------------------------------------ ⑥ access
 function AccessStep({ def, update, result, checking }: StepProps) {
   const principals = usePrincipals()
+  const admin = !!useObjectsStatus().data?.admin
   const [asUser, setAsUser] = useState("")
   const access = def.access ?? { view: [], sensitive: [] }
   const checks = result?.checks.filter((c) => c.step === "access") ?? []
@@ -1664,6 +1668,31 @@ function AccessStep({ def, update, result, checking }: StepProps) {
               principals={principals.data ?? []}
               empty="Nobody chosen: admins only"
             />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <AiAssistIcon className="size-4" /> AI Assist
+            </CardTitle>
+            <p className="text-muted-foreground text-xs">
+              Open to AI Assist: people who see {def.plural || def.api_name} can ask Claude about them on the Objects
+              screens. Claude reads values with the asking user's access, never sensitive properties, and can only
+              propose actions. Every lookup is in the audit log.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <label className={cn("flex items-center gap-2 text-sm", !admin && "text-muted-foreground")}>
+              <input
+                type="checkbox"
+                className="size-4"
+                checked={!!def.ai}
+                disabled={!admin && !def.ai}
+                onChange={(e) => update((d) => ({ ...d, ai: e.target.checked }))}
+              />
+              Open to AI Assist
+            </label>
+            {!admin && !def.ai && <p className="text-muted-foreground mt-1 text-xs">Only an admin can turn it on.</p>}
           </CardContent>
         </Card>
         <ChecksCard checks={checks} checking={checking} />

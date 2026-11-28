@@ -28,6 +28,7 @@ import { LayerBadge, show, TypeAvatar } from "@/components/ontology-ui"
 import { api, exportFileUrl, useExports, useObjectTypes, useSets } from "@/lib/api"
 import type { ObjectSetDef, PublishedType, SavedSet, SetFilter, SetResult } from "@/lib/types"
 import { cn, formatDateTime } from "@/lib/utils"
+import { ObjectAssistPanel } from "@/components/object-assist-panel"
 
 const selectClass =
   "border-input bg-background h-9 rounded-md border px-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -149,6 +150,7 @@ export function SetsPage() {
 
   return (
     <div>
+      <ObjectAssistPanel />
       <PageHeader
         title="Object sets"
         description="Questions built step by step: start from a type, filter, then follow links (search around). Run them on the current data, save and share them, export big results."

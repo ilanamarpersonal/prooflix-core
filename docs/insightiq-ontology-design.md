@@ -330,7 +330,7 @@ building and publishing belong to the `ontology` tab, reading objects to `object
 | B (**built**) | Access (⑤) with masking, actions with an edits table, audit; versions of the definitions in PostgreSQL | PostgreSQL |
 | C (**built**) | Indexing through the object view, following new Delta versions; fast search and autocomplete | OpenSearch |
 | D (**built**) | Object sets, links precomputed by Spark, background exports | none |
-| E | AI Assist tools, and an MCP server over the Object API | none |
+| E (**built**: tools; no MCP server yet) | AI Assist tools, and an MCP server over the Object API | none |
 
 Phase A is useful on its own: one type from any layer, searchable and with object pages.
 
@@ -444,6 +444,29 @@ aggregations from the index, and more than one OpenSearch node.
   When the watcher starts, it removes its workspace's indexes that no alias points to (builds cut
   off when the server stopped), keeping any build that is running.
 
-Not built: filters on actions' edited values, sets as AI Assist tools (phase E), graph analytics
-beyond what the computed SQL expresses.
+Not built: filters on actions' edited values, graph analytics beyond what the computed SQL expresses.
+
+## 16. Phase E: what is built
+
+- **AI Assist on the Objects screens** (search, an object's page, object sets): the AI Assist panel
+  becomes a chat about objects ("which customers in Haifa have accounts over 20,000?"), and the top
+  bar's *Ask AI Assist…* box asks it. Claude answers with six tools over the Object API:
+  `list_object_types`, `search_objects`, `get_object`, `list_links`, `run_object_set` (counts per
+  step and the first objects) and `propose_action`. On an object's page the question says which object
+  is on screen.
+- **Only types an admin opens**: the wizard's Access step has *Open to AI Assist* (`ai: true` in the
+  definition); only an admin can turn it on (publishing it otherwise answers `403`). Other types don't
+  exist for the tools.
+- **As the user sees it, sensitive never**: the tools run with the asking user's access (types,
+  row rules, links), and sensitive properties are always `••••` for Claude, even when the user is an
+  admin, and can't be filtered on.
+- **Propose only**: `propose_action` checks the action, the user's permission and the values like
+  running it would, then returns a proposal card. **Apply** runs the action as the user (with
+  Claude's reason); **Dismiss** drops it. Nothing changes otherwise.
+- **Answers link to objects**: Claude writes `[[Type:key|label]]`, shown as links to object pages.
+- **Audited and bounded**: each question (`ai_question`) and each tool call with its input and any
+  error (`ai_tool`) is in the audit log; one question gets at most 8 requests to Claude, 24 tool calls
+  and 25 objects per call. Object values are given to Claude as data, never instructions.
+
+Not built: an MCP server over the Object API (for Claude outside Prooflix), aggregates beyond counts.
 

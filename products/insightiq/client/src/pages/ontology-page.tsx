@@ -471,6 +471,7 @@ function Details({ node, hasDraft, version }: { node: Node; hasDraft: boolean; v
     ["Properties", `${t.properties.length} (${t.properties.filter((p) => p.sensitive).length} sensitive)`],
     ["Links", t.links.map((l) => `${l.api_name} → ${l.target}`).join(", ") || "none"],
     ["Actions", (t.actions ?? []).map((a) => a.label || a.api_name).join(", ") || "none"],
+    ["AI Assist", t.ai ? "open (no sensitive values)" : "closed"],
     [
       "Seen by",
       (t.access?.view ?? []).length

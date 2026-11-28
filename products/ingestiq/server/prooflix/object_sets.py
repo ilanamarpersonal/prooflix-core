@@ -70,14 +70,14 @@ def _value_sql(v) -> str:
     return lit(str(v))  # DuckDB casts a text value to the column's type (numbers, dates)
 
 
-def _where(t: ObjectType, filters: list[Filter], alias: str, user) -> list[str]:
+def _where(t: ObjectType, filters: list[Filter], alias: str, user, sensitive_ok: bool | None = None) -> list[str]:
     out = []
     names = {p.api_name: p for p in t.properties}
     for f in filters:
         p = names.get(f.property)
         if p is None:
             raise SetError(f"{t.api_name} has no property {f.property}")
-        if p.sensitive and not ontology.can_see_sensitive(user, t):
+        if p.sensitive and not (ontology.can_see_sensitive(user, t) if sensitive_ok is None else sensitive_ok):
             raise SetError(f"{t.api_name}.{f.property} is sensitive: you can't filter on it")
         col = f"{alias}.{q(f.property)}"
         if f.op == "is_null":
@@ -98,13 +98,14 @@ def _where(t: ObjectType, filters: list[Filter], alias: str, user) -> list[str]:
     return out
 
 
-def compile(s: ObjectSet, visible: dict[str, ObjectType], user) -> list[dict]:
+def compile(s: ObjectSet, visible: dict[str, ObjectType], user, sensitive_ok: bool | None = None) -> list[dict]:
     """[{type, link, sql}] for each step: the base type, then each link followed. SetError when the set
-    names a type, link or property the viewer can't use."""
+    names a type, link or property the viewer can't use. ``sensitive_ok=False``: no filters on sensitive
+    properties whatever the user may see (AI Assist)."""
     t = visible.get(s.type)
     if t is None:
         raise SetError(f"No object type {s.type}")
-    where = _where(t, s.filters, "s0", user)
+    where = _where(t, s.filters, "s0", user, sensitive_ok)
     sql = f"SELECT * FROM ({object_view(t)}) AS s0" + (f" WHERE {' AND '.join(where)}" if where else "")
     out = [{"type": t.api_name, "link": None, "sql": sql}]
     for i, step in enumerate(s.steps, start=1):
@@ -118,7 +119,8 @@ def compile(s: ObjectSet, visible: dict[str, ObjectType], user) -> list[dict]:
             via = k["via"]
             here = (f"SELECT CAST({q(via['there'])} AS VARCHAR) FROM {ontology.table_sql(via['table'])} "
                     f"WHERE CAST({q(via['here'])} AS VARCHAR) IN ({here})")
-        conds = [f"CAST({alias}.{q(k['there'])} AS VARCHAR) IN ({here})"] + _where(target, step.filters, alias, user)
+        conds = [f"CAST({alias}.{q(k['there'])} AS VARCHAR) IN ({here})"] + _where(target, step.filters, alias, user,
+                                                                                    sensitive_ok)
         sql = f"SELECT * FROM ({object_view(target)}) AS {alias} WHERE {' AND '.join(conds)}"
         out.append({"type": target.api_name, "link": step.link, "sql": sql})
         t = target

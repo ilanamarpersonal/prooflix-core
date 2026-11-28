@@ -74,6 +74,8 @@ export interface ObjectType {
   actions?: Action[]
   /** Fast search: an OpenSearch index of its objects */
   index?: boolean
+  /** Open to AI Assist: its objects' values (never sensitive ones) can go to Claude; an admin turns it on */
+  ai?: boolean
 }
 
 export interface SourceTable {
@@ -256,4 +258,23 @@ export interface ExportJob {
   error: string | null
   bytes: number
   truncated: boolean
+}
+
+/** An action AI Assist proposes; nothing changes until the user applies it */
+export interface AssistProposal {
+  id: string
+  type: string
+  key: string
+  title: string | null
+  action: string
+  label: string
+  values: Record<string, unknown>
+  reason: string
+}
+
+export interface AssistReply {
+  answer: string
+  proposals: AssistProposal[]
+  tool_calls: number
+  model: string
 }

@@ -241,6 +241,7 @@ class ObjectType(BaseModel):
     access: Access = Access()
     actions: list[Action] = []
     index: bool = False  # "Fast search": an OpenSearch index of its objects (search_index.py)
+    ai: bool = False  # open to AI Assist's tools (object_assist.py); only an admin turns it on
 
     @model_validator(mode="after")
     def _consistent(self):
