@@ -104,6 +104,11 @@ class OntologyStore:
                     f"CREATE TABLE IF NOT EXISTS prooflix_object_set (id {serial}, workspace TEXT NOT NULL, "
                     "name TEXT NOT NULL, description TEXT, owner TEXT, shared INTEGER NOT NULL, definition TEXT NOT NULL, "
                     "created TEXT NOT NULL, updated TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS prooflix_proposal (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, "
+                    "username TEXT, object_type TEXT NOT NULL, pk TEXT NOT NULL, title TEXT, action TEXT NOT NULL, "
+                    "label TEXT, value_json TEXT NOT NULL, reason TEXT, source TEXT NOT NULL, created TEXT NOT NULL, "
+                    "state TEXT NOT NULL, decided_by TEXT, decided_at TEXT)",
+                    "CREATE INDEX IF NOT EXISTS prooflix_proposal_user ON prooflix_proposal (workspace, username)",
                 ):
                     cur.execute(stmt)
                 cur.execute("SELECT version FROM prooflix_schema")
@@ -272,6 +277,66 @@ class OntologyStore:
         self._ensure()
         with self._cursor() as cur:
             cur.execute(self._sql("DELETE FROM prooflix_object_set WHERE workspace = ? AND id = ?"), (workspace, set_id))
+
+    # ------------------------------------------------------------ proposals (actions AI apps propose)
+    _PROPOSAL_COLS = ("id, username, object_type, pk, title, action, label, value_json, reason, source, created, "
+                      "state, decided_by, decided_at")
+
+    def _proposal_row(self, row) -> dict:
+        i, user, t, pk, title, action, label, values, reason, source, created, state, by, at = row
+        return {"id": i, "user": user, "type": t, "key": pk, "title": title, "action": action, "label": label or action,
+                "values": json.loads(values), "reason": reason or "", "source": source, "created": created,
+                "state": state, "decided_by": by, "decided_at": at}
+
+    def add_proposal(self, workspace: str, user: str | None, proposal: dict, source: str) -> str:
+        """Keep a proposed action until its user applies or dismisses it; returns its id."""
+        self._ensure()
+        pid = uuid.uuid4().hex
+        with self._cursor() as cur:
+            cur.execute(
+                self._sql(f"INSERT INTO prooflix_proposal (workspace, {self._PROPOSAL_COLS}) "
+                          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                (workspace, pid, user, proposal["type"], proposal["key"], proposal.get("title"), proposal["action"],
+                 proposal.get("label"), json.dumps(proposal.get("values", {})), proposal.get("reason", ""), source,
+                 _now(), "pending", None, None),
+            )
+        return pid
+
+    def list_proposals(self, workspace: str, user: str | None, since: str, limit: int = 200) -> list[dict]:
+        """The user's proposals made since ``since`` (every user's while users are off), newest first."""
+        self._ensure()
+        where, args = ["workspace = ?", "created >= ?"], [workspace, since]
+        if user is not None:
+            where.append("username = ?")
+            args.append(user)
+        with self._cursor() as cur:
+            cur.execute(self._sql(f"SELECT {self._PROPOSAL_COLS} FROM prooflix_proposal WHERE {' AND '.join(where)} "
+                                  f"ORDER BY created DESC LIMIT {int(limit)}"), tuple(args))
+            return [self._proposal_row(r) for r in cur.fetchall()]
+
+    def get_proposal(self, workspace: str, pid: str) -> dict | None:
+        self._ensure()
+        with self._cursor() as cur:
+            cur.execute(self._sql(f"SELECT {self._PROPOSAL_COLS} FROM prooflix_proposal WHERE workspace = ? AND id = ?"),
+                        (workspace, pid))
+            rows = cur.fetchall()
+        return self._proposal_row(rows[0]) if rows else None
+
+    def decide_proposal(self, workspace: str, pid: str, state: str, by: str | None) -> bool:
+        """Mark a pending proposal applied or dismissed; False when it isn't pending any more."""
+        self._ensure()
+        with self._cursor() as cur:
+            cur.execute(self._sql("UPDATE prooflix_proposal SET state = ?, decided_by = ?, decided_at = ? "
+                                  "WHERE workspace = ? AND id = ? AND state = 'pending'"),
+                        (state, by, _now(), workspace, pid))
+            return cur.rowcount == 1
+
+    def reopen_proposal(self, workspace: str, pid: str) -> None:
+        """Back to pending (applying it failed after it was claimed)."""
+        self._ensure()
+        with self._cursor() as cur:
+            cur.execute(self._sql("UPDATE prooflix_proposal SET state = 'pending', decided_by = NULL, decided_at = NULL "
+                                  "WHERE workspace = ? AND id = ?"), (workspace, pid))
 
     def audit_log(self, workspace: str, limit: int = 200, event: str | None = None,
                   object_type: str | None = None, user: str | None = None) -> list[dict]:

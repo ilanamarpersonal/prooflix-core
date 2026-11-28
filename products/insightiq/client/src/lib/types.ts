@@ -278,3 +278,39 @@ export interface AssistReply {
   tool_calls: number
   model: string
 }
+
+/** An action an AI app proposed over MCP, waiting for its user */
+export interface Proposal {
+  id: string
+  user: string | null
+  type: string
+  key: string
+  title: string | null
+  action: string
+  label: string
+  values: Record<string, unknown>
+  reason: string
+  source: string
+  created: string
+  state: "pending" | "applied" | "dismissed"
+  decided_by: string | null
+  decided_at: string | null
+}
+
+export interface McpStatus {
+  enabled: boolean
+  users: boolean
+  url: string
+  admin: boolean
+  days: number[]
+}
+
+export interface McpToken {
+  id: string
+  username: string
+  name: string
+  hint: string
+  created: string
+  expires: string
+  last_used: string | null
+}

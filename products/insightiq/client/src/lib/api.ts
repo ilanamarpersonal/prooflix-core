@@ -3,6 +3,9 @@ import { request } from "@prooflix/ui/app/request"
 
 import type {
   AssistReply,
+  McpStatus,
+  McpToken,
+  Proposal,
   AuditEvent,
   CheckResult,
   DatabaseStatus,
@@ -95,6 +98,19 @@ export const api = {
 
   assist: (question: string, turns: { question: string; answer: string }[]) =>
     request<AssistReply>("/ontology/objects/assist", { method: "POST", ...json({ question, turns }) }),
+  proposals: () =>
+    request<{ available: boolean; error: string | null; proposals: Proposal[] }>("/ontology/objects/proposals"),
+  applyProposal: (id: string) =>
+    request<{ proposal: Proposal; object: OntologyObject }>(`/ontology/objects/proposals/${enc(id)}/apply`, {
+      method: "POST",
+    }),
+  dismissProposal: (id: string) =>
+    request<{ proposal: Proposal }>(`/ontology/objects/proposals/${enc(id)}/dismiss`, { method: "POST" }),
+  mcpStatus: () => request<McpStatus>("/mcp/status"),
+  mcpTokens: (everyone = false) => request<McpToken[]>(`/mcp/tokens${everyone ? "?everyone=true" : ""}`),
+  createMcpToken: (name: string, days: number) =>
+    request<McpToken & { token: string }>("/mcp/tokens", { method: "POST", ...json({ name, days }) }),
+  revokeMcpToken: (id: string) => request<void>(`/mcp/tokens/${enc(id)}`, { method: "DELETE" }),
   objectTypes: () => request<PublishedType[]>("/ontology/objects/types"),
   search: (q: string, type?: string, limit = 10) =>
     request<{
@@ -222,3 +238,8 @@ export const useAssist = () =>
     mutationFn: ({ question, turns }: { question: string; turns: { question: string; answer: string }[] }) =>
       api.assist(question, turns),
   })
+
+export const useProposals = () => useQuery({ queryKey: ["ontology", "proposals"], queryFn: api.proposals })
+export const useMcpStatus = () => useQuery({ queryKey: ["mcp", "status"], queryFn: api.mcpStatus })
+export const useMcpTokens = (everyone: boolean) =>
+  useQuery({ queryKey: ["mcp", "tokens", everyone], queryFn: () => api.mcpTokens(everyone) })

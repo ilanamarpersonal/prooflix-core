@@ -13,6 +13,7 @@ fullnameOverride: ""
 
 prooflix:
   scheduler: true    # run pipelines on their cron schedules
+  mcp: false         # the MCP server at /mcp for AI apps outside Prooflix (personal tokens)
   maxDepth: 10       # maximum sub-pipeline nesting depth
   startDate: ""      # where data processing starts when the system is initialized,
                      # e.g. "2026-01-01" (PROOFLIX_START_DATE); "" = all data

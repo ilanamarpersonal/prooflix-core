@@ -188,10 +188,11 @@ def update_user(username: str, body: UserChange, request: Request, response: Res
 
 
 @users_router.delete("/{username}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(username: str, store: UserStore = Depends(get_users),
+def delete_user(username: str, request: Request, store: UserStore = Depends(get_users),
                 admin: User = Depends(require_admin)) -> Response:
     try:
         store.delete(username, actor=admin.username)
+        request.app.state.mcp_tokens.revoke_user(username)  # a new user of the same name gets none of them
     except KeyError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No user {username}") from None
     except AuthError as e:

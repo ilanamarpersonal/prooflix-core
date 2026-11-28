@@ -3,9 +3,11 @@ import { createBrowserRouter } from "react-router"
 import { ProductApp } from "@prooflix/ui/app/product-app"
 import { useInsightiqCommands } from "@/lib/commands"
 import { AuditPage } from "@/pages/audit-page"
+import { ConnectPage } from "@/pages/connect-page"
 import { ObjectRoute, ObjectsPage } from "@/pages/objects-page"
 import { OntologyPage } from "@/pages/ontology-page"
 import { OntologyWizardPage } from "@/pages/ontology-wizard-page"
+import { ProposalsPage } from "@/pages/proposals-page"
 import { SetsPage } from "@/pages/sets-page"
 
 export const router = createBrowserRouter(
@@ -21,6 +23,8 @@ export const router = createBrowserRouter(
         { path: "objects", element: <ObjectsPage /> },
         { path: "objects/sets", element: <SetsPage key="new" /> },
         { path: "objects/sets/:id", element: <SetsPage /> },
+        { path: "objects/proposals", element: <ProposalsPage /> },
+        { path: "objects/connect", element: <ConnectPage /> },
         { path: "objects/:type/:pk", element: <ObjectRoute /> },
       ],
     },

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -562,6 +563,70 @@ def suggest(request: Request, q: str = Query("", max_length=100), limit: int = Q
     return out[:limit]
 
 
+# ------------------------------------------------------------ proposals
+PROPOSAL_DAYS = 7  # a proposal nobody decided on is dropped from the list after this
+
+
+def _proposal_since() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=PROPOSAL_DAYS)).isoformat(timespec="seconds")
+
+
+def _my_proposal(request: Request, store: OntologyStore, pid: str) -> dict:
+    """The user's own proposal (any while users are off); 404 for someone else's, so it isn't revealed."""
+    try:
+        p = store.get_proposal(_workspace(request), pid)
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+    user = _username(request)
+    if p is None or (user is not None and p["user"] != user) or p["created"] < _proposal_since():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such proposal")
+    return p
+
+
+@router.get("/objects/proposals")
+def proposals(request: Request) -> dict:
+    """The actions AI apps proposed to the user (over MCP) in the last 7 days, newest first. They are
+    applied as the user, checked again at that moment."""
+    store = _store(request)
+    if store is None:
+        return {"available": False, "error": None, "proposals": []}
+    try:
+        found = store.list_proposals(_workspace(request), _username(request), _proposal_since())
+    except StoreError as e:
+        return {"available": False, "error": str(e), "proposals": []}
+    return {"available": True, "error": None, "proposals": found}
+
+
+@router.post("/objects/proposals/{pid}/apply")
+def apply_proposal(pid: str, request: Request, engine: _Engine = Depends(_engine)) -> dict:
+    """Run a proposed action as the user (the same checks as running it by hand), once."""
+    store = _need_store(request)
+    p = _my_proposal(request, store, pid)
+    if p["state"] != "pending" or not store.decide_proposal(_workspace(request), pid, "applied", _username(request)):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"This proposal was already {p['state']}")
+    try:
+        result = run_action(p["type"], p["key"], p["action"], ActionIn(values=p["values"], reason=p["reason"]),
+                            request, engine)
+    except Exception:
+        store.reopen_proposal(_workspace(request), pid)  # still there to try again or dismiss
+        raise
+    _audit(request, "proposal_applied", p["type"], p["key"], {"proposal": pid, "action": p["action"]})
+    return {"proposal": {**p, "state": "applied"}, **result}
+
+
+@router.post("/objects/proposals/{pid}/dismiss")
+def dismiss_proposal(pid: str, request: Request) -> dict:
+    store = _need_store(request)
+    p = _my_proposal(request, store, pid)
+    try:
+        if not store.decide_proposal(_workspace(request), pid, "dismissed", _username(request)):
+            raise HTTPException(status.HTTP_409_CONFLICT, f"This proposal was already {p['state']}")
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+    _audit(request, "proposal_dismissed", p["type"], p["key"], {"proposal": pid, "action": p["action"]})
+    return {"proposal": {**p, "state": "dismissed"}}
+
+
 @router.get("/objects/{type}/{pk}")
 def get_object(type: str, pk: str, request: Request, engine: _Engine = Depends(_engine)) -> dict:
     """One object, and its links (both ways) with how many objects each leads to."""
@@ -950,16 +1015,16 @@ class AssistIn(BaseModel):
     turns: list[AssistTurn] = Field(default_factory=list, max_length=100)
 
 
-@router.post("/objects/assist")
-def assist(body: AssistIn, request: Request, engine: _Engine = Depends(_engine)) -> dict:
-    """AI Assist answers a question about objects by calling tools (``object_assist.py``) that run as
-    the user, on the types an admin opened to AI Assist, with sensitive properties always masked. Actions
-    are only proposed. Every tool call is audited."""
+NO_AI_TYPES = "No object type is open to AI Assist yet: an admin turns it on in the type's Access step"
+
+
+def object_tools(request: Request, engine: _Engine) -> tuple[dict[str, ObjectType], dict]:
+    """The object tools (``object_assist.TOOLS``) for the signed-in user: the types they see that an admin
+    opened to AI Assist, and a function per tool. Used by the AI Assist panel and the MCP server
+    (``api/mcp.py``). Sensitive properties are always masked; propose_action only checks and describes
+    the proposal (the caller keeps it). A refused call raises ToolError."""
     me = _user(request)
     types = {n: t for n, t in _visible(request).items() if t.ai}
-    if not types:
-        raise HTTPException(status.HTTP_409_CONFLICT, "No object type is open to AI Assist yet: an admin turns it on "
-                                                       "in the type's Access step")
 
     def typ(name: str) -> ObjectType:
         if name not in types:
@@ -1066,11 +1131,23 @@ def assist(body: AssistIn, request: Request, engine: _Engine = Depends(_engine))
                 "action": a.api_name, "label": a.label or a.api_name, "values": values,
                 "reason": i.get("reason", "").strip()}
 
+    tools = {"list_object_types": list_object_types, "search_objects": search_objects, "get_object": get_object,
+             "list_links": list_links, "run_object_set": run_object_set, "propose_action": propose_action}
+    return types, tools
+
+
+@router.post("/objects/assist")
+def assist(body: AssistIn, request: Request, engine: _Engine = Depends(_engine)) -> dict:
+    """AI Assist answers a question about objects by calling tools (``object_assist.py``) that run as
+    the user, on the types an admin opened to AI Assist, with sensitive properties always masked. Actions
+    are only proposed. Every tool call is audited."""
+    types, tools = object_tools(request, engine)
+    if not types:
+        raise HTTPException(status.HTTP_409_CONFLICT, NO_AI_TYPES)
+
     def on_tool(name: str, given: dict, error: str | None) -> None:
         _audit(request, "ai_tool", given.get("type"), given.get("key"), {"tool": name, "input": given, "error": error})
 
-    tools = {"list_object_types": list_object_types, "search_objects": search_objects, "get_object": get_object,
-             "list_links": list_links, "run_object_set": run_object_set, "propose_action": propose_action}
     _audit(request, "ai_question", detail={"question": body.question[:2000]})
     try:
         return object_assist.ask(request.app.state.ai_assist.get(), body.question,

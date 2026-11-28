@@ -330,7 +330,7 @@ building and publishing belong to the `ontology` tab, reading objects to `object
 | B (**built**) | Access (⑤) with masking, actions with an edits table, audit; versions of the definitions in PostgreSQL | PostgreSQL |
 | C (**built**) | Indexing through the object view, following new Delta versions; fast search and autocomplete | OpenSearch |
 | D (**built**) | Object sets, links precomputed by Spark, background exports | none |
-| E (**built**: tools; no MCP server yet) | AI Assist tools, and an MCP server over the Object API | none |
+| E (**built**) | AI Assist tools, and an MCP server over the Object API | none |
 
 Phase A is useful on its own: one type from any layer, searchable and with object pages.
 
@@ -468,5 +468,29 @@ Not built: filters on actions' edited values, graph analytics beyond what the co
   error (`ai_tool`) is in the audit log; one question gets at most 8 requests to Claude, 24 tool calls
   and 25 objects per call. Object values are given to Claude as data, never instructions.
 
-Not built: an MCP server over the Object API (for Claude outside Prooflix), aggregates beyond counts.
+Not built: aggregates beyond counts.
+
+## 17. Phase E: the MCP server
+
+- **The same tools outside Prooflix**: `/mcp` serves the six object tools over MCP (Streamable HTTP,
+  stateless, JSON replies) for Claude Code, Claude Desktop or your own agents. Objects come with the
+  `url` of their page in InsightIQ.
+- **Off until an admin turns it on**: `PROOFLIX_MCP` in Settings & Management → System (restart);
+  while off, `/mcp` answers `404` and no token can be created.
+- **Personal tokens**: in InsightIQ, Objects → **Connect an AI app**, a user creates a token per app
+  (7 to 365 days), shown once with Claude Code's `claude mcp add` command and a JSON configuration.
+  Only its SHA-256 is kept (`PROOFLIX_HOME/mcp_tokens.json`, mode 600). A token acts as its user as
+  they are now (role, tabs, access; disabled users can't), needs the Objects tab, can be revoked, and
+  a deleted user's tokens are revoked with them. Admins see and revoke everyone's.
+- **The same limits as AI Assist**: only types opened to AI Assist, sensitive values always masked,
+  actions only proposed. Browser origins other than local pages and Prooflix's are refused (DNS
+  rebinding); 120 calls a minute per token.
+- **Proposals in Prooflix**: `propose_action` keeps the proposal in the object model's database;
+  Objects → **Proposals** lists the user's own for 7 days, with **Apply** (runs the action as the user,
+  checked again, once) and **Dismiss**.
+- **Audited**: connections (`mcp_connect`, with the client's name), each call (`mcp_tool`, with the
+  token's name), tokens created and revoked, proposals applied and dismissed.
+
+Not built: OAuth (claude.ai's connectors need it and a public address), notifications when a
+proposal arrives.
 

@@ -28,6 +28,8 @@ from .api import semantic as semantic_api
 from .api import ontology as ontology_api
 from .api import auth as auth_api
 from .api import workspaces as workspaces_api
+from .api import mcp as mcp_api
+from .mcp_tokens import TokenStore
 from .search_index import Indexer
 from .exports import Exports
 from .auth import COOKIE, PUBLIC_PATHS, UserStore, UsersFileError, can_access
@@ -70,6 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.indexer = Indexer()  # the object model's fast-search indexes (search_index.py)
     app.state.exports = Exports()  # background exports of object sets (exports.py)
     app.state.ai_assist = AiAssistStore(settings.home)  # PROOFLIX_HOME/ai_assist.json
+    app.state.mcp_tokens = TokenStore(settings.home)  # PROOFLIX_HOME/mcp_tokens.json: MCP personal tokens
 
     @app.exception_handler(AlertsFileError)
     async def alerts_file_error(request, exc):  # fail closed (principle 11)
@@ -125,6 +128,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(semantic_api.router)
     app.include_router(ontology_api.router)
     app.include_router(ai_assist_api.router)
+    app.include_router(mcp_api.router)  # /mcp: the MCP server over the Object API (PROOFLIX_MCP)
+    app.include_router(mcp_api.api_router)
     app.include_router(auth_api.router)
     app.include_router(auth_api.users_router)
 

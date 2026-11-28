@@ -55,6 +55,8 @@ class Settings:
       PROOFLIX_CATALOG     folder holding catalog schemas that are not part of a
                            project (default: a "catalog" folder next to the workspaces folder)
       PROOFLIX_SCHEDULER   "0" turns off running pipelines on their schedules (default on)
+      PROOFLIX_MCP         "on" serves the MCP server over the Object API at /mcp, for AI apps
+                           outside Prooflix with personal tokens (default off)
       PROOFLIX_AUTH        "0" turns off users and the login page (default on): with it on,
                            every API call needs a signed-in user and users see only
                            their tabs (see auth.py). Environment variable only
@@ -102,6 +104,7 @@ class Settings:
     workspaces_root: Path | None = None  # None: no folder of workspaces (tests)
     max_depth: int = 10
     scheduler: bool = True  # run pipelines on their cron schedules
+    mcp: bool = False  # the MCP server over the Object API (PROOFLIX_MCP; off until an admin turns it on)
     auth: bool = False  # users and sign-in (PROOFLIX_AUTH; on unless set to 0 for the server)
     cors_origins: tuple[str, ...] = field(
         default=("http://localhost:5173", "http://127.0.0.1:5173")
@@ -185,6 +188,8 @@ class Settings:
         kwargs["auth"] = parse_flag(os.environ.get("PROOFLIX_AUTH", "1"))
         if (sched := env.get("PROOFLIX_SCHEDULER")) is not None:
             kwargs["scheduler"] = parse_flag(sched)
+        if (mcp := env.get("PROOFLIX_MCP")) is not None:
+            kwargs["mcp"] = parse_flag(mcp)
         if depth := env.get("PROOFLIX_MAX_DEPTH"):
             kwargs["max_depth"] = int(depth)
         if source := env.get("PROOFLIX_SOURCE_DATA"):

@@ -76,6 +76,7 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/ontology/objects": ("objects", "ontology"),  # search and read objects
     "/api/ontology/sets": ("objects", "ontology"),  # object sets: build, run, save, share
     "/api/ontology/exports": ("objects", "ontology"),  # exports of object sets
+    "/api/mcp": ("objects", "ontology"),  # the MCP server's status and personal tokens (/mcp itself takes tokens)
     "/api/system": ("system",),
     "/api/ai-assist/status": TABS,  # whether AI Assist can answer: any signed-in user
     "/api/ai-assist/ask": TABS,  # general questions from the AI Assist panel on any screen

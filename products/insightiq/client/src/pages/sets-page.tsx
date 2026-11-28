@@ -45,14 +45,16 @@ const OPS: { op: SetFilter["op"]; label: string; value: boolean }[] = [
   { op: "is_null", label: "is empty", value: false },
 ]
 
-/** The tabs of the Objects screen: search, and object sets. */
-export function ObjectsNav({ active }: { active: "search" | "sets" }) {
+/** The tabs of the Objects screen: search, object sets, proposals from AI apps, and connecting one. */
+export function ObjectsNav({ active }: { active: "search" | "sets" | "proposals" | "connect" }) {
   return (
     <div className="bg-muted flex rounded-md p-0.5">
       {(
         [
           ["search", "/objects", "Search"],
           ["sets", "/objects/sets", "Object sets"],
+          ["proposals", "/objects/proposals", "Proposals"],
+          ["connect", "/objects/connect", "Connect an AI app"],
         ] as const
       ).map(([id, to, label]) => (
         <Link

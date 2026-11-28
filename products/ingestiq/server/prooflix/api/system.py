@@ -166,6 +166,15 @@ PARAMS: tuple[_Param, ...] = (
         _parse_flag,
     ),
     _Param(
+        "PROOFLIX_MCP",
+        "The MCP server over the Object API at /mcp (\"on\" turns it on): AI apps outside Prooflix (Claude "
+        "Code, Claude Desktop) read objects with a user's personal token, only types opened to AI Assist, "
+        "sensitive values never sent; actions are only proposed.",
+        "off",
+        lambda s: "on" if s.mcp else "off",
+        _parse_flag,
+    ),
+    _Param(
         "PROOFLIX_AUTH",
         "Users and the login page (\"0\" turns them off): every API call then needs a signed-in "
         "user, who sees only the tabs an admin gave them. Set as an environment variable only.",

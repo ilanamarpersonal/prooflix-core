@@ -55,6 +55,9 @@ spec:
               value: /data/.prooflix
             - name: PROOFLIX_SCHEDULER
               value: {{ ternary "1" "0" .Values.prooflix.scheduler | quote }}
+            # the MCP server over the Object API at /mcp (AI apps with personal tokens)
+            - name: PROOFLIX_MCP
+              value: {{ ternary "1" "0" .Values.prooflix.mcp | quote }}
             {{- if .Values.ingress.enabled }}
             # trust the ingress's X-Forwarded-Proto, so the session cookie is Secure behind TLS
             - name: FORWARDED_ALLOW_IPS
