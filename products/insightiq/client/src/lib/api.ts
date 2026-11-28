@@ -1,7 +1,19 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { request } from "@prooflix/ui/app/request"
 
-import type { CheckResult, Layer, ObjectLink, ObjectType, OntologyObject, PublishedType, SourceTable } from "./types"
+import type {
+  AuditEvent,
+  CheckResult,
+  DatabaseStatus,
+  HistoryRun,
+  Layer,
+  ObjectLink,
+  ObjectType,
+  OntologyObject,
+  Principal,
+  PublishedType,
+  SourceTable,
+} from "./types"
 
 export { ApiError } from "@prooflix/ui/lib/api-error"
 
@@ -10,7 +22,10 @@ const enc = encodeURIComponent
 
 export const api = {
   sources: () => request<SourceTable[]>("/ontology/sources"),
-  types: () => request<{ types: ObjectType[]; drafts: ObjectType[]; broken: string[] }>("/ontology/types"),
+  types: () =>
+    request<{ types: ObjectType[]; drafts: ObjectType[]; broken: string[]; versions: Record<string, number> }>(
+      "/ontology/types",
+    ),
   type: (name: string) => request<{ type: ObjectType; modified: number; path: string }>(`/ontology/types/${enc(name)}`),
   unpublish: (name: string) => request<void>(`/ontology/types/${enc(name)}`, { method: "DELETE" }),
   draft: (name: string) => request<{ type: ObjectType; modified: number }>(`/ontology/drafts/${enc(name)}`),
@@ -22,11 +37,28 @@ export const api = {
   deleteDraft: (name: string) => request<void>(`/ontology/drafts/${enc(name)}`, { method: "DELETE" }),
   check: (type: ObjectType, steps?: string[]) =>
     request<CheckResult>("/ontology/check", { method: "POST", ...json(steps ? { type, steps } : { type }) }),
-  preview: (type: ObjectType, limit = 5) =>
-    request<{ sql: string; objects: OntologyObject[] }>("/ontology/preview", {
+  preview: (type: ObjectType, limit = 5, asUser?: string) =>
+    request<{ sql: string; visible: boolean; objects: OntologyObject[] }>("/ontology/preview", {
       method: "POST",
-      ...json({ type, limit }),
+      ...json({ type, limit, as_user: asUser || null }),
     }),
+  principals: () => request<Principal[]>("/ontology/principals"),
+  versions: (name: string) =>
+    request<{ version: number; by: string | null; at: string }[]>(`/ontology/types/${enc(name)}/versions`),
+  audit: (params: { event?: string; type?: string; user?: string }) =>
+    request<AuditEvent[]>(
+      `/ontology/audit?${new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])}`,
+    ),
+  objectsStatus: () => request<{ database: DatabaseStatus; admin: boolean }>("/ontology/objects/status"),
+  runAction: (type: string, pk: string, action: string, values: Record<string, unknown>, reason: string) =>
+    request<{ object: OntologyObject }>(`/ontology/objects/${enc(type)}/${enc(pk)}/actions/${enc(action)}`, {
+      method: "POST",
+      ...json({ values, reason }),
+    }),
+  history: (type: string, pk: string) =>
+    request<{ available: boolean; error: string | null; runs: HistoryRun[] }>(
+      `/ontology/objects/${enc(type)}/${enc(pk)}/history`,
+    ),
   publish: (type: ObjectType, modified: number | null) =>
     request<{ type: ObjectType; modified: number; path: string }>("/ontology/publish", {
       method: "POST",
@@ -39,9 +71,13 @@ export const api = {
       groups: { type: string; objects: OntologyObject[]; more: boolean; error: string | null }[]
     }>(`/ontology/objects/search?${new URLSearchParams({ q, limit: String(limit), ...(type ? { type } : {}) })}`),
   object: (type: string, pk: string) =>
-    request<{ object: OntologyObject; layer: Layer; table: string; links: ObjectLink[] }>(
-      `/ontology/objects/${enc(type)}/${enc(pk)}`,
-    ),
+    request<{
+      object: OntologyObject
+      layer: Layer
+      table: string
+      links: ObjectLink[]
+      database_error?: string | null
+    }>(`/ontology/objects/${enc(type)}/${enc(pk)}`),
   linked: (type: string, pk: string, link: string) =>
     request<{ link: ObjectLink; layer: Layer; objects: OntologyObject[]; more: boolean }>(
       `/ontology/objects/${enc(type)}/${enc(pk)}/links/${enc(link)}`,
@@ -60,10 +96,10 @@ export const useChecks = (type: ObjectType | null, steps: string[]) =>
     placeholderData: keepPreviousData,
   })
 
-export const usePreview = (type: ObjectType | null) =>
+export const usePreview = (type: ObjectType | null, asUser?: string) =>
   useQuery({
-    queryKey: ["ontology", "preview", type],
-    queryFn: () => api.preview(type!),
+    queryKey: ["ontology", "preview", type, asUser ?? null],
+    queryFn: () => api.preview(type!, 5, asUser),
     enabled: !!type,
     placeholderData: keepPreviousData,
   })
@@ -96,3 +132,23 @@ export const useLinked = (type: string, pk: string, link: string | null) =>
     queryFn: () => api.linked(type, pk, link!),
     enabled: !!link,
   })
+
+export const usePrincipals = () => useQuery({ queryKey: ["ontology", "principals"], queryFn: api.principals })
+export const useObjectsStatus = () =>
+  useQuery({ queryKey: ["ontology", "objects", "status"], queryFn: api.objectsStatus })
+export const useHistory = (type: string, pk: string, enabled: boolean) =>
+  useQuery({ queryKey: ["ontology", "objects", type, pk, "history"], queryFn: () => api.history(type, pk), enabled })
+export const useAudit = (params: { event?: string; type?: string; user?: string }) =>
+  useQuery({ queryKey: ["ontology", "audit", params], queryFn: () => api.audit(params) })
+
+export function useRunAction(type: string, pk: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ action, values, reason }: { action: string; values: Record<string, unknown>; reason: string }) =>
+      api.runAction(type, pk, action, values, reason),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["ontology", "objects", type, pk] })
+      void qc.invalidateQueries({ queryKey: ["ontology", "objects", "search"] })
+    },
+  })
+}

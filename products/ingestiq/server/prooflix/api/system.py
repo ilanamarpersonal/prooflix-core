@@ -86,6 +86,15 @@ def _parse_http_url(raw: str) -> str:
     return url
 
 
+def _parse_database_url(raw: str) -> str:
+    url = raw.strip()
+    if not url.startswith(("postgresql://", "postgres://")) or len(url) < 16:
+        raise ValueError("must be a postgresql:// URL, e.g. postgresql://localhost:5432/prooflix")
+    if "@" in url.split("//", 1)[1].split("/", 1)[0]:
+        raise ValueError("leave the user and password out of the URL: they are parameters of their own")
+    return url
+
+
 def _parse_text(raw: str) -> str:
     return raw.strip()
 
@@ -215,6 +224,28 @@ PARAMS: tuple[_Param, ...] = (
         "Password of that ClickHouse user (never shown).",
         "none",
         lambda s: s.clickhouse_password or None,
+        _parse_text,
+        secret=True,
+    ),
+    _Param(
+        "PROOFLIX_DATABASE_URL",
+        "PostgreSQL of InsightIQ's object model: versions of published types, actions' edits, the audit log.",
+        "not set: actions and the audit log are off",
+        lambda s: s.database_url,
+        _parse_database_url,
+    ),
+    _Param(
+        "PROOFLIX_DATABASE_USER",
+        "PostgreSQL user of the object model.",
+        "none",
+        lambda s: s.database_user or None,
+        _parse_text,
+    ),
+    _Param(
+        "PROOFLIX_DATABASE_PASSWORD",
+        "Password of that PostgreSQL user (never shown).",
+        "none",
+        lambda s: s.database_password or None,
         _parse_text,
         secret=True,
     ),

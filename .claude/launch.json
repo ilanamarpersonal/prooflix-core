@@ -19,6 +19,28 @@
       "port": 8000
     },
     {
+      "name": "prooflix-postgres",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "run",
+        "--rm",
+        "--name",
+        "prooflix-postgres",
+        "-p",
+        "127.0.0.1:5432:5432",
+        "-e",
+        "POSTGRES_USER=prooflix",
+        "-e",
+        "POSTGRES_PASSWORD=prooflix-dev",
+        "-e",
+        "POSTGRES_DB=prooflix",
+        "-v",
+        "prooflix-postgres-data:/var/lib/postgresql/data",
+        "postgres:16.4-alpine"
+      ],
+      "port": 5432
+    },
+    {
       "name": "prooflix-client",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

@@ -1,6 +1,6 @@
 # InsightIQ Object Model: product design
 
-Status: **phase A built** (see [section 12](#12-phase-a-what-is-built)); phases B to E are proposed. This document describes the first product
+Status: **phases A and B built** (see [section 12](#12-phase-a-what-is-built) and [section 13](#13-phase-b-what-is-built)); phases C to E are proposed. This document describes the first product
 in InsightIQ: an ontology that turns lake tables into business **objects** (a *Customer*, an
 *Account*, a *Transaction*), the **links** between them and the **actions** allowed on them,
 built step by step in a guided GUI and used by people, Python tasks and AI Assist.
@@ -327,7 +327,7 @@ building and publishing belong to the `ontology` tab, reading objects to `object
 | Phase | Delivers | New infrastructure |
 |---|---|---|
 | A (**built**) | The tabs, the wizard (steps ① to ④ and ⑥), object views over any layer, object search and object pages, YAML definitions | none |
-| B | Access (⑤) with masking, actions with an edits table, audit; the definitions also loaded into PostgreSQL | PostgreSQL |
+| B (**built**) | Access (⑤) with masking, actions with an edits table, audit; versions of the definitions in PostgreSQL | PostgreSQL |
 | C | Indexing from Delta Change Data Feed through the object view, fast search and autocomplete | OpenSearch |
 | D | Object sets, links precomputed by Spark, background exports | none |
 | E | AI Assist tools, and an MCP server over the Object API | none |
@@ -368,4 +368,28 @@ Different from the design above, for now:
 | Links stored as a join table | Only a property on each side |
 | Object sets tab, History and Actions tabs on an object page | Phases B and D |
 | `409` for a type name already in use | Publishing a new type over a published one answers `409`; the draft itself may share the name |
+
+## 13. Phase B: what is built
+
+- **The database**: PostgreSQL (`PROOFLIX_DATABASE_URL`, `_USER`, `_PASSWORD`; bundled in the Helm
+  chart, a Docker container locally). `prooflix/ontology_store.py` keeps, per workspace: a numbered
+  version of every publish (who, when, the definition), the edits actions make, and the audit log.
+  The YAML files stay the definitions the server reads; the database holds their history. Without
+  it, everything of phase A works and actions, versions and the audit log say they need it.
+- **Wizard**: two new steps before Review. **Actions** (⑤ in this build): an action sets one or more
+  properties of one object, with optional choices, who may run it (admins only when nobody is
+  chosen) and a reason. **Access** (⑥): who sees the type and who sees its sensitive properties, by
+  role or user, with *View as user*. Bronze and unclassified types start with admins only.
+- **Objects**: hidden types are left out everywhere; sensitive properties are masked unless the
+  type's access names the user; action buttons, an **edited** badge on changed properties, and a
+  **History** tab.
+- **Audit log** (admins): publish, unpublish, action (sensitive values masked), sensitive reads
+  (object pages, search results, links) and *view as user*.
+- **Edits never touch the lake** (principle 3): they are laid over objects when they are read.
+  Search matches the table's values; it shows the edited ones.
+- **Busy buttons**: the shared `Button` has `loading` (a spinner, not clickable), used by the
+  wizard's Next, Save draft and Publish, *Add link* and the action dialog.
+
+Not built yet: versions as a page of their own (the details panel shows the latest number), a
+pipeline task that writes edits back into a table, and searching on edited values.
 

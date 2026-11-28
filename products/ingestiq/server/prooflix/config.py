@@ -75,6 +75,12 @@ class Settings:
       PROOFLIX_CLICKHOUSE_PUBLIC_URL where people outside connect to query ClickHouse
                                      (shown in the ClickHouse tab only)
       PROOFLIX_CLICKHOUSE_READER     the read-only user they connect as (shown only)
+      PROOFLIX_DATABASE_URL      PostgreSQL for InsightIQ's object model (versions of
+                                 published types, actions' edits, the audit log), e.g.
+                                 postgresql://localhost:5432/prooflix; unset: actions and
+                                 the audit log are off (sqlite:///path is for tests)
+      PROOFLIX_DATABASE_USER     its user
+      PROOFLIX_DATABASE_PASSWORD its password
       PROOFLIX_DATA_LAKE   default data lake folder (what pipelines build: bronze,
                            gold, checkpoints) for every workspace: its data/ links there
                            (default for both: the workspace's own folder; a workspace
@@ -110,6 +116,9 @@ class Settings:
     clickhouse_password: str = ""
     clickhouse_public_url: str | None = None  # shown to people who query it from outside
     clickhouse_reader: str | None = None  # the read-only user they use (shown only)
+    database_url: str | None = None  # PostgreSQL of the object model; None: actions and audit are off
+    database_user: str = ""
+    database_password: str = ""
     # the values from PROOFLIX_HOME/parameters.json this server started with
     saved_parameters: dict[str, str] = field(default_factory=dict, compare=False)
 
@@ -185,6 +194,12 @@ class Settings:
             kwargs["clickhouse_public_url"] = ch_public.rstrip("/")
         if ch_reader := env.get("PROOFLIX_CLICKHOUSE_READER"):
             kwargs["clickhouse_reader"] = ch_reader
+        if db := env.get("PROOFLIX_DATABASE_URL"):
+            kwargs["database_url"] = db.strip()
+        if db_user := env.get("PROOFLIX_DATABASE_USER"):
+            kwargs["database_user"] = db_user
+        if db_password := env.get("PROOFLIX_DATABASE_PASSWORD"):
+            kwargs["database_password"] = db_password
         if start := env.get("PROOFLIX_START_DATE"):
             kwargs["start_date"] = parse_start_date(start)
         if cors := env.get("PROOFLIX_CORS"):

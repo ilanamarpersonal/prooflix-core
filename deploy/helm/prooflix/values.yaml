@@ -55,6 +55,34 @@ unityCatalog:
     limits:
       memory: 1Gi
 
+# PostgreSQL of InsightIQ's object model: versions of published types, actions' edits and
+# the audit log. On by default; or turn it off and give your own database with externalUrl.
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16.4-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    user: prooflix
+    database: prooflix
+    password: ""           # "" = generated once and kept in the Secret
+    existingSecret: ""     # or a Secret you made, with the key "password"
+  # with enabled: false, a database of your own: postgresql://host:5432/db (no user or password in
+  # it), with user and a Secret holding its password (key "password") in auth.existingSecret
+  externalUrl: ""
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
 # ClickHouse: the ClickHouse tab copies gold tables here, with the same columns and
 # types, for people outside Prooflix to query. Prooflix writes as auth.user; outside
 # users connect as auth.readerUser, which can only SELECT (readonly profile).

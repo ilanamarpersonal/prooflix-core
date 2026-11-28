@@ -31,6 +31,8 @@ run both on the change in parallel, fix every `blocker` (architect) and `critica
   `npm --prefix products/portal/client run build` / `products/insightiq/client` / `products/settings/client` for those
   products; all four when `packages/ui` changed) when it
   changed, restart the `prooflix-server` preview, and refresh the browser.
+- InsightIQ's object model keeps versions, actions' edits and its audit log in PostgreSQL: locally the
+  `prooflix-postgres` preview (Docker), set as `PROOFLIX_DATABASE_URL` / `_USER` / `_PASSWORD` in System.
 - Tests: `uv run --directory products/ingestiq/server --extra spark pytest -q`; client: `npx tsc -b` in
   `products/ingestiq/client/`.
 - npm workspaces: run `npm install` once at the repository root (not in a product).

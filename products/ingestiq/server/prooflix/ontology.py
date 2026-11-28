@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -139,6 +140,48 @@ class Link(BaseModel):
     description: str = ""
 
 
+PRINCIPAL = r"^(role:(admin|user)|user:[a-z0-9][a-z0-9._-]{2,31})$"
+
+
+class Access(BaseModel):
+    """Who sees the type and its sensitive properties: roles (role:admin, role:user = every signed-in
+    user) and users (user:dana). Admins always see everything."""
+
+    view: list[str] = []  # empty: everyone with the Objects tab
+    sensitive: list[str] = []  # who sees sensitive properties unmasked, besides admins
+
+    @field_validator("view", "sensitive")
+    @classmethod
+    def _principals(cls, v: list[str]) -> list[str]:
+        bad = [x for x in v if not re.match(PRINCIPAL, x)]
+        if bad:
+            raise ValueError(f"{', '.join(bad)}: write role:admin, role:user or user:<name>")
+        return list(dict.fromkeys(v))
+
+
+class ActionParam(BaseModel):
+    property: str  # the property this parameter sets
+    label: str = ""
+    required: bool = True
+    choices: list[str] = []  # empty: any value of the property's type
+
+
+class Action(BaseModel):
+    """A controlled change: it sets some properties of one object, with a reason, by allowed people."""
+
+    api_name: str = Field(pattern=FIELD_NAME)
+    label: str = ""
+    description: str = ""
+    parameters: list[ActionParam] = Field(min_length=1)
+    allowed: list[str] = []  # principals who may run it; empty: admins only
+    require_reason: bool = True
+
+    @field_validator("allowed")
+    @classmethod
+    def _principals(cls, v: list[str]) -> list[str]:
+        return Access._principals(v)
+
+
 class ObjectType(BaseModel):
     api_name: str = Field(pattern=TYPE_NAME)
     plural: str = ""
@@ -149,6 +192,8 @@ class ObjectType(BaseModel):
     title: str
     properties: list[Property] = Field(min_length=1)
     links: list[Link] = []
+    access: Access = Access()
+    actions: list[Action] = []
 
     @model_validator(mode="after")
     def _consistent(self):
@@ -168,6 +213,18 @@ class ObjectType(BaseModel):
         for k in self.links:
             if k.from_property not in names:
                 raise ValueError(f"link {k.api_name}: '{k.from_property}' isn't one of the properties")
+        actions = [a.api_name for a in self.actions]
+        if len(set(actions)) != len(actions):
+            raise ValueError("two actions have the same name")
+        for a in self.actions:
+            props = [x.property for x in a.parameters]
+            if len(set(props)) != len(props):
+                raise ValueError(f"action {a.api_name}: a property is set twice")
+            for x in props:
+                if x not in names:
+                    raise ValueError(f"action {a.api_name}: '{x}' isn't one of the properties")
+                if x == self.primary_key:
+                    raise ValueError(f"action {a.api_name}: the primary key can't be changed")
         return self
 
     def prop(self, name: str) -> Property:
@@ -318,7 +375,7 @@ def check(
     run: Run,
     tables: dict[str, dict],
     published: dict[str, ObjectType],
-    steps: tuple[str, ...] = ("source", "identity", "properties", "links"),
+    steps: tuple[str, ...] = ("source", "identity", "properties", "links", "actions", "access"),
 ) -> dict:
     """The wizard's checks against the data. ``tables``: the catalog's tables by name
     ({"columns": [...], "delta": bool, "rows": int}); ``published``: the published types by name.
@@ -475,6 +532,36 @@ def check(
             if target is not t and target.source.layer != t.source.layer:
                 out.append(_check("links", f"{name}: mixed layers", None, "info",
                                   f"{t.source.layer} → {target.source.layer}: the sides may refresh at different times"))
+    # ⑤ actions
+    if "actions" in steps:
+        if not t.actions:
+            out.append(_check("actions", "No actions", None, "info", "objects of this type can't be changed"))
+        for a in t.actions:
+            who = ", ".join(a.allowed) if a.allowed else "admins only"
+            out.append(_check("actions", f"Action {a.label or a.api_name}", None, "info",
+                              f"sets {', '.join(x.property for x in a.parameters)}; run by {who}"))
+            if not a.require_reason:
+                out.append(_check("actions", f"{a.label or a.api_name} asks for a reason", False, "warn",
+                                  "the audit log is clearer with one"))
+            sensitive = [x.property for x in a.parameters if t.prop(x.property).sensitive]
+            if sensitive and "role:user" in a.allowed:
+                out.append(_check("actions", f"{a.label or a.api_name}: sensitive properties", False, "warn",
+                                  f"every signed-in user may change {', '.join(sensitive)}"))
+
+    # ⑥ access
+    if "access" in steps:
+        raw = t.source.layer in ("bronze", "unclassified")
+        everyone = not t.access.view or "role:user" in t.access.view
+        out.append(_check("access", "Who sees this type", None, "info",
+                          "everyone with the Objects tab" if everyone else ", ".join(t.access.view) + " (and admins)"))
+        if raw:
+            out.append(_check("access", "Raw data isn't open to everyone", not everyone, "warn",
+                              f"a {t.source.layer} table: choose who sees it" if everyone else ""))
+        sensitive = [p.api_name for p in t.properties if p.sensitive]
+        if sensitive:
+            out.append(_check("access", "Sensitive properties are masked", "role:user" not in t.access.sensitive,
+                              "warn", f"{', '.join(sensitive)}: shown to " + (
+                                  ", ".join(t.access.sensitive) + " and admins" if t.access.sensitive else "admins only")))
     return {"checks": out, "stats": stats, "ok": not any(c["status"] == "fail" and c["severity"] == "block"
                                                           for c in out)}
 
@@ -515,11 +602,66 @@ def by_value_sql(t: ObjectType, prop: str, value: str, limit: int) -> str:
             f"ORDER BY {q(t.title)} NULLS LAST LIMIT {int(limit)}")
 
 
-def to_object(t: ObjectType, columns: list[str], row: list, can_see_sensitive: bool) -> dict:
+# ------------------------------------------------------------ access
+def allows(user, principals: list[str], empty_means_everyone: bool) -> bool:
+    """Is this user one of these principals? ``user`` None: users are off, so everyone may."""
+    if user is None or user.role == "admin":
+        return True
+    if not principals:
+        return empty_means_everyone
+    return "role:user" in principals or f"user:{user.username}" in principals
+
+
+def can_view(user, t: ObjectType) -> bool:
+    return allows(user, t.access.view, True)
+
+
+def can_see_sensitive(user, t: ObjectType) -> bool:
+    return allows(user, t.access.sensitive, False)
+
+
+def can_run(user, a: Action) -> bool:
+    return allows(user, a.allowed, False)
+
+
+def coerce(p: Property, value):
+    """A value typed into an action, as the property's type. ValueError when it doesn't fit."""
+    if value is None or value == "":
+        return None
+    kind = p.type
+    text = str(value).strip()
+    try:
+        if kind == "integer":
+            return int(text)
+        if kind in ("number", "decimal"):
+            return float(text)
+        if kind == "boolean":
+            if text.lower() in ("true", "1", "yes"):
+                return True
+            if text.lower() in ("false", "0", "no"):
+                return False
+            raise ValueError
+        if kind == "date":
+            return datetime.fromisoformat(text).date().isoformat()
+        if kind == "timestamp":
+            return datetime.fromisoformat(text).isoformat(sep=" ")
+    except ValueError:
+        raise ValueError(f"{p.api_name}: '{text}' isn't a {kind}") from None
+    return value if isinstance(value, (int, float, bool)) else text
+
+
+def to_object(t: ObjectType, columns: list[str], row: list, can_see_sensitive: bool,
+              edits: dict[str, dict] | None = None) -> dict:
+    """An object as the API answers it: actions' edits laid over the table's values, then masking."""
     values = dict(zip(columns, row))
+    edited = {}
+    for prop, e in (edits or {}).items():
+        if prop in values:
+            values[prop] = e["value"]
+            edited[prop] = {"by": e["by"], "at": e["at"], "action": e["action"]}
     if not can_see_sensitive:
         for p in t.properties:
             if p.sensitive and values.get(p.api_name) is not None:
                 values[p.api_name] = MASK
     return {"type": t.api_name, "pk": None if values.get(t.primary_key) is None else str(values[t.primary_key]),
-            "title": values.get(t.title), "properties": values}
+            "title": values.get(t.title), "properties": values, "edited": edited}

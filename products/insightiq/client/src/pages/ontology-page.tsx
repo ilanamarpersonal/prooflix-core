@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router"
-import { Boxes, LayoutGrid, Loader2, Network, Pencil, Plus, Sparkles, Trash2 } from "lucide-react"
+import { Boxes, Database, LayoutGrid, Network, Pencil, Plus, ScrollText, Sparkles, Trash2 } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { ErrorAlert } from "@prooflix/ui/app/error-alert"
@@ -10,7 +10,7 @@ import { Button } from "@prooflix/ui/components/ui/button"
 import { Card, CardContent } from "@prooflix/ui/components/ui/card"
 import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
 import { LayerBadge, suggestLinks, TypeAvatar, type LinkSuggestion } from "@/components/ontology-ui"
-import { api, ApiError, useOntologyTypes } from "@/lib/api"
+import { api, ApiError, useObjectsStatus, useOntologyTypes } from "@/lib/api"
 import type { ObjectType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -22,6 +22,8 @@ interface Node {
 /** The Object Model tab (internally: the ontology): the workspace's object types and links as a graph or a list, and the way into the wizard. */
 export function OntologyPage() {
   const types = useOntologyTypes()
+  const status = useObjectsStatus()
+  const db = status.data?.database
   const [view, setView] = useState<"graph" | "list">("graph")
   const [selected, setSelected] = useState<string | null>(null)
   const navigate = useNavigate()
@@ -87,6 +89,11 @@ export function OntologyPage() {
                 </button>
               ))}
             </div>
+            {status.data?.admin && db?.ok && (
+              <Button variant="outline" onClick={() => navigate("/ontology/audit")}>
+                <ScrollText /> Audit log
+              </Button>
+            )}
             <Button onClick={() => navigate("/ontology/new")}>
               <Plus /> New object type
             </Button>
@@ -94,6 +101,14 @@ export function OntologyPage() {
         }
       />
       {types.error && <ErrorAlert title="The object model can't be read" error={types.error} />}
+      {db && !db.ok && (
+        <div className="text-muted-foreground mb-4 flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm">
+          <Database className="size-4" />
+          {db.configured
+            ? `The object model's database isn't reachable: ${db.error}`
+            : "Actions, versions and the audit log are off: set PROOFLIX_DATABASE_URL in Settings & Management → System."}
+        </div>
+      )}
       {types.data?.broken.map((b) => (
         <div key={b} className="mb-3">
           <ErrorAlert title="A definition file can't be read" error={new Error(b)} />
@@ -129,7 +144,13 @@ export function OntologyPage() {
             {addError != null && <ErrorAlert title="The link wasn't added" error={addError} />}
             {suggestions.length > 0 && <Suggestions suggestions={suggestions} adding={adding} onAdd={add} />}
           </div>
-          {current && <Details node={current} hasDraft={hasDraft(current.type.api_name)} />}
+          {current && (
+            <Details
+              node={current}
+              hasDraft={hasDraft(current.type.api_name)}
+              version={types.data?.versions?.[current.type.api_name]}
+            />
+          )}
         </div>
       )}
     </div>
@@ -350,8 +371,14 @@ function Suggestions({
                 </span>
                 <code className="text-muted-foreground block truncate text-xs">{s.via}</code>
               </span>
-              <Button size="sm" variant="outline" disabled={adding !== null} onClick={() => onAdd(s)}>
-                {adding === s.source + s.link.api_name ? <Loader2 className="animate-spin" /> : <Plus />} Add link
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={adding !== null}
+                loading={adding === s.source + s.link.api_name}
+                onClick={() => onAdd(s)}
+              >
+                <Plus /> Add link
               </Button>
             </li>
           ))}
@@ -361,7 +388,7 @@ function Suggestions({
   )
 }
 
-function Details({ node, hasDraft }: { node: Node; hasDraft: boolean }) {
+function Details({ node, hasDraft, version }: { node: Node; hasDraft: boolean; version?: number }) {
   const t = node.type
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -381,6 +408,18 @@ function Details({ node, hasDraft }: { node: Node; hasDraft: boolean }) {
     ["Title", t.title],
     ["Properties", `${t.properties.length} (${t.properties.filter((p) => p.sensitive).length} sensitive)`],
     ["Links", t.links.map((l) => `${l.api_name} → ${l.target}`).join(", ") || "none"],
+    ["Actions", (t.actions ?? []).map((a) => a.label || a.api_name).join(", ") || "none"],
+    [
+      "Seen by",
+      (t.access?.view ?? []).length
+        ? t
+            .access!.view.map((p) =>
+              p.replace("role:admin", "admins").replace("role:user", "everyone").replace("user:", ""),
+            )
+            .join(", ")
+        : "everyone with the Objects tab",
+    ],
+    ...(version ? [["Version", `v${version}`] as [string, React.ReactNode]] : []),
   ]
   return (
     <Card className="h-fit">

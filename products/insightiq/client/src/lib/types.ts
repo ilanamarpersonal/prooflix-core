@@ -30,6 +30,28 @@ export interface Link {
   description?: string
 }
 
+/** role:admin, role:user (every signed-in user) or user:<name> */
+export interface Access {
+  view: string[]
+  sensitive: string[]
+}
+
+export interface ActionParam {
+  property: string
+  label?: string
+  required?: boolean
+  choices?: string[]
+}
+
+export interface Action {
+  api_name: string
+  label?: string
+  description?: string
+  parameters: ActionParam[]
+  allowed: string[]
+  require_reason?: boolean
+}
+
 export interface ObjectType {
   api_name: string
   plural?: string
@@ -40,6 +62,8 @@ export interface ObjectType {
   title: string
   properties: Property[]
   links: Link[]
+  access?: Access
+  actions?: Action[]
 }
 
 export interface SourceTable {
@@ -51,7 +75,7 @@ export interface SourceTable {
 }
 
 export interface Check {
-  step: "source" | "identity" | "properties" | "links"
+  step: "source" | "identity" | "properties" | "links" | "actions" | "access"
   name: string
   status: "ok" | "fail" | "info"
   severity: "block" | "warn" | "info"
@@ -85,6 +109,8 @@ export interface OntologyObject {
   pk: string | null
   title: unknown
   properties: Record<string, unknown>
+  /** properties an action changed: who, when, which action */
+  edited?: Record<string, { by: string | null; at: string; action: string }>
 }
 
 export interface ObjectLink {
@@ -100,4 +126,38 @@ export interface ObjectLink {
 
 export interface PublishedType extends ObjectType {
   all_links: ObjectLink[]
+  my_actions: string[]
+  sees_sensitive: boolean
+}
+
+export interface Principal {
+  principal: string
+  label: string
+  role?: string
+}
+
+export interface DatabaseStatus {
+  configured: boolean
+  ok: boolean
+  kind: string | null
+  error: string | null
+}
+
+export interface HistoryRun {
+  run: string
+  action: string
+  reason: string | null
+  by: string | null
+  at: string
+  values: Record<string, unknown>
+}
+
+export interface AuditEvent {
+  id: number
+  at: string
+  user: string | null
+  event: string
+  type: string | null
+  pk: string | null
+  detail: Record<string, unknown>
 }

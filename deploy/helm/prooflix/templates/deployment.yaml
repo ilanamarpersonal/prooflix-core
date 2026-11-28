@@ -97,6 +97,18 @@ spec:
             - name: PROOFLIX_UC_TOKEN
               value: {{ . | quote }}
             {{- end }}
+            {{- if or .Values.postgres.enabled .Values.postgres.externalUrl }}
+            # the object model's database (postgres in values.yaml)
+            - name: PROOFLIX_DATABASE_URL
+              value: {{ .Values.postgres.externalUrl | default (printf "postgresql://%s:5432/%s" (include "prooflix.postgresName" .) .Values.postgres.auth.database) | quote }}
+            - name: PROOFLIX_DATABASE_USER
+              value: {{ .Values.postgres.auth.user | quote }}
+            - name: PROOFLIX_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prooflix.postgresSecretName" . }}
+                  key: password
+            {{- end }}
             {{- if .Values.clickhouse.enabled }}
             # where the ClickHouse tab copies gold tables (clickhouse in values.yaml)
             - name: PROOFLIX_CLICKHOUSE_URL

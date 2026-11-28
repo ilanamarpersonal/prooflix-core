@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router"
-import { ArrowRight, Boxes, ChevronRight, Loader2, Network, Search } from "lucide-react"
+import { ArrowRight, Boxes, ChevronRight, Loader2, Network, Search, Zap } from "lucide-react"
 
 import { ErrorAlert } from "@prooflix/ui/app/error-alert"
 import { PageHeader } from "@prooflix/ui/app/page-header"
@@ -9,10 +9,11 @@ import { Button } from "@prooflix/ui/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@prooflix/ui/components/ui/card"
 import { Input } from "@prooflix/ui/components/ui/input"
 import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
+import { Textarea } from "@prooflix/ui/components/ui/textarea"
 import { LayerBadge, show, TypeAvatar, useDebounced } from "@/components/ontology-ui"
-import { useLinked, useObject, useObjectTypes, useSearch } from "@/lib/api"
-import type { ObjectLink, OntologyObject, PublishedType } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { useHistory, useLinked, useObject, useObjectTypes, useRunAction, useSearch } from "@/lib/api"
+import type { Action, ObjectLink, OntologyObject, PublishedType } from "@/lib/types"
+import { cn, formatDateTime } from "@/lib/utils"
 
 const objectPath = (o: OntologyObject) => `/objects/${o.type}/${encodeURIComponent(o.pk ?? "")}`
 
@@ -189,7 +190,8 @@ function ObjectPage() {
   const obj = useObject(type, pk)
   const types = useObjectTypes()
   const def = types.data?.find((t) => t.api_name === type)
-  const [tab, setTab] = useState<"properties" | "links">("properties")
+  const [tab, setTab] = useState<"properties" | "links" | "history">("properties")
+  const [acting, setActing] = useState<string | null>(null)
   const [link, setLink] = useState<string | null>(null)
   const links = obj.data?.links ?? []
   const current = link ?? links.find((l) => (l.count ?? 0) > 0)?.name ?? links[0]?.name ?? null
@@ -233,9 +235,36 @@ function ObjectPage() {
             </div>
           ))}
         </dl>
+        {(def?.my_actions.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {def!.actions
+              ?.filter((a) => def!.my_actions.includes(a.api_name))
+              .map((a) => (
+                <Button key={a.api_name} variant="outline" onClick={() => setActing(a.api_name)}>
+                  <Zap /> {a.label || a.api_name}
+                </Button>
+              ))}
+          </div>
+        )}
       </div>
+      {obj.data.database_error && (
+        <div className="mb-4">
+          <ErrorAlert
+            title="Changes made by actions can't be shown right now"
+            error={new Error(obj.data.database_error)}
+          />
+        </div>
+      )}
+      {acting && def && (
+        <ActionDialog
+          type={def}
+          obj={o}
+          action={def.actions!.find((a) => a.api_name === acting)!}
+          onClose={() => setActing(null)}
+        />
+      )}
       <div className="mb-4 flex gap-1 border-b">
-        {(["properties", "links"] as const).map((t) => (
+        {(["properties", "links", "history"] as const).map((t) => (
           <button
             key={t}
             type="button"
@@ -269,6 +298,15 @@ function ObjectPage() {
                           sensitive
                         </Badge>
                       )}
+                      {o.edited?.[p.api_name] && (
+                        <Badge
+                          variant="secondary"
+                          className="ml-2"
+                          title={`Changed by ${o.edited[p.api_name]!.by ?? "someone"} (${o.edited[p.api_name]!.action}) at ${o.edited[p.api_name]!.at}`}
+                        >
+                          <Zap /> edited
+                        </Badge>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -276,6 +314,8 @@ function ObjectPage() {
             </table>
           </CardContent>
         </Card>
+      ) : tab === "history" ? (
+        <History type={type} pk={pk} def={def} />
       ) : links.length === 0 ? (
         <p className="text-muted-foreground text-sm">This type has no links.</p>
       ) : (
@@ -371,5 +411,149 @@ function LinkedObjects({
         {linked.data?.more && <p className="text-muted-foreground mt-2 text-xs">Showing the first 50.</p>}
       </CardContent>
     </Card>
+  )
+}
+
+/** Run an action on one object: its parameters (with choices), a reason, then the changed object. */
+function ActionDialog({
+  type,
+  obj,
+  action,
+  onClose,
+}: {
+  type: PublishedType
+  obj: OntologyObject
+  action: Action
+  onClose: () => void
+}) {
+  const run = useRunAction(type.api_name, obj.pk ?? "")
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      action.parameters.map((x) => [x.property, String(obj.properties[x.property] ?? "").replace("••••", "")]),
+    ),
+  )
+  const [reason, setReason] = useState("")
+  const missing =
+    action.parameters.some((x) => x.required !== false && !values[x.property]?.trim()) ||
+    (action.require_reason !== false && !reason.trim())
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <Card role="dialog" aria-modal className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="size-4 text-violet-500" /> {action.label || action.api_name}
+          </CardTitle>
+          <p className="text-muted-foreground text-sm">
+            {action.description || `On ${type.api_name} ${show(obj.title)}`}. The change is recorded and audited; the
+            table itself is not written.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {action.parameters.map((x) => {
+            const p = type.properties.find((q) => q.api_name === x.property)
+            return (
+              <label key={x.property} className="grid gap-1.5 text-sm">
+                <span className="font-medium">
+                  {x.label || p?.label || x.property}
+                  {x.required !== false && <span className="text-status-failed"> *</span>}
+                  <span className="text-muted-foreground ml-2 text-xs font-normal">
+                    now: {show(obj.properties[x.property])}
+                  </span>
+                </span>
+                {x.choices?.length ? (
+                  <select
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    value={values[x.property] ?? ""}
+                    onChange={(e) => setValues({ ...values, [x.property]: e.target.value })}
+                  >
+                    <option value="">Choose…</option>
+                    {x.choices.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    value={values[x.property] ?? ""}
+                    onChange={(e) => setValues({ ...values, [x.property]: e.target.value })}
+                  />
+                )}
+              </label>
+            )
+          })}
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">
+              Reason{action.require_reason !== false && <span className="text-status-failed"> *</span>}
+            </span>
+            <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why" />
+          </label>
+          {run.error && <ErrorAlert title="Not applied" error={run.error} />}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              disabled={missing}
+              loading={run.isPending}
+              onClick={() =>
+                run.mutate(
+                  {
+                    action: action.api_name,
+                    values: Object.fromEntries(action.parameters.map((x) => [x.property, values[x.property] ?? ""])),
+                    reason,
+                  },
+                  { onSuccess: onClose },
+                )
+              }
+            >
+              <Zap /> Apply
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+/** The actions applied to one object, newest first. */
+function History({ type, pk, def }: { type: string; pk: string; def?: PublishedType }) {
+  const history = useHistory(type, pk, true)
+  if (history.isLoading) return <Skeleton className="h-32" />
+  if (history.error) return <ErrorAlert title="The history can't be read" error={history.error} />
+  if (!history.data?.available)
+    return (
+      <p className="text-muted-foreground text-sm">
+        {history.data?.error
+          ? `The history can't be read: ${history.data.error}`
+          : "No history: actions and their history need the object model's database."}
+      </p>
+    )
+  if (history.data.runs.length === 0)
+    return <p className="text-muted-foreground text-sm">No action has changed this object yet.</p>
+  const label = (name: string) => def?.actions?.find((a) => a.api_name === name)?.label || name
+  return (
+    <ol className="relative grid gap-4 border-l pl-6">
+      {history.data.runs.map((r) => (
+        <li key={r.run} className="relative">
+          <span className="absolute top-1 -left-[1.95rem] flex size-5 items-center justify-center rounded-full bg-violet-500 text-white">
+            <Zap className="size-3" />
+          </span>
+          <div className="text-sm">
+            <span className="font-semibold">{label(r.action)}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              by {r.by ?? "(users off)"} · {formatDateTime(r.at)}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {Object.entries(r.values).map(([k, v]) => (
+              <Badge key={k} variant="outline">
+                {k} → {show(v)}
+              </Badge>
+            ))}
+          </div>
+          {r.reason && <p className="text-muted-foreground mt-1 text-sm italic">“{r.reason}”</p>}
+        </li>
+      ))}
+    </ol>
   )
 }

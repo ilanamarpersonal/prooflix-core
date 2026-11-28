@@ -27,6 +27,10 @@ colours, controls and behaviour.
 - **Shared look:** light and dark themes, usable at narrow widths, no semicolons,
   120-character lines (principle 24).
 
+- **Busy buttons:** a button that waits on work (saving, checking, publishing) gets
+  `loading` (`<Button loading={pending}>`): a spinner in place of its icons, and it can't be
+  clicked until the work is done.
+
 ## Must not
 
 - Copy a shadcn primitive, the logo or theme tokens into a product.

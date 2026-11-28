@@ -6,7 +6,9 @@ import {
   ArrowRight,
   Boxes,
   Check as CheckMark,
+  Eye,
   Loader2,
+  Lock,
   Plus,
   Rocket,
   Save,
@@ -36,8 +38,29 @@ import {
   useDebounced,
   warnings,
 } from "@/components/ontology-ui"
-import { api, ApiError, useChecks, useOntologyTypes, usePreview, usePublish, useSources } from "@/lib/api"
-import type { Cardinality, CheckResult, Layer, Link, ObjectType, Property, PropType, SourceTable } from "@/lib/types"
+import {
+  api,
+  ApiError,
+  useChecks,
+  useObjectsStatus,
+  useOntologyTypes,
+  usePreview,
+  usePrincipals,
+  usePublish,
+  useSources,
+} from "@/lib/api"
+import type {
+  Action,
+  Cardinality,
+  CheckResult,
+  Layer,
+  Link,
+  ObjectType,
+  Principal,
+  Property,
+  PropType,
+  SourceTable,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const STEPS = [
@@ -45,10 +68,12 @@ const STEPS = [
   { id: "identity", label: "Identity" },
   { id: "properties", label: "Properties" },
   { id: "links", label: "Links" },
+  { id: "actions", label: "Actions" },
+  { id: "access", label: "Access" },
   { id: "review", label: "Review & publish" },
 ] as const
 type StepId = (typeof STEPS)[number]["id"]
-const ALL_CHECKS = ["source", "identity", "properties", "links"]
+const ALL_CHECKS = ["source", "identity", "properties", "links", "actions", "access"]
 const TYPES: PropType[] = ["auto", "string", "integer", "number", "decimal", "boolean", "date", "timestamp"]
 const selectClass =
   "border-input bg-background h-9 w-full rounded-md border px-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
@@ -200,6 +225,12 @@ export function OntologyWizardPage() {
       {def && stepId === "links" && (
         <LinksStep def={def} update={update} result={checks.data} checking={checks.isFetching} />
       )}
+      {def && stepId === "actions" && (
+        <ActionsStep def={def} update={update} result={checks.data} checking={checks.isFetching} />
+      )}
+      {def && stepId === "access" && (
+        <AccessStep def={def} update={update} result={checks.data} checking={checks.isFetching} />
+      )}
       {def && stepId === "review" && (
         <ReviewStep
           def={def}
@@ -224,6 +255,7 @@ export function OntologyWizardPage() {
         saving={saving}
         savedAt={savedAt}
         nextDisabled={!def || blocked || saving}
+        nextBusy={!!def && (saving || !fresh || checks.isFetching)}
         nextHint={
           !def
             ? "Choose a table"
@@ -290,6 +322,8 @@ function Footer(props: {
   saving: boolean
   savedAt: Date | null
   nextDisabled: boolean
+  /** checks are running or the draft is saving: Next shows a spinner until they are done */
+  nextBusy: boolean
   nextHint: string
   last: boolean
 }) {
@@ -307,11 +341,11 @@ function Footer(props: {
               : "The draft is saved at every step"}
         </span>
         <span className="ml-auto text-xs text-muted-foreground">{props.nextHint}</span>
-        <Button variant="outline" onClick={props.onSave} disabled={!props.canSave}>
+        <Button variant="outline" onClick={props.onSave} disabled={!props.canSave} loading={props.saving}>
           <Save /> Save draft
         </Button>
         {!props.last && (
-          <Button onClick={props.onNext} disabled={props.nextDisabled}>
+          <Button onClick={props.onNext} disabled={props.nextDisabled} loading={props.nextBusy}>
             Next: {STEPS[props.step + 1]?.label} <ArrowRight />
           </Button>
         )}
@@ -346,17 +380,31 @@ function ChecksCard({
 }
 
 /** One sample object after the row rules, as the Objects tab will show it. */
-function PreviewCard({ def }: { def: ObjectType }) {
+function PreviewCard({ def, asUser }: { def: ObjectType; asUser?: string }) {
   const settled = useDebounced(def)
-  const preview = usePreview(settled)
+  const preview = usePreview(settled, asUser)
   const obj = preview.data?.objects[0]
+  if (asUser && preview.data && !preview.data.visible)
+    return (
+      <Card className="h-fit lg:sticky lg:top-4">
+        <CardContent className="grid justify-items-center gap-2 py-10 text-center">
+          <Lock className="text-muted-foreground size-8" />
+          <div className="font-semibold">
+            {asUser} doesn't see {def.api_name}
+          </div>
+          <p className="text-muted-foreground text-xs">Add them (or a role they have) to who sees this type.</p>
+        </CardContent>
+      </Card>
+    )
   return (
     <Card className="h-fit lg:sticky lg:top-4">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
           Preview object {preview.isFetching && <Loader2 className="text-muted-foreground size-4 animate-spin" />}
         </CardTitle>
-        <p className="text-muted-foreground text-xs">one sample, after the row rules</p>
+        <p className="text-muted-foreground text-xs">
+          {asUser ? `as ${asUser} sees it` : "one sample, after the row rules"}
+        </p>
       </CardHeader>
       <CardContent className="grid gap-3">
         {preview.error ? (
@@ -1139,6 +1187,16 @@ function changes(
   for (const k of ["primary_key", "title", "description", "plural"] as const)
     if ((def[k] ?? "") !== (original[k] ?? ""))
       out.push({ sign: "~", what: k.replace("_", " "), note: `${original[k] || "—"} → ${def[k] || "—"}` })
+  if (!same(def.access ?? { view: [], sensitive: [] }, original.access ?? { view: [], sensitive: [] }))
+    out.push({ sign: "~", what: "Access", note: `seen by ${who(def.access?.view ?? [], "everyone")}` })
+  for (const a of def.actions ?? []) {
+    const old = (original.actions ?? []).find((x) => x.api_name === a.api_name)
+    if (!old) out.push({ sign: "+", what: `action ${a.label || a.api_name}`, note: "added" })
+    else if (!same(a, old)) out.push({ sign: "~", what: `action ${a.label || a.api_name}`, note: "changed" })
+  }
+  for (const a of original.actions ?? [])
+    if (!(def.actions ?? []).some((x) => x.api_name === a.api_name))
+      out.push({ sign: "−", what: `action ${a.label || a.api_name}`, note: "removed" })
   const byName = (ps: { api_name: string }[]) => new Map(ps.map((p) => [p.api_name, p]))
   for (const [kind, now, then] of [
     ["property", byName(def.properties), byName(original.properties)],
@@ -1224,11 +1282,12 @@ function ReviewStep({
           {publish.error && <ErrorAlert title="Not published" error={publish.error} />}
           <Button
             size="lg"
-            disabled={checking || blocks.length > 0 || publish.isPending}
+            disabled={blocks.length > 0}
+            loading={checking || publish.isPending}
             onClick={() => publish.mutate({ type: def, modified }, { onSuccess: (r) => onPublished(r.path) })}
             className="bg-gradient-to-r from-violet-500 to-pink-600 text-white hover:opacity-90"
           >
-            {publish.isPending ? <Loader2 className="animate-spin" /> : <Rocket />} Publish {def.api_name}
+            <Rocket /> Publish {def.api_name}
           </Button>
         </CardContent>
       </Card>
@@ -1260,5 +1319,330 @@ function Published({ def, path, onAgain }: { def: ObjectType; path: string; onAg
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+// ------------------------------------------------------------ ⑤ actions
+const who = (principals: string[], empty: string) =>
+  principals.length
+    ? principals
+        .map((p) =>
+          p
+            .replace(/^role:admin$/, "admins")
+            .replace(/^role:user$/, "every signed-in user")
+            .replace(/^user:/, ""),
+        )
+        .join(", ")
+    : empty
+
+/** Choose principals: admins, every signed-in user, or named users. */
+function PrincipalPicker({
+  value,
+  onChange,
+  principals,
+  empty,
+}: {
+  value: string[]
+  onChange: (v: string[]) => void
+  principals: Principal[]
+  empty: string
+}) {
+  const toggle = (p: string) => onChange(value.includes(p) ? value.filter((x) => x !== p) : [...value, p])
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap gap-1.5">
+        {principals.map((p) => {
+          const on = value.includes(p.principal)
+          return (
+            <button
+              key={p.principal}
+              type="button"
+              onClick={() => toggle(p.principal)}
+              className={cn(
+                "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-sm",
+                on
+                  ? "border-violet-500 bg-violet-500/10 font-medium text-violet-700 dark:text-violet-300"
+                  : "hover:bg-accent",
+              )}
+            >
+              {on && <CheckMark className="size-3" />}
+              {p.label}
+              {p.role === "admin" && <span className="text-muted-foreground text-xs">(admin)</span>}
+            </button>
+          )
+        })}
+      </div>
+      <span className="text-muted-foreground text-xs">{value.length ? `Chosen: ${who(value, "")}` : empty}</span>
+    </div>
+  )
+}
+
+function ActionsStep({ def, update, result, checking }: StepProps) {
+  const principals = usePrincipals()
+  const status = useObjectsStatus()
+  const actions = def.actions ?? []
+  const checks = result?.checks.filter((c) => c.step === "actions") ?? []
+  const editable = def.properties.filter((p) => p.api_name !== def.primary_key)
+  const setAction = (i: number, patch: Partial<Action>) =>
+    update((d) => {
+      const list = [...(d.actions ?? [])]
+      list[i] = { ...list[i]!, ...patch }
+      return { ...d, actions: list }
+    })
+  const add = () => {
+    const prop = editable.find((p) => /status|state|flag|segment|type/i.test(p.column)) ?? editable[0]
+    if (!prop) return
+    update((d) => ({
+      ...d,
+      actions: [
+        ...(d.actions ?? []),
+        {
+          api_name: `set_${prop.api_name}`.slice(0, 60),
+          label: `Set ${prop.api_name.replace(/_/g, " ")}`,
+          description: "",
+          parameters: [{ property: prop.api_name, label: "", required: true, choices: [] }],
+          allowed: [],
+          require_reason: true,
+        },
+      ],
+    }))
+  }
+  const db = status.data?.database
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
+      <div className="grid content-start gap-4">
+        {db && !db.ok && (
+          <div className="border-status-cancelled/50 bg-status-cancelled/10 rounded-lg border p-3 text-sm">
+            {db.configured
+              ? `The object model's database isn't reachable (${db.error}). Actions can be defined, but not run.`
+              : "Actions can be defined now; running them needs the object model's database (PROOFLIX_DATABASE_URL in Settings & Management → System)."}
+          </div>
+        )}
+        {actions.length === 0 && (
+          <Card>
+            <CardContent className="text-muted-foreground py-8 text-center text-sm">
+              No actions yet. An action is a controlled change: it sets some properties of one object (say{" "}
+              <i>Freeze account</i> sets its <b>status</b>), with a reason, by the people you allow. It never writes the
+              table: the change is recorded and shown over it.
+            </CardContent>
+          </Card>
+        )}
+        {actions.map((a, i) => (
+          <Card key={i} className="border-violet-500/40">
+            <CardContent className="grid gap-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Label">
+                  <Input value={a.label ?? ""} onChange={(e) => setAction(i, { label: e.target.value })} />
+                </Field>
+                <Field label="Name">
+                  <Input
+                    className="font-mono"
+                    value={a.api_name}
+                    onChange={(e) => setAction(i, { api_name: fieldName(e.target.value) })}
+                  />
+                </Field>
+                <div className="flex items-end justify-end">
+                  <Button
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    onClick={() => update((d) => ({ ...d, actions: (d.actions ?? []).filter((_, j) => j !== i) }))}
+                  >
+                    <Trash2 /> Remove action
+                  </Button>
+                </div>
+                <div className="sm:col-span-3">
+                  <Field label="Description">
+                    <Input
+                      value={a.description ?? ""}
+                      placeholder="When to use it"
+                      onChange={(e) => setAction(i, { description: e.target.value })}
+                    />
+                  </Field>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <span className="text-sm font-medium">It sets</span>
+                {a.parameters.map((x, j) => (
+                  <div key={j} className="bg-muted/40 grid gap-2 rounded-lg p-2 sm:grid-cols-[12rem_1fr_auto_auto]">
+                    <select
+                      className={selectClass}
+                      value={x.property}
+                      onChange={(e) => {
+                        const params = [...a.parameters]
+                        params[j] = { ...x, property: e.target.value }
+                        setAction(i, { parameters: params })
+                      }}
+                    >
+                      {editable.map((p) => (
+                        <option key={p.api_name}>{p.api_name}</option>
+                      ))}
+                    </select>
+                    <ChoicesInput
+                      value={x.choices ?? []}
+                      onChange={(choices) => {
+                        const params = [...a.parameters]
+                        params[j] = { ...x, choices }
+                        setAction(i, { parameters: params })
+                      }}
+                    />
+                    <label className="flex items-center gap-1.5 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-violet-500"
+                        checked={x.required !== false}
+                        onChange={(e) => {
+                          const params = [...a.parameters]
+                          params[j] = { ...x, required: e.target.checked }
+                          setAction(i, { parameters: params })
+                        }}
+                      />
+                      required
+                    </label>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={a.parameters.length === 1}
+                      onClick={() => setAction(i, { parameters: a.parameters.filter((_, k) => k !== j) })}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                ))}
+                <div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const next = editable.find((p) => !a.parameters.some((x) => x.property === p.api_name))
+                      if (next)
+                        setAction(i, { parameters: [...a.parameters, { property: next.api_name, required: true }] })
+                    }}
+                  >
+                    <Plus /> Another property
+                  </Button>
+                </div>
+              </div>
+              <Field label="Who may run it">
+                <PrincipalPicker
+                  value={a.allowed}
+                  onChange={(v) => setAction(i, { allowed: v })}
+                  principals={principals.data ?? []}
+                  empty="Nobody chosen: admins only"
+                />
+              </Field>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-violet-500"
+                  checked={a.require_reason !== false}
+                  onChange={(e) => setAction(i, { require_reason: e.target.checked })}
+                />
+                Ask for a reason (it goes into the audit log)
+              </label>
+            </CardContent>
+          </Card>
+        ))}
+        <div>
+          <Button variant="outline" onClick={add} disabled={editable.length === 0}>
+            <Plus /> Add action
+          </Button>
+        </div>
+        <ChecksCard checks={checks} checking={checking} />
+      </div>
+      <PreviewCard def={def} />
+    </div>
+  )
+}
+
+// ------------------------------------------------------------ ⑥ access
+function AccessStep({ def, update, result, checking }: StepProps) {
+  const principals = usePrincipals()
+  const [asUser, setAsUser] = useState("")
+  const access = def.access ?? { view: [], sensitive: [] }
+  const checks = result?.checks.filter((c) => c.step === "access") ?? []
+  const sensitive = def.properties.filter((p) => p.sensitive)
+  const users = (principals.data ?? []).filter((p) => p.principal.startsWith("user:"))
+  const setAccess = (patch: Partial<NonNullable<ObjectType["access"]>>) =>
+    update((d) => ({ ...d, access: { ...(d.access ?? { view: [], sensitive: [] }), ...patch } }))
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_22rem]">
+      <div className="grid content-start gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Eye className="size-4" /> Who sees {def.plural || def.api_name}
+              <LayerBadge layer={def.source.layer} />
+            </CardTitle>
+            <p className="text-muted-foreground text-xs">
+              Besides the Objects tab itself. Admins always see everything. People not chosen don't see the type at all:
+              not in search, not as a link.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <PrincipalPicker
+              value={access.view}
+              onChange={(v) => setAccess({ view: v })}
+              principals={principals.data ?? []}
+              empty="Nobody chosen: everyone with the Objects tab"
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Lock className="size-4" /> Who sees sensitive properties
+            </CardTitle>
+            <p className="text-muted-foreground text-xs">
+              {sensitive.length
+                ? `${sensitive.map((p) => p.api_name).join(", ")}: shown as •••• to everyone else. Reads are audited.`
+                : "No property is marked sensitive (step 3)."}
+            </p>
+          </CardHeader>
+          <CardContent>
+            <PrincipalPicker
+              value={access.sensitive}
+              onChange={(v) => setAccess({ sensitive: v })}
+              principals={principals.data ?? []}
+              empty="Nobody chosen: admins only"
+            />
+          </CardContent>
+        </Card>
+        <ChecksCard checks={checks} checking={checking} />
+      </div>
+      <div className="grid content-start gap-3">
+        <Field label="View as user" hint="The preview shows the type exactly as this user would (never more than you).">
+          <select className={selectClass} value={asUser} onChange={(e) => setAsUser(e.target.value)}>
+            <option value="">Me</option>
+            {users.map((u) => (
+              <option key={u.principal} value={u.label}>
+                {u.label}
+                {u.role === "admin" ? " (admin)" : ""}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <PreviewCard def={def} asUser={asUser || undefined} />
+      </div>
+    </div>
+  )
+}
+
+/** Choices typed as text ("active, frozen"): the text is kept as typed, the list follows it. */
+function ChoicesInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value.join(", "))
+  return (
+    <Input
+      placeholder="Choices, separated by commas (empty: any value)"
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value)
+        onChange(
+          e.target.value
+            .split(",")
+            .map((c) => c.trim())
+            .filter(Boolean),
+        )
+      }}
+    />
   )
 }

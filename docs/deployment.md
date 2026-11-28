@@ -182,6 +182,32 @@ docker run -d --name prooflix-clickhouse -p 8123:8123 -p 9000:9000 \
 then set `PROOFLIX_CLICKHOUSE_URL=http://localhost:8123`, `_USER`, `_PASSWORD` and
 `_READER` in the System tab.
 
+**PostgreSQL.** The chart runs PostgreSQL (`postgres:16.4-alpine`, PostgreSQL License) as a
+StatefulSet with its own volume, for InsightIQ's object model: versions of published types, the
+edits actions make, and the audit log. The server gets `PROOFLIX_DATABASE_URL`, `_USER` and
+`_PASSWORD`; the password is generated on the first install and kept in the Secret
+`<release>-postgres` (key `password`), or comes from `postgres.auth.existingSecret`. It is only
+reachable inside the cluster (`kubectl port-forward svc/<release>-postgres 5432` to look inside).
+
+| Value | Default | Meaning |
+|---|---|---|
+| `postgres.enabled` | `true` | Run PostgreSQL in the release |
+| `postgres.auth.user` / `database` / `password` | `prooflix` / `prooflix` / generated | Its user and database |
+| `postgres.externalUrl` | `""` | With `enabled: false`: your own database (`postgresql://host:5432/db`), with `auth.user` and `auth.existingSecret` |
+| `postgres.persistence.*` | `5Gi` volume | Its data (kept on `helm uninstall`) |
+
+Locally, the `prooflix-postgres` entry of `.claude/launch.json` runs it in Docker (on 127.0.0.1
+only, password `prooflix-dev`, data in the `prooflix-postgres-data` volume):
+
+```bash
+docker run --rm --name prooflix-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_USER=prooflix \
+  -e POSTGRES_PASSWORD=prooflix-dev -e POSTGRES_DB=prooflix -v prooflix-postgres-data:/var/lib/postgresql/data \
+  postgres:16.4-alpine
+```
+
+then set `PROOFLIX_DATABASE_URL=postgresql://localhost:5432/prooflix`, `_USER=prooflix` and
+`_PASSWORD` in the System tab and restart the server.
+
 ## Terraform (`deploy/terraform`)
 
 Installs the chart with the `hashicorp/helm` provider (v3), so the chart stays

@@ -210,3 +210,131 @@ def test_sensitive_properties_are_masked_for_non_admins(tmp_path: Path, client):
         assert a.post("/api/ontology/check", json={"type": CUSTOMER}).status_code == 403
         a.post("/api/auth/logout")
         assert a.get("/api/ontology/objects/search").status_code == 401
+
+
+# ------------------------------------------------------------ phase B: access, actions, versions, audit
+GOOD = "Correct-horse-9"
+
+
+def _with_actions():
+    t = copy.deepcopy(ACCOUNT)
+    t["properties"].append({"api_name": "status_note", "column": "kind", "description": "x"})
+    t["actions"] = [{"api_name": "reclassify", "label": "Reclassify",
+                     "parameters": [{"property": "kind", "choices": ["checking", "savings", "frozen"]}],
+                     "allowed": ["user:dana"]}]
+    return t
+
+
+def test_definition_rules_for_access_and_actions():
+    bad = [
+        (lambda d: d.update(access={"view": ["everyone"]}), "role:admin"),
+        (lambda d: d["actions"][0]["parameters"].append({"property": "nope"}), "isn't one of the properties"),
+        (lambda d: d["actions"][0]["parameters"].append({"property": "account_id"}), "primary key"),
+        (lambda d: d["actions"].append(dict(d["actions"][0])), "two actions"),
+    ]
+    for change, message in bad:
+        data = _with_actions()
+        change(data)
+        with pytest.raises(ValueError, match=message):
+            ontology.parse(data)
+    t = ontology.parse(_with_actions())
+    dana = type("U", (), {"role": "user", "username": "dana"})()
+    sam = type("U", (), {"role": "user", "username": "sam"})()
+    assert ontology.can_run(dana, t.actions[0]) and not ontology.can_run(sam, t.actions[0])
+    assert ontology.can_view(sam, t) and not ontology.can_see_sensitive(sam, t)  # empty view: everyone
+    assert ontology.coerce(t.prop("account_id"), "A9") == "A9"
+    with pytest.raises(ValueError):
+        ontology.coerce(ontology.Property(api_name="n", column="n", type="integer"), "x")
+
+
+def test_store_versions_edits_and_audit(tmp_path: Path):
+    from prooflix.ontology_store import OntologyStore
+
+    s = OntologyStore(f"sqlite:///{tmp_path / 'db.sqlite'}")
+    assert s.status()["ok"]
+    assert s.record_version("ws", "Account", {"a": 1}, "boss") == 1
+    assert s.record_version("ws", "Account", {"a": 2}, "boss") == 2
+    assert s.latest_versions("ws") == {"Account": 2} and s.latest_versions("other") == {}
+    s.apply_edit("ws", "Account", "A1", "reclassify", {"kind": "frozen"}, "fraud", "dana")
+    s.apply_edit("ws", "Account", "A1", "reclassify", {"kind": "savings"}, "cleared", "dana")
+    assert s.latest_edits("ws", "Account", ["A1", "A2"])["A1"]["kind"]["value"] == "savings"
+    assert [r["values"] for r in s.history("ws", "Account", "A1")] == [{"kind": "savings"}, {"kind": "frozen"}]
+    s.audit("ws", "dana", "action", "Account", "A1", {"x": 1})
+    assert s.audit_log("ws")[0]["event"] == "action" and s.audit_log("ws", event="publish") == []
+
+
+@pytest.fixture
+def db_client(tmp_path: Path, client):
+    """The same workspace, with users on and the object model's database (SQLite) set."""
+    _, ws = client
+    settings = Settings(workspace=ws, home=tmp_path / "home-b", scheduler=False, catalog=tmp_path / "catalog",
+                        auth=True, database_url=f"sqlite:///{tmp_path / 'ontology.sqlite'}")
+    with TestClient(create_app(settings)) as a:
+        a.post("/api/auth/setup", json={"username": "boss", "password": GOOD})
+        for name, tabs in (("dana", ["objects"]), ("sam", ["objects"]), ("olga", ["ontology"])):
+            a.post("/api/users", json={"username": name, "password": GOOD, "tabs": tabs})
+        yield a
+
+
+def _login(a: TestClient, name: str) -> None:
+    a.post("/api/auth/logout")
+    assert a.post("/api/auth/login", json={"username": name, "password": GOOD}).status_code == 200
+
+
+def test_access_actions_history_and_audit(db_client):
+    a = db_client
+    customer = copy.deepcopy(CUSTOMER) | {"access": {"view": ["user:dana"], "sensitive": ["user:dana"]}}
+    first = a.post("/api/ontology/publish", json={"type": _with_actions()})
+    assert first.status_code == 200 and first.json()["version"] == 1
+    assert a.post("/api/ontology/publish", json={"type": customer}).json()["version"] == 1
+    assert a.get("/api/ontology/types").json()["versions"] == {"Account": 1, "Customer": 1}
+    assert [v["version"] for v in a.get("/api/ontology/types/Account/versions").json()] == [1]
+    # access checks of the wizard
+    checks = {c["name"]: c["status"] for c in a.post("/api/ontology/check", json={"type": CUSTOMER}).json()["checks"]}
+    assert checks["Raw data isn't open to everyone"] == "fail"  # bronze, open to everyone
+    # "view as user": sam may not see Customer; dana sees the sensitive id
+    assert a.post("/api/ontology/preview", json={"type": customer, "as_user": "sam"}).json()["visible"] is False
+    shown = a.post("/api/ontology/preview", json={"type": customer, "as_user": "dana"}).json()["objects"]
+    assert {o["properties"]["national_id"] for o in shown} == {"011", "022"}
+
+    _login(a, "sam")
+    assert [t["api_name"] for t in a.get("/api/ontology/objects/types").json()] == ["Account"]
+    assert a.get("/api/ontology/objects/Customer/1").status_code == 404  # hidden, not just masked
+    assert [k["name"] for k in a.get("/api/ontology/objects/Account/A1").json()["links"]] == []  # owner hidden
+    run = a.post("/api/ontology/objects/Account/A1/actions/reclassify", json={"values": {"kind": "frozen"},
+                                                                              "reason": "x"})
+    assert run.status_code == 403
+
+    _login(a, "dana")
+    types = {t["api_name"]: t for t in a.get("/api/ontology/objects/types").json()}
+    assert types["Account"]["my_actions"] == ["reclassify"] and types["Customer"]["sees_sensitive"]
+    url = "/api/ontology/objects/Account/A1/actions/reclassify"
+    assert a.post(url, json={"values": {"kind": "frozen"}}).status_code == 422  # no reason
+    assert a.post(url, json={"values": {"kind": "gold"}, "reason": "x"}).status_code == 422  # not a choice
+    assert a.post(url, json={"values": {"kind": "frozen", "owner_id": "2"}, "reason": "x"}).status_code == 422
+    done = a.post(url, json={"values": {"kind": "frozen"}, "reason": "suspicious"})
+    assert done.status_code == 200 and done.json()["object"]["properties"]["kind"] == "frozen"
+    page = a.get("/api/ontology/objects/Account/A1").json()["object"]
+    assert page["properties"]["kind"] == "frozen" and page["edited"]["kind"]["by"] == "dana"
+    found = a.get("/api/ontology/objects/search", params={"q": "A1", "type": "Account"}).json()["groups"][0]
+    assert found["objects"][0]["properties"]["kind"] == "frozen"  # the edit is laid over search results too
+    hist = a.get("/api/ontology/objects/Account/A1/history").json()
+    assert hist["available"] and hist["runs"][0]["reason"] == "suspicious"
+    assert a.get("/api/ontology/objects/Customer/1").json()["object"]["properties"]["national_id"] == "011"
+    assert a.get("/api/ontology/audit").status_code == 403  # admins only
+
+    _login(a, "boss")
+    events = [e["event"] for e in a.get("/api/ontology/audit").json()]
+    assert events[:2] == ["read_sensitive", "action"] and "publish" in events and "view_as" in events
+    assert a.get("/api/ontology/audit", params={"event": "action"}).json()[0]["detail"]["reason"] == "suspicious"
+    assert a.get("/api/ontology/objects/status").json()["database"]["ok"] is True
+
+
+def test_actions_need_the_database(client):
+    c, _ = client
+    c.post("/api/ontology/publish", json={"type": _with_actions()})
+    r = c.post("/api/ontology/objects/Account/A1/actions/reclassify", json={"values": {"kind": "frozen"},
+                                                                            "reason": "x"})
+    assert r.status_code == 409 and "PROOFLIX_DATABASE_URL" in r.json()["detail"]
+    assert c.get("/api/ontology/objects/Account/A1/history").json()["available"] is False
+    assert c.get("/api/ontology/objects/status").json()["database"]["configured"] is False

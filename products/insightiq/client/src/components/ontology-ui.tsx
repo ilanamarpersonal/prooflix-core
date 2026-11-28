@@ -167,6 +167,9 @@ export function draftFrom(src: SourceTable): ObjectType {
       sensitive: PERSONAL.test(c),
     })),
     links: [],
+    // raw data starts closed: only admins see it until the Access step says who else may
+    access: { view: src.layer === "bronze" || src.layer === "unclassified" ? ["role:admin"] : [], sensitive: [] },
+    actions: [],
   }
 }
 

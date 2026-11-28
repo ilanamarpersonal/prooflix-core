@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Loader2 } from "lucide-react"
 
 import { cn } from "../../lib/utils"
 
@@ -29,15 +30,39 @@ const buttonVariants = cva(
   },
 )
 
+/**
+ * A button. ``loading``: work is going on (saving, checking, publishing): the button shows a spinner in
+ * place of its icons and can't be clicked until it is done.
+ */
 function Button({
   className,
   variant,
   size,
   asChild = false,
+  loading = false,
+  disabled,
+  children,
   ...props
-}: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants> & { asChild?: boolean }) {
-  const Comp = asChild ? Slot : "button"
-  return <Comp data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />
+}: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants> & { asChild?: boolean; loading?: boolean }) {
+  if (asChild) {
+    return (
+      <Slot data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props}>
+        {children}
+      </Slot>
+    )
+  }
+  return (
+    <button
+      data-slot="button"
+      className={cn(buttonVariants({ variant, size, className }), loading && "[&>svg:not([data-spinner])]:hidden")}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      {...props}
+    >
+      {loading && <Loader2 data-spinner className="animate-spin" aria-hidden />}
+      {children}
+    </button>
+  )
 }
 
 export { Button, buttonVariants }

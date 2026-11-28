@@ -114,3 +114,17 @@ app.kubernetes.io/name: {{ include "prooflix.name" . }}-clickhouse
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: clickhouse
 {{- end }}
+
+{{- define "prooflix.postgresName" -}}
+{{- printf "%s-postgres" (include "prooflix.fullname" .) }}
+{{- end }}
+
+{{- define "prooflix.postgresSecretName" -}}
+{{- .Values.postgres.auth.existingSecret | default (include "prooflix.postgresName" .) }}
+{{- end }}
+
+{{- define "prooflix.postgresSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "prooflix.name" . }}-postgres
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: postgres
+{{- end }}
