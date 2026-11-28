@@ -53,6 +53,7 @@ prooflix-core/
 | sign-in UI (login, user menu, switcher) | `packages/ui/src/auth/`, `packages/ui/src/layout/` |
 | sessions, users, which products a user opens | `products/ingestiq/server/prooflix/auth.py` (`PRODUCT_TABS`); it moves to a shared server package when the products split into services |
 | pipelines, task code, seeds | `../prooflix-assets-bundle/workspace/<project>`, not this repository |
+| a generic Spark task a screen of the platform generates pipelines for | `products/ingestiq/server/prooflix/tasks/` (a platform task: add it to `PLATFORM_TASKS`; no business logic) |
 | a secret | nowhere in git (principles 6 to 14) |
 
 ## Facts that are easy to get wrong

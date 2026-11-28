@@ -98,6 +98,42 @@ def load_callable(src_dir: Path, entrypoint: str) -> Callable[..., Any]:
     return func
 
 
+def load_platform(src_dir: Path, entrypoint: str) -> Callable[..., Any]:
+    """A platform task (``prooflix.tasks``, see that package): only the functions it lists. The project's
+    ``src/`` goes first on the import path, so the task uses this workspace's Spark runtime."""
+    from ..tasks import PLATFORM_TASKS, WORKSPACE_PACKAGES
+
+    if entrypoint not in PLATFORM_TASKS:
+        raise AttributeError(f"'{entrypoint}' is not a platform task")
+    module_name, func_name = entrypoint.split(":", 1)
+    with _import_lock:
+        src = str(src_dir)
+        if src in sys.path:
+            sys.path.remove(src)
+        sys.path.insert(0, src)
+        importlib.invalidate_caches()
+        # the runtime packages of another project, or changed since: import them again from this one
+        for package in WORKSPACE_PACKAGES:
+            loaded = sys.modules.get(package)
+            if loaded is not None and (not _is_inside(loaded, src_dir) or any(
+                    _mtime(m) != _loaded_mtimes.get(n) for n, m in list(sys.modules.items())
+                    if (n == package or n.startswith(package + ".")) and m is not None and n in _loaded_mtimes)):
+                _forget(package)
+        module = importlib.import_module(module_name)
+    func = getattr(module, func_name)
+    return func
+
+
+def note_workspace_modules() -> None:
+    """Remember when the runtime modules a platform task imported were last changed (to reload them)."""
+    from ..tasks import WORKSPACE_PACKAGES
+
+    with _import_lock:
+        for name, module in list(sys.modules.items()):
+            if module is not None and any(name == p or name.startswith(p + ".") for p in WORKSPACE_PACKAGES):
+                _loaded_mtimes[name] = _mtime(module)
+
+
 # ------------------------------------------------------------ print capture
 class _LineCapture:
     """Collects text written by one task and logs it line by line."""

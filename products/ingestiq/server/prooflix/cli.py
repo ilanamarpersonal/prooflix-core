@@ -98,9 +98,18 @@ async def _run(settings: Settings, pipeline_id: str, raw_params: list[str]) -> i
             return 2
         params[key] = _parse_value(value)
 
+    from .connections import ConnectionStore
+
     store = RunStore(settings.runs_dir)
+    connections = ConnectionStore(settings.home)  # PROOFLIX_HOME/connections.json, as the server uses
+
+    def connection(name: str) -> dict | None:
+        found = connections.get(name)
+        return found.for_task() if found is not None else None
+
     executor = PipelineExecutor(
-        Workspace(settings.workspace), store, max_depth=settings.max_depth, start_date=settings.start_date
+        Workspace(settings.workspace), store, max_depth=settings.max_depth, start_date=settings.start_date,
+        connections=connection,
     )
     try:
         run = await executor.run(pipeline_id, params)

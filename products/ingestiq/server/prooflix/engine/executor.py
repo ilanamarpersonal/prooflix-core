@@ -30,7 +30,8 @@ from ..pipelines.workspace import Workspace
 from ..runs.models import Run, RunStatus, TaskRun, utcnow
 from ..runs.store import RunStore
 from .context import TaskContext
-from .runners import install_print_capture, load_callable, run_python, run_shell
+from ..tasks import LEGACY_ENTRYPOINTS, is_platform
+from .runners import install_print_capture, load_callable, load_platform, note_workspace_modules, run_python, run_shell
 
 log = logging.getLogger(__name__)
 
@@ -309,7 +310,15 @@ class PipelineExecutor:
         if isinstance(task, PythonTask):
             params = resolve(task.parameters, scope)
             project = self.workspace.project_dir_for(run.pipeline)
-            func = load_callable(project / "src", task.entrypoint)
+            entrypoint = task.entrypoint
+            if entrypoint in LEGACY_ENTRYPOINTS:  # written before the task moved into Prooflix
+                module = entrypoint.split(":", 1)[0].replace(".", "/")
+                if not (project / "src" / f"{module}.py").is_file():  # a workspace may keep its own copy
+                    entrypoint = LEGACY_ENTRYPOINTS[entrypoint]
+            if is_platform(entrypoint):
+                func = load_platform(project / "src", entrypoint)
+            else:
+                func = load_callable(project / "src", entrypoint)
             ctx = TaskContext(
                 run_id=run.id,
                 root_run_id=run.root_run_id or run.id,
@@ -322,8 +331,12 @@ class PipelineExecutor:
                 _log=logger,
                 _connections=self.connections,
             )
-            tr.log(f"Calling {task.entrypoint}")
-            return await run_python(func, params, ctx)
+            tr.log(f"Calling {entrypoint}" + (" (a Prooflix platform task)" if is_platform(entrypoint) else ""))
+            try:
+                return await run_python(func, params, ctx)
+            finally:
+                if is_platform(entrypoint):
+                    note_workspace_modules()
 
         if isinstance(task, ShellTask):
             # references reach the shell as variables, so a parameter can't inject commands

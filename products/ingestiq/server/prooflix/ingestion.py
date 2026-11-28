@@ -3,8 +3,8 @@
 The Ingestion tab defines a job as a database connection (see ``connections.py``),
 the tables and columns to copy, the column that tells which rows are new (the
 watermark) and the date to start from. A job is stored as an ordinary pipeline,
-``pipelines/<job id>.yaml``, with one Python task calling the workspace's
-``bronze.jdbc_ingest:run`` (Spark over JDBC), so it runs, is scheduled with a cron
+``pipelines/<job id>.yaml``, with one Python task calling the platform task
+``prooflix.tasks.jdbc_ingest:run`` (Spark over JDBC, see ``prooflix/tasks``), so it runs, is scheduled with a cron
 expression, shows its runs and can be stopped like every other pipeline::
 
     # Managed by the Ingestion tab ...
@@ -14,7 +14,7 @@ expression, shows its runs and can be stopped like every other pipeline::
     tasks:
       - key: ingest
         type: python
-        entrypoint: bronze.jdbc_ingest:run
+        entrypoint: prooflix.tasks.jdbc_ingest:run
         parameters:
           connection: bankdb
           start_date: "2024-01-01"
@@ -38,12 +38,14 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from .pipelines import Workspace
+from .tasks import RUNTIME_MODULE, runtime_project
 from .pipelines.models import PIPELINE_ID_PATTERN, PythonTask
 from .pipelines.schedule_yaml import set_schedule
 from .pipelines.workspace import PipelineDefinition
 
-ENTRYPOINT = "bronze.jdbc_ingest:run"
-TASK_MODULE = Path("src") / "bronze" / "jdbc_ingest.py"
+ENTRYPOINT = "prooflix.tasks.jdbc_ingest:run"
+LEGACY_ENTRYPOINT = "bronze.jdbc_ingest:run"  # jobs saved before the task moved into Prooflix
+TASK_MODULE = RUNTIME_MODULE  # what the workspace must have: the Spark runtime the platform task uses
 TARGET_PATTERN = r"^[a-z_][a-z0-9_]*$"
 HEADER = (
     "# Managed by the Ingestion tab: copies tables of a relational database into bronze.\n"
@@ -103,7 +105,7 @@ def job_of(definition: PipelineDefinition) -> dict | None:
     if spec is None or len(spec.tasks) != 1:
         return None
     task = spec.tasks[0]
-    if not isinstance(task, PythonTask) or task.entrypoint != ENTRYPOINT:
+    if not isinstance(task, PythonTask) or task.entrypoint not in (ENTRYPOINT, LEGACY_ENTRYPOINT):
         return None
     p = task.parameters
     return {
@@ -158,8 +160,8 @@ def spec_of(job: dict) -> JobSpec:
 
 
 def task_project(ws: Workspace) -> Path | None:
-    """The project whose src/ has the JDBC ingest task (new jobs are saved there)."""
-    return next((p for p in ws.projects() if (p / TASK_MODULE).is_file()), None)
+    """The project whose src/ has the Spark runtime the ingest task uses (new jobs are saved there)."""
+    return runtime_project(ws)
 
 
 def valid_id(job_id: str) -> bool:

@@ -2,8 +2,8 @@
 
 A computed link is defined in the wizard as Spark SQL that gives pairs of keys (``from_key``,
 ``to_key``). Publishing its type writes one pipeline per computed link,
-``pipelines/object-link-<type>-<link>.yaml``, with a Python task calling the workspace's
-``gold.link_tables:build`` (Spark SQL into a Delta table, ``<catalog>.gold.link_<type>_<link>``),
+``pipelines/object-link-<type>-<link>.yaml``, with a Python task calling the platform task
+``prooflix.tasks.link_tables:build`` (Spark SQL into a Delta table, ``<catalog>.gold.link_<type>_<link>``),
 on the link's cron schedule. Like an ingestion job, the pipeline is an output of the GUI
 (principle 4): it runs, is scheduled and shows its runs like any other, and publishing rewrites it.
 Prooflix itself never runs the SQL: Spark does, in the task (principle 1).
@@ -18,9 +18,10 @@ import yaml
 from .ontology import Link, ObjectType, file_name
 from .pipelines import Workspace
 from .pipelines.schedule_yaml import set_schedule
+from .tasks import RUNTIME_MODULE, runtime_project
 
-ENTRYPOINT = "gold.link_tables:build"
-TASK_MODULE = Path("src") / "gold" / "link_tables.py"
+ENTRYPOINT = "prooflix.tasks.link_tables:build"
+TASK_MODULE = RUNTIME_MODULE  # the workspace's Spark runtime, which the platform task uses
 PREFIX = "object-link-"
 HEADER = (
     "# Managed by InsightIQ's Object Model: builds the table of a computed link with Spark.\n"
@@ -49,8 +50,8 @@ def render(t: ObjectType, k: Link) -> str:
 
 
 def task_project(ws: Workspace) -> Path | None:
-    """The project whose src/ has the link task (generated pipelines are saved there)."""
-    return next((p for p in ws.projects() if (p / TASK_MODULE).is_file()), None)
+    """The project whose src/ has the Spark runtime the link task uses (generated pipelines go there)."""
+    return runtime_project(ws)
 
 
 def _ours(ws: Workspace, api_name: str) -> list[str]:
@@ -72,7 +73,7 @@ def sync(ws: Workspace, t: ObjectType) -> dict:
     project = task_project(ws)
     if project is None:
         return {"written": [], "removed": removed,
-                "error": f"the workspace has no {TASK_MODULE.as_posix()} for {ENTRYPOINT}: computed links can't be built"}
+                "error": f"the workspace has no {TASK_MODULE.as_posix()}: computed links need its Spark runtime"}
     written = []
     for pid, k in wanted.items():
         ws.save(pid, render(t, k), project=None if ws.exists(pid) else project)

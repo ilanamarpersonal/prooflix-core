@@ -13,7 +13,12 @@ changing one is fine, but on purpose: update this file in the same change and sa
    client, Helm, Terraform) and knows nothing about banking tables, schemas or
    business logic. Pipelines, task code, seeds and data generators live in the
    workspace (`prooflix-assets-bundle/workspace/<project>`). The only fixed contract
-   between them is a task entrypoint plus `ctx` (`TaskContext`).
+   between them is a task entrypoint plus `ctx` (`TaskContext`). The one exception is
+   **platform tasks** (`prooflix/tasks`): generic Spark tasks the platform's own screens
+   generate pipelines for (`jdbc_ingest` for the Ingestion tab, `link_tables` for the
+   Object Model's computed links). They hold no business logic (their parameters say what
+   to do) and use the workspace's Spark runtime (`runtime.spark_session`, `runtime.catalog`,
+   `infra.materialization`), so Spark keeps one configuration, the workspace's.
 3. **Delta in Unity Catalog through Spark is the storage of record.** Bronze, silver
    and gold are external Delta tables registered in Unity Catalog, written by Spark.
    DuckDB in the server reads them only for the SQL Editor, Catalog, ClickHouse
@@ -67,7 +72,8 @@ changing one is fine, but on purpose: update this file in the same change and sa
 13. **Session cookies are `Secure` behind TLS.** The server trusts `X-Forwarded-Proto`
     only from the ingress (`FORWARDED_ALLOW_IPS`, set by the Helm chart).
 14. **Code execution is an admin power.** Python tasks only call functions defined in
-    the workspace's `src/`, never the standard library or packages. Only admins save
+    the workspace's `src/`, or the platform tasks listed in `prooflix.tasks.PLATFORM_TASKS`,
+    never the standard library, packages or any other server code. Only admins save
     pipelines with shell tasks. The Workspace tab (it changes code) and the System tab
     (it changes configuration) are as powerful as an admin, and the Users tab says so.
     An entrypoint is checked against `src/` before anything is imported. Values reach

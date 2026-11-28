@@ -81,12 +81,17 @@ def test_task_context_connection():
 
 
 @pytest.fixture
-def client(tmp_path: Path):
+def client(tmp_path: Path, monkeypatch):
     ws = tmp_path / "ws"
     (ws / "pipelines").mkdir(parents=True)
-    (ws / "src" / "bronze").mkdir(parents=True)
-    (ws / "src" / "bronze" / "jdbc_ingest.py").write_text("def run(connection, tables, start_date=None, from_date=None, to_date=None, ctx=None):\n"
-                                                         "    return ctx.connection(connection)['jdbc_url']\n")
+    (ws / "src" / "runtime").mkdir(parents=True)
+    (ws / "src" / "runtime" / "spark_session.py").write_text("def get_spark(ctx=None):\n    return None\n")
+
+    # the platform task needs Spark; here it only shows what it was given
+    def run(connection, tables, start_date=None, from_date=None, to_date=None, ctx=None):
+        return ctx.connection(connection)["jdbc_url"]
+
+    monkeypatch.setattr("prooflix.tasks.jdbc_ingest.run", run)
     settings = Settings(workspace=ws, home=tmp_path / "home", scheduler=False, catalog=tmp_path / "catalog")
     with TestClient(create_app(settings)) as c:
         yield c, ws

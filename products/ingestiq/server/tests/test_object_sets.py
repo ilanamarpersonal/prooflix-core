@@ -51,11 +51,6 @@ ACCOUNT = {
 SHARED = {"api_name": "shares_device", "target": "Customer", "cardinality": "many-to-many", "storage": "table",
           "table": "tenant1.gold.shared_device", "from_property": "customer_id", "to_property": "customer_id",
           "reverse": "shared_with"}
-LINK_TASK = '''def build(table: str, sql: str, ctx=None) -> dict:
-    return {"table": table}
-'''
-
-
 def _write(folder: Path, table: pa.Table) -> None:
     folder.mkdir(parents=True)
     pq.write_table(table, folder / "part-0.parquet")
@@ -65,9 +60,8 @@ def _write(folder: Path, table: pa.Table) -> None:
 def ws(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
     (ws / "pipelines").mkdir(parents=True)
-    (ws / "src" / "gold").mkdir(parents=True)
-    (ws / "src" / "gold" / "__init__.py").write_text("")
-    (ws / "src" / "gold" / "link_tables.py").write_text(LINK_TASK)
+    (ws / "src" / "runtime").mkdir(parents=True)
+    (ws / "src" / "runtime" / "spark_session.py").write_text("def get_spark(ctx=None):\n    return None\n")
     data = ws / "data" / "tenant1"
     _write(data / "silver" / "customers", pa.table({
         "customer_id": [1, 2, 3], "full_name": ["Dana Cohen", "Avi Levi", "Noa Bar"],
@@ -149,7 +143,7 @@ def test_computed_links_generate_pipelines(client, ws):
     r = c.post("/api/ontology/publish", json={"type": computed, "modified": modified}).json()
     assert r["pipelines"]["written"] == ["object-link-customer-same-city"] and r["pipelines"]["error"] is None
     text = (ws / "pipelines" / "object-link-customer-same-city.yaml").read_text()
-    assert "gold.link_tables:build" in text and "tenant1.gold.link_customer_same_city" in text and "0 3 * * *" in text
+    assert "prooflix.tasks.link_tables:build" in text and "tenant1.gold.link_customer_same_city" in text and "0 3 * * *" in text
     pipelines = [p["id"] for p in c.get("/api/pipelines").json()]
     assert "object-link-customer-same-city" in pipelines
     # the link table doesn't exist yet: the object page says so

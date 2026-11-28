@@ -151,7 +151,11 @@ export function IngestionPage() {
             <div className="p-4">
               <ErrorAlert
                 title="This workspace can't run ingestion jobs"
-                error={new Error(`It has no ${jobs.data.task_module} (the Spark task the jobs call).`)}
+                error={
+                  new Error(
+                    `It has no ${jobs.data.task_module} (the workspace's Spark runtime, which the ingestion task uses).`,
+                  )
+                }
               />
             </div>
           )}

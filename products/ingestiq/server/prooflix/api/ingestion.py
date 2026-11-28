@@ -160,7 +160,7 @@ class JobOut(BaseModel):
 
 class JobsOut(BaseModel):
     jobs: list[JobOut]
-    task_ready: bool  # the workspace has src/bronze/jdbc_ingest.py
+    task_ready: bool  # the workspace has the Spark runtime (src/runtime/spark_session.py) the task uses
     task_module: str
 
 
@@ -203,7 +203,7 @@ def save_job(job_id: str, body: JobSpec, response: Response, create_only: bool =
     project = task_project(ws)
     if project is None:
         raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"The workspace has no {TASK_MODULE.as_posix()} for {ENTRYPOINT} to call")
+                            f"The workspace has no {TASK_MODULE.as_posix()}: {ENTRYPOINT} needs its Spark runtime")
     try:
         definition = ws.save(job_id, render(job_id, body), project=project)
     except PipelineValidationError as e:

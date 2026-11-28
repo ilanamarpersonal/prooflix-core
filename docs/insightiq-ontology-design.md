@@ -425,7 +425,7 @@ aggregations from the index, and more than one OpenSearch node.
   your pipelines build (two key columns; many-to-many allowed), or **computed**: Spark SQL written in
   the Links step, giving `from_key` and `to_key`. Publishing writes one pipeline per computed link
   (`pipelines/object-link-<type>-<link>.yaml`, the GUI's output like an ingestion job) calling the
-  workspace's `gold.link_tables:build`, which runs the SQL on Spark into
+  platform task `prooflix.tasks.link_tables:build` (it ships with Prooflix; it used to be workspace code), which runs the SQL on Spark into
   `<catalog>.gold.link_<type>_<link>`, on the link's cron schedule. Only admins publish new or changed
   computed SQL (it runs on Spark, principle 14). Until its table is built, object pages say so.
 - **Object sets** (the **Object sets** switch on the Objects page): a type with filters, then up to
