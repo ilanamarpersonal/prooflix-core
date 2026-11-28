@@ -113,3 +113,61 @@ def current_files(table: Path) -> list[DeltaFile]:
         path = Path(unquote(rel)) if rel.startswith("/") else table / unquote(rel)
         out.append(DeltaFile(path, rows))
     return out
+
+
+def current_version(table: Path) -> int:
+    """The table's newest version (the highest commit), or -1 when it has none."""
+    log = table / LOG
+    versions = [int(m.group(1)) for p in log.iterdir() if (m := _COMMIT.match(p.name))] if log.is_dir() else []
+    if versions:
+        return max(versions)
+    version, _ = _checkpoint(log)
+    return version
+
+
+@dataclass(frozen=True)
+class Changes:
+    version: int  # the newest version read
+    added: list[Path]
+    removed: list[Path]
+    # True when the changes can't be followed file by file (a schema change, commits already
+    # cleaned up, removed files already vacuumed, deletion vectors): rebuild from the whole table
+    rebuild: bool
+    reason: str = ""
+
+
+def changes_since(table: Path, since: int) -> Changes:
+    """The data files added and removed by the commits after version ``since``."""
+    log = table / LOG
+    commits = sorted((int(m.group(1)), p) for p in log.iterdir() if (m := _COMMIT.match(p.name)) and int(m.group(1)) > since)
+    newest = commits[-1][0] if commits else since
+    if commits and commits[0][0] != since + 1:
+        return Changes(newest, [], [], True, f"commits {since + 1}..{commits[0][0] - 1} are no longer in the log")
+    added: dict[str, None] = {}
+    removed: dict[str, None] = {}
+
+    def path_of(rel: str) -> Path:
+        return Path(unquote(rel)) if rel.startswith("/") else table / unquote(rel)
+
+    for _, commit in commits:
+        for line in commit.read_text().splitlines():
+            if not line.strip():
+                continue
+            action = json.loads(line)
+            if "metaData" in action:
+                return Changes(newest, [], [], True, "the table's schema or settings changed")
+            if "add" in action:
+                if action["add"].get("deletionVector"):
+                    return Changes(newest, [], [], True, "deletion vectors")
+                if action["add"].get("dataChange", True):
+                    added[action["add"]["path"]] = None
+            elif "remove" in action and action["remove"].get("dataChange", True):
+                rel = action["remove"]["path"]
+                if rel in added:
+                    del added[rel]  # added and removed again within these commits
+                else:
+                    removed[rel] = None
+    gone = [r for r in removed if not path_of(r).is_file()]
+    if gone:
+        return Changes(newest, [], [], True, f"{len(gone)} removed files are already vacuumed")
+    return Changes(newest, [path_of(a) for a in added], [path_of(r) for r in removed], False)

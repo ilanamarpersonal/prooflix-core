@@ -250,6 +250,28 @@ PARAMS: tuple[_Param, ...] = (
         secret=True,
     ),
     _Param(
+        "PROOFLIX_SEARCH_URL",
+        "OpenSearch of the object model's fast search (types with Fast search on).",
+        "not set: object search reads the lake",
+        lambda s: s.search_url,
+        _parse_http_url,
+    ),
+    _Param(
+        "PROOFLIX_SEARCH_USER",
+        "OpenSearch user, when its security is on.",
+        "none",
+        lambda s: s.search_user or None,
+        _parse_text,
+    ),
+    _Param(
+        "PROOFLIX_SEARCH_PASSWORD",
+        "Password of that OpenSearch user (never shown).",
+        "none",
+        lambda s: s.search_password or None,
+        _parse_text,
+        secret=True,
+    ),
+    _Param(
         "PROOFLIX_CLICKHOUSE_PUBLIC_URL",
         "Where people outside connect to query ClickHouse (shown in the ClickHouse tab).",
         "the ClickHouse URL",

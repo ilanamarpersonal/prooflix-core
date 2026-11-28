@@ -128,3 +128,13 @@ app.kubernetes.io/name: {{ include "prooflix.name" . }}-postgres
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: postgres
 {{- end }}
+
+{{- define "prooflix.opensearchName" -}}
+{{- printf "%s-opensearch" (include "prooflix.fullname" .) }}
+{{- end }}
+
+{{- define "prooflix.opensearchSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "prooflix.name" . }}-opensearch
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: opensearch
+{{- end }}

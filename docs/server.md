@@ -113,6 +113,7 @@ flowchart TB
 | `api/semantic.py` | The Semantic tab's routes |
 | `ontology.py` | InsightIQ's ontology: object types (source table in any layer, row rules, properties, links) in `ontology/<type>.yaml` (drafts in `ontology/.drafts/`), the object view each read goes through, the wizard's checks, search and links |
 | `ontology_store.py` | The object model's database (PostgreSQL, `PROOFLIX_DATABASE_URL`): numbered versions of published types, actions' edits (laid over objects when read, never written to the lake) and the audit log, per workspace; tables created on first use (`sqlite:///` works for tests) |
+| `search_index.py` | Fast search: an OpenSearch index per type with `index: true` (`PROOFLIX_SEARCH_URL`): full builds into a new index swapped in by alias, updates of only the objects in the files a new Delta version added or removed (`delta_log.changes_since`), a watcher that checks the indexed tables every minute (with `PROOFLIX_SCHEDULER`), one job at a time, state kept in OpenSearch (`prooflix-index-state`) |
 | `api/ontology.py` | The Object Model and Objects tabs' routes, on one locked-down DuckDB per request (the SQL Editor's) |
 | `alerts.py` | Alerts: message formats (`{field}` templates or regular expressions), channels (Email over SMTP, Slack, Teams, webhook) and rules in `PROOFLIX_HOME/alerts.json`, the engine that checks task log lines, cooldowns, delivery on background threads, and the history |
 | `api/alerts.py` | The Alerts tab's routes |
@@ -332,12 +333,16 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/ontology/objects/status` | | `{database: {configured, ok, kind, error}, admin}` |
 | GET | `/api/ontology/principals` | | The roles and users access rules can name: `[{principal, label, role}]` |
 | GET | `/api/ontology/types/{name}/versions` | | `[{version, by, at}]` (needs the database) |
+| GET | `/api/ontology/index` | | `{configured, ok, error, types: {name: {enabled, ready, stale, state: {docs, built, updated, fingerprint}, job}}}`: each type's fast-search index and its current job (`job.state` queued, running, done, failed, cancelled; `done`/`total` for progress) |
+| POST | `/api/ontology/index/{name}/rebuild` | | Rebuilds the index from the whole table (a new index, swapped in when complete); `409` when Fast search is off or OpenSearch isn't set |
+| POST | `/api/ontology/index/{name}/cancel` | | `{cancelled}`: stops the running job (a half-built index is deleted; the watcher doesn't restart it until Rebuild or a publish) |
+| GET | `/api/ontology/objects/suggest?q=&limit=` | | Autocomplete from the indexed types the user sees: `[{type, pk, title}]` |
 | GET | `/api/ontology/audit?event=&type=&user=&limit=` | | The audit log, newest first: `[{id, at, user, event, type, pk, detail}]`; events `publish`, `unpublish`, `action`, `read_sensitive`, `view_as`. Admins only while users are on |
 
 Each type's `access` (`view`, `sensitive`: `role:admin`, `role:user`, `user:<name>`) says who sees it
 (empty: everyone with the Objects tab) and its sensitive properties (besides admins); a type the user
 may not see is left out everywhere (types, search, links) and answers `404`. Each action's `allowed`
-says who may run it (empty: admins only). `/api/ontology/preview` takes `as_user` (*View as user*:
+says who may run it (empty: admins only). Search uses a type's index when it is built for its current definition (each group says `engine`: `index` or `lake`, with a `note` when the index couldn't be reached and the lake was searched); the index holds no sensitive properties, and results get access, masking and edits as any read. `/api/ontology/preview` takes `as_user` (*View as user*:
 never more than the caller sees). Publishing records a version (`version` in the answer) when the
 database is set.
 
@@ -512,6 +517,8 @@ default and where it comes from, and edits them:
 | `PROOFLIX_SOURCE_DATA` | unset | Default source data folder (raw files pipelines read): every workspace's `source/` links there, unless the workspace chose its own (`<workspace>/.prooflix/settings.json`) |
 | `PROOFLIX_DATABASE_URL` | unset (actions, versions and audit off) | PostgreSQL of InsightIQ's object model, `postgresql://host:5432/db` (no user or password in it) |
 | `PROOFLIX_DATABASE_USER` / `_PASSWORD` | none | Its user; the password is never shown in the System tab |
+| `PROOFLIX_SEARCH_URL` | unset (search reads the lake) | OpenSearch of the object model's fast search, e.g. `http://localhost:9200` |
+| `PROOFLIX_SEARCH_USER` / `_PASSWORD` | none | For an OpenSearch with its security on; the password is never shown |
 | `PROOFLIX_CLICKHOUSE_URL` | unset (tab off) | ClickHouse HTTP endpoint gold tables are copied to |
 | `PROOFLIX_CLICKHOUSE_USER` / `_PASSWORD` | `default` / none | The user Prooflix writes with; the password is never shown in the System tab |
 | `PROOFLIX_CLICKHOUSE_PUBLIC_URL` / `_READER` | unset | The address and read-only user shown to people who query it from outside |

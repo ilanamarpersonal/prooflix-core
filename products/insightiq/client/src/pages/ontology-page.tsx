@@ -1,6 +1,19 @@
 import { useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router"
-import { Boxes, Database, LayoutGrid, Network, Pencil, Plus, ScrollText, Sparkles, Trash2 } from "lucide-react"
+import {
+  Boxes,
+  Database,
+  LayoutGrid,
+  Network,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ScrollText,
+  Sparkles,
+  Trash2,
+  X,
+  Zap,
+} from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { ErrorAlert } from "@prooflix/ui/app/error-alert"
@@ -10,9 +23,9 @@ import { Button } from "@prooflix/ui/components/ui/button"
 import { Card, CardContent } from "@prooflix/ui/components/ui/card"
 import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
 import { LayerBadge, suggestLinks, TypeAvatar, type LinkSuggestion } from "@/components/ontology-ui"
-import { api, ApiError, useObjectsStatus, useOntologyTypes } from "@/lib/api"
+import { api, ApiError, useIndexStatus, useObjectsStatus, useOntologyTypes } from "@/lib/api"
 import type { ObjectType } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { cn, formatDateTime } from "@/lib/utils"
 
 interface Node {
   type: ObjectType
@@ -444,6 +457,7 @@ function Details({ node, hasDraft, version }: { node: Node; hasDraft: boolean; v
           {node.draft ? <Badge variant="outline">draft</Badge> : <Badge variant="secondary">published</Badge>}
           {!node.draft && hasDraft && <Badge variant="outline">draft open</Badge>}
         </div>
+        {!node.draft && t.index && <IndexPanel name={t.api_name} />}
         {t.source.layer === "bronze" && (
           <p className="text-muted-foreground text-xs">
             Raw data: rows may repeat per key and hold unmasked personal fields. Mark them sensitive in the wizard.
@@ -466,5 +480,100 @@ function Details({ node, hasDraft, version }: { node: Node; hasDraft: boolean; v
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+/** A type's fast-search index: building (with progress), ready, stale or failed; rebuild or cancel. */
+function IndexPanel({ name }: { name: string }) {
+  const status = useIndexStatus()
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+  const idx = status.data?.types[name]
+  const job = idx?.job
+  const running = !!job && (job.state === "queued" || job.state === "running")
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      await qc.invalidateQueries({ queryKey: ["ontology", "index"] })
+    } catch (e) {
+      setError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const pct = job?.total ? Math.min(100, Math.round((job.done / job.total) * 100)) : null
+  return (
+    <div className="grid gap-2 rounded-lg border p-3 text-sm">
+      <div className="flex items-center gap-2 font-medium">
+        <Zap className="size-4 text-violet-500" /> Fast search
+        <span className="ml-auto">
+          {!status.data ? null : !status.data.configured ? (
+            <Badge variant="outline">OpenSearch not set</Badge>
+          ) : !status.data.ok ? (
+            <Badge variant="outline">unreachable</Badge>
+          ) : running ? (
+            <Badge className="border-transparent bg-violet-500/15 text-violet-700 dark:text-violet-300">
+              {job!.kind === "full" ? "building" : "updating"}
+            </Badge>
+          ) : idx?.ready ? (
+            <Badge className="bg-status-succeeded/15 text-status-succeeded border-transparent">ready</Badge>
+          ) : job?.state === "failed" ? (
+            <Badge className="bg-status-failed/15 text-status-failed border-transparent">failed</Badge>
+          ) : (
+            <Badge variant="outline">{idx?.stale ? "out of date" : "not built"}</Badge>
+          )}
+        </span>
+      </div>
+      {status.data && !status.data.ok && status.data.error && (
+        <p className="text-muted-foreground text-xs">{status.data.error}</p>
+      )}
+      {status.data && !status.data.configured && (
+        <p className="text-muted-foreground text-xs">
+          Set PROOFLIX_SEARCH_URL in Settings &amp; Management → System; until then search reads the lake.
+        </p>
+      )}
+      {running && (
+        <div className="grid gap-1">
+          <div className="bg-muted h-2 overflow-hidden rounded-full">
+            <div
+              className={cn(
+                "h-full bg-gradient-to-r from-violet-500 to-pink-600",
+                pct === null && "w-1/3 animate-pulse",
+              )}
+              style={pct !== null ? { width: `${pct}%` } : undefined}
+            />
+          </div>
+          <span className="text-muted-foreground text-xs">
+            {job!.done.toLocaleString()}
+            {job!.total ? ` of ${job!.total.toLocaleString()}` : ""} objects
+            {job!.note ? ` · ${job!.note}` : ""}
+          </span>
+        </div>
+      )}
+      {idx?.state && !running && (
+        <span className="text-muted-foreground text-xs">
+          {idx.state.docs.toLocaleString()} objects · updated {formatDateTime(idx.state.updated)}
+          {idx.state.fingerprint.startsWith("delta:") ? ` · Delta version ${idx.state.fingerprint.slice(6)}` : ""}
+        </span>
+      )}
+      {job?.state === "failed" && job.error && <p className="text-status-failed text-xs break-words">{job.error}</p>}
+      {error != null && <ErrorAlert title="Not done" error={error} />}
+      {status.data?.ok && (
+        <div className="flex gap-2">
+          {running ? (
+            <Button size="sm" variant="outline" loading={busy} onClick={() => act(() => api.cancelIndex(name))}>
+              <X /> Cancel
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" loading={busy} onClick={() => act(() => api.rebuildIndex(name))}>
+              <RefreshCw /> Rebuild
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

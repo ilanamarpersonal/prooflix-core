@@ -97,6 +97,22 @@ spec:
             - name: PROOFLIX_UC_TOKEN
               value: {{ . | quote }}
             {{- end }}
+            {{- if or .Values.opensearch.enabled .Values.opensearch.externalUrl }}
+            # fast search of the object model (opensearch in values.yaml)
+            - name: PROOFLIX_SEARCH_URL
+              value: {{ .Values.opensearch.externalUrl | default (printf "http://%s:9200" (include "prooflix.opensearchName" .)) | quote }}
+            {{- with .Values.opensearch.auth.user }}
+            - name: PROOFLIX_SEARCH_USER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.opensearch.auth.existingSecret }}
+            - name: PROOFLIX_SEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: password
+            {{- end }}
+            {{- end }}
             {{- if or .Values.postgres.enabled .Values.postgres.externalUrl }}
             # the object model's database (postgres in values.yaml)
             - name: PROOFLIX_DATABASE_URL

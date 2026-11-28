@@ -10,8 +10,11 @@ import type {
   ObjectLink,
   ObjectType,
   OntologyObject,
+  IndexJob,
+  IndexStatus,
   Principal,
   PublishedType,
+  SearchStatus,
   SourceTable,
 } from "./types"
 
@@ -49,7 +52,14 @@ export const api = {
     request<AuditEvent[]>(
       `/ontology/audit?${new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])}`,
     ),
-  objectsStatus: () => request<{ database: DatabaseStatus; admin: boolean }>("/ontology/objects/status"),
+  objectsStatus: () =>
+    request<{ database: DatabaseStatus; search: SearchStatus; admin: boolean }>("/ontology/objects/status"),
+  indexStatus: () => request<IndexStatus>("/ontology/index"),
+  rebuildIndex: (name: string) => request<IndexJob>(`/ontology/index/${enc(name)}/rebuild`, { method: "POST" }),
+  cancelIndex: (name: string) =>
+    request<{ cancelled: boolean }>(`/ontology/index/${enc(name)}/cancel`, { method: "POST" }),
+  suggest: (q: string) =>
+    request<{ type: string; pk: string; title: string }[]>(`/ontology/objects/suggest?${new URLSearchParams({ q })}`),
   runAction: (type: string, pk: string, action: string, values: Record<string, unknown>, reason: string) =>
     request<{ object: OntologyObject }>(`/ontology/objects/${enc(type)}/${enc(pk)}/actions/${enc(action)}`, {
       method: "POST",
@@ -68,7 +78,14 @@ export const api = {
   objectTypes: () => request<PublishedType[]>("/ontology/objects/types"),
   search: (q: string, type?: string, limit = 10) =>
     request<{
-      groups: { type: string; objects: OntologyObject[]; more: boolean; error: string | null }[]
+      groups: {
+        type: string
+        objects: OntologyObject[]
+        more: boolean
+        error: string | null
+        engine?: "index" | "lake"
+        note?: string | null
+      }[]
     }>(`/ontology/objects/search?${new URLSearchParams({ q, limit: String(limit), ...(type ? { type } : {}) })}`),
   object: (type: string, pk: string) =>
     request<{
@@ -152,3 +169,20 @@ export function useRunAction(type: string, pk: string) {
     },
   })
 }
+
+/** The fast-search indexes; polled every 2 seconds while a job runs. */
+export const useIndexStatus = () =>
+  useQuery({
+    queryKey: ["ontology", "index"],
+    queryFn: api.indexStatus,
+    refetchInterval: (q) =>
+      Object.values(q.state.data?.types ?? {}).some((t) => t.job && ["queued", "running"].includes(t.job.state))
+        ? 2000
+        : 30000,
+  })
+export const useSuggest = (q: string) =>
+  useQuery({
+    queryKey: ["ontology", "objects", "suggest", q],
+    queryFn: () => api.suggest(q),
+    enabled: q.trim().length > 0,
+  })

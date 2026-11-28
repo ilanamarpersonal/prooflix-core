@@ -81,6 +81,10 @@ class Settings:
                                  the audit log are off (sqlite:///path is for tests)
       PROOFLIX_DATABASE_USER     its user
       PROOFLIX_DATABASE_PASSWORD its password
+      PROOFLIX_SEARCH_URL        OpenSearch for the object model's fast search, e.g.
+                                 http://localhost:9200; unset: search reads the lake
+      PROOFLIX_SEARCH_USER       its user (when its security is on)
+      PROOFLIX_SEARCH_PASSWORD   its password
       PROOFLIX_DATA_LAKE   default data lake folder (what pipelines build: bronze,
                            gold, checkpoints) for every workspace: its data/ links there
                            (default for both: the workspace's own folder; a workspace
@@ -119,6 +123,9 @@ class Settings:
     database_url: str | None = None  # PostgreSQL of the object model; None: actions and audit are off
     database_user: str = ""
     database_password: str = ""
+    search_url: str | None = None  # OpenSearch of the object model's fast search; None: search reads the lake
+    search_user: str = ""
+    search_password: str = ""
     # the values from PROOFLIX_HOME/parameters.json this server started with
     saved_parameters: dict[str, str] = field(default_factory=dict, compare=False)
 
@@ -200,6 +207,12 @@ class Settings:
             kwargs["database_user"] = db_user
         if db_password := env.get("PROOFLIX_DATABASE_PASSWORD"):
             kwargs["database_password"] = db_password
+        if search := env.get("PROOFLIX_SEARCH_URL"):
+            kwargs["search_url"] = search.strip().rstrip("/")
+        if search_user := env.get("PROOFLIX_SEARCH_USER"):
+            kwargs["search_user"] = search_user
+        if search_password := env.get("PROOFLIX_SEARCH_PASSWORD"):
+            kwargs["search_password"] = search_password
         if start := env.get("PROOFLIX_START_DATE"):
             kwargs["start_date"] = parse_start_date(start)
         if cors := env.get("PROOFLIX_CORS"):

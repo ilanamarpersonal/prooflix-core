@@ -1,6 +1,6 @@
 # InsightIQ Object Model: product design
 
-Status: **phases A and B built** (see [section 12](#12-phase-a-what-is-built) and [section 13](#13-phase-b-what-is-built)); phases C to E are proposed. This document describes the first product
+Status: **phases A, B and C built** (sections [12](#12-phase-a-what-is-built), [13](#13-phase-b-what-is-built) and [14](#14-phase-c-what-is-built)); phases D and E are proposed. This document describes the first product
 in InsightIQ: an ontology that turns lake tables into business **objects** (a *Customer*, an
 *Account*, a *Transaction*), the **links** between them and the **actions** allowed on them,
 built step by step in a guided GUI and used by people, Python tasks and AI Assist.
@@ -328,7 +328,7 @@ building and publishing belong to the `ontology` tab, reading objects to `object
 |---|---|---|
 | A (**built**) | The tabs, the wizard (steps ① to ④ and ⑥), object views over any layer, object search and object pages, YAML definitions | none |
 | B (**built**) | Access (⑤) with masking, actions with an edits table, audit; versions of the definitions in PostgreSQL | PostgreSQL |
-| C | Indexing from Delta Change Data Feed through the object view, fast search and autocomplete | OpenSearch |
+| C (**built**) | Indexing through the object view, following new Delta versions; fast search and autocomplete | OpenSearch |
 | D | Object sets, links precomputed by Spark, background exports | none |
 | E | AI Assist tools, and an MCP server over the Object API | none |
 
@@ -392,4 +392,30 @@ Different from the design above, for now:
 
 Not built yet: versions as a page of their own (the details panel shows the latest number), a
 pipeline task that writes edits back into a table, and searching on edited values.
+
+## 14. Phase C: what is built
+
+- **Opt-in per type**: a **Fast search** switch on the Review step (`index: true` in the YAML). Other
+  types keep searching the lake through DuckDB.
+- **The index** (`prooflix/search_index.py`, OpenSearch 2.19): one per type, behind an alias. A full
+  build fills a new index from the object view (row rules and casts included) and swaps the alias in
+  one step; searchable properties are analysed for search-as-you-type, other properties stored for
+  display, sensitive ones left out. Results still go through access, masking and actions' edits.
+- **Keeping up without Change Data Feed**: every minute (with `PROOFLIX_SCHEDULER`) the server
+  compares each indexed table's Delta version with the indexed one, reads the keys in the files the
+  new versions added or removed, and re-indexes only those objects (deleting the ones the row rules
+  no longer give). A schema change, vacuumed files, more than a million changed keys, or a changed
+  definition rebuild the index. Parquet tables rebuild when their files change.
+- **Jobs**: one at a time, with progress, **Rebuild** and **Cancel** in the details panel; a
+  cancelled build isn't restarted until Rebuild or a publish, a failed one is retried after
+  10 minutes. A half-built index is always deleted.
+- **Search**: typo tolerant (fuzzy) and prefix matching; groups are marked **fast search**; if
+  OpenSearch can't be reached, the lake is searched and the group says so. **Autocomplete** under
+  the search box, from the indexed types the user may see.
+- **Measured locally**: 5,000 objects index in about a second, a search answers in about 150 ms and
+  autocomplete in about 30 ms; the 65-million-row Customer type indexes at about 40,000 objects a
+  second (about 28 minutes for a first build).
+
+Not built: Change Data Feed (versions are followed through the Delta log instead), facets and
+aggregations from the index, and more than one OpenSearch node.
 

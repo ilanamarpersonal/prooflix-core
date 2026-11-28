@@ -20,7 +20,8 @@ changing one is fine, but on purpose: update this file in the same change and sa
    copies and InsightIQ's ontology (object views, `ontology.py`), at their current
    version (`delta_log.py`), and never writes them. Changes made by the object model's
    actions are rows in its PostgreSQL database (`ontology_store.py`), laid over the
-   objects when they are read, never writes to the lake. The one
+   objects when they are read, never writes to the lake. The fast-search indexes are copies
+   in OpenSearch (`search_index.py`), built by reading the lake the same way. The one
    exception is the Catalog's **Drop schema → Delete permanently** (admins only when
    users are on): on an explicit request it deletes the schema's table folders; Unity
    Catalog registrations are left for Spark to drop.

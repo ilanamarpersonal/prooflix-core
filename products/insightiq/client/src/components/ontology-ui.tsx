@@ -214,6 +214,12 @@ export function suggestLinks(types: ObjectType[], published: Set<string>): LinkS
         continue
       const fk = many.properties.find((p) => p.column === key.column || p.api_name === key.api_name)
       if (!fk) continue
+      // two types keyed by the same column: one one-to-one link between them is enough
+      if (
+        fk.api_name === many.primary_key &&
+        out.some((x) => x.source === many.api_name && x.link.target === one.api_name)
+      )
+        continue
       const taken = new Set([...one.properties.map((p) => p.api_name), ...one.links.map((l) => l.api_name)])
       const oneToOne = fk.api_name === many.primary_key
       let name = oneToOne ? fieldName(many.api_name) : plural(many)

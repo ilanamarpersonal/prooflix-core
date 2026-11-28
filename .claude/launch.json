@@ -41,6 +41,30 @@
       "port": 5432
     },
     {
+      "name": "prooflix-opensearch",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "run",
+        "--rm",
+        "--name",
+        "prooflix-opensearch",
+        "-p",
+        "127.0.0.1:9200:9200",
+        "-e",
+        "discovery.type=single-node",
+        "-e",
+        "DISABLE_SECURITY_PLUGIN=true",
+        "-e",
+        "DISABLE_INSTALL_DEMO_CONFIG=true",
+        "-e",
+        "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g",
+        "-v",
+        "prooflix-opensearch-data:/usr/share/opensearch/data",
+        "opensearchproject/opensearch:2.19.1"
+      ],
+      "port": 9200
+    },
+    {
       "name": "prooflix-client",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

@@ -7,6 +7,7 @@ import {
   Boxes,
   Check as CheckMark,
   Eye,
+  Zap,
   Loader2,
   Lock,
   Plus,
@@ -238,6 +239,7 @@ export function OntologyWizardPage() {
           result={checks.data}
           checking={checks.isFetching || !fresh}
           modified={publishedModified}
+          onToggleIndex={(on) => update((d) => ({ ...d, index: on }))}
           onPublished={(path) => {
             void api.deleteDraft(def.api_name).catch(() => undefined)
             setPublished({ path })
@@ -1159,7 +1161,7 @@ function changes(
 ): { sign: "+" | "~" | "−"; what: string; note: string }[] {
   if (!original)
     return [
-      { sign: "+", what: def.api_name, note: "new object type" },
+      { sign: "+", what: def.api_name, note: def.index ? "new object type, with fast search" : "new object type" },
       {
         sign: "+",
         what: `${def.properties.length} properties`,
@@ -1187,6 +1189,8 @@ function changes(
   for (const k of ["primary_key", "title", "description", "plural"] as const)
     if ((def[k] ?? "") !== (original[k] ?? ""))
       out.push({ sign: "~", what: k.replace("_", " "), note: `${original[k] || "—"} → ${def[k] || "—"}` })
+  if (!!def.index !== !!original.index)
+    out.push({ sign: "~", what: "Fast search", note: def.index ? "turned on" : "turned off (its index is removed)" })
   if (!same(def.access ?? { view: [], sensitive: [] }, original.access ?? { view: [], sensitive: [] }))
     out.push({ sign: "~", what: "Access", note: `seen by ${who(def.access?.view ?? [], "everyone")}` })
   for (const a of def.actions ?? []) {
@@ -1216,6 +1220,7 @@ function ReviewStep({
   result,
   checking,
   modified,
+  onToggleIndex,
   onPublished,
 }: {
   def: ObjectType
@@ -1223,9 +1228,14 @@ function ReviewStep({
   result?: CheckResult
   checking: boolean
   modified: number | null
+  onToggleIndex: (on: boolean) => void
   onPublished: (path: string) => void
 }) {
   const publish = usePublish()
+  const status = useObjectsStatus()
+  const sources = useSources()
+  const rows = sources.data?.find((x) => x.table === def.source.table)?.rows ?? 0
+  const search = status.data?.search
   const list = changes(def, original)
   const checks = result?.checks ?? []
   const blocks = blocking(checks)
@@ -1278,6 +1288,48 @@ function ReviewStep({
           <div>
             <div className="text-muted-foreground text-xs">Then</div>
             The Objects tab shows {def.plural || def.api_name} at once.
+            {def.index && " Its index is built in the background; until it's ready, search reads the lake."}
+          </div>
+          <div className="rounded-lg border p-3">
+            <label className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 font-medium">
+                <Zap className="size-4 text-violet-500" /> Fast search
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!def.index}
+                onClick={() => onToggleIndex(!def.index)}
+                className={cn(
+                  "relative h-6 w-11 shrink-0 rounded-full transition",
+                  def.index ? "bg-violet-500" : "bg-muted-foreground/30",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 size-5 rounded-full bg-white shadow transition-all",
+                    def.index ? "left-5.5" : "left-0.5",
+                  )}
+                />
+              </button>
+            </label>
+            <p className="text-muted-foreground mt-1 text-xs">
+              An OpenSearch index: instant search, typo tolerance and autocomplete. It follows the table as it changes.
+              Sensitive properties are left out of it.
+            </p>
+            {def.index && search && !search.ok && (
+              <p className="text-status-cancelled mt-1 text-xs">
+                {search.configured
+                  ? `OpenSearch isn't reachable: ${search.error}`
+                  : "OpenSearch isn't set (PROOFLIX_SEARCH_URL in System): the index is built once it is."}
+              </p>
+            )}
+            {def.index && rows > 10_000_000 && (
+              <p className="text-status-cancelled mt-1 text-xs">
+                {rows.toLocaleString()} rows: the first index takes a while and several GB of disk; later changes are
+                quick.
+              </p>
+            )}
           </div>
           {publish.error && <ErrorAlert title="Not published" error={publish.error} />}
           <Button

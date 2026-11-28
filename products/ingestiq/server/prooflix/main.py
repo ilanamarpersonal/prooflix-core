@@ -28,6 +28,7 @@ from .api import semantic as semantic_api
 from .api import ontology as ontology_api
 from .api import auth as auth_api
 from .api import workspaces as workspaces_api
+from .search_index import Indexer
 from .auth import COOKIE, PUBLIC_PATHS, UserStore, UsersFileError, can_access
 from .connections import ConnectionsFileError
 from .config import Settings
@@ -50,7 +51,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         if app.state.settings.scheduler:
             app.state.scheduler.start()
+            app.state.indexer.start(app)  # keeps fast-search indexes up to date with their tables
         yield
+        app.state.indexer.stop()
         # the services in app.state may have been replaced by a workspace switch
         await app.state.scheduler.stop()
         await app.state.executor.shutdown()
@@ -62,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.switch_lock = asyncio.Lock()
     install(app, build_services(settings))
     app.state.users = UserStore(settings.home)  # PROOFLIX_HOME/users.json
+    app.state.indexer = Indexer()  # the object model's fast-search indexes (search_index.py)
     app.state.ai_assist = AiAssistStore(settings.home)  # PROOFLIX_HOME/ai_assist.json
 
     @app.exception_handler(AlertsFileError)

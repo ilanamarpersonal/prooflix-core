@@ -11,7 +11,7 @@ import { Input } from "@prooflix/ui/components/ui/input"
 import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
 import { Textarea } from "@prooflix/ui/components/ui/textarea"
 import { LayerBadge, show, TypeAvatar, useDebounced } from "@/components/ontology-ui"
-import { useHistory, useLinked, useObject, useObjectTypes, useRunAction, useSearch } from "@/lib/api"
+import { useHistory, useLinked, useObject, useObjectTypes, useRunAction, useSearch, useSuggest } from "@/lib/api"
 import type { Action, ObjectLink, OntologyObject, PublishedType } from "@/lib/types"
 import { cn, formatDateTime } from "@/lib/utils"
 
@@ -23,6 +23,9 @@ export function ObjectsPage() {
   const type = params.get("type") ?? undefined
   const [text, setText] = useState(params.get("q") ?? "")
   const q = useDebounced(text, 300)
+  const quick = useDebounced(text, 120)
+  const suggest = useSuggest(quick)
+  const [suggestOpen, setSuggestOpen] = useState(false)
   const types = useObjectTypes()
   const search = useSearch(q, type)
   const byName = useMemo(() => new Map((types.data ?? []).map((t) => [t.api_name, t])), [types.data])
@@ -80,10 +83,39 @@ export function ObjectsPage() {
                 className="h-10 pl-9 text-base"
                 placeholder={type ? `Search ${byName.get(type)?.plural || type}…` : "Search every object…"}
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                onChange={(e) => {
+                  setText(e.target.value)
+                  setSuggestOpen(true)
+                }}
+                onFocus={() => setSuggestOpen(true)}
+                onBlur={() => setTimeout(() => setSuggestOpen(false), 150)}
+                onKeyDown={(e) => e.key === "Escape" && setSuggestOpen(false)}
+                role="combobox"
+                aria-expanded={suggestOpen && (suggest.data?.length ?? 0) > 0}
               />
               {search.isFetching && (
                 <Loader2 className="text-muted-foreground absolute top-3 right-3 size-4 animate-spin" />
+              )}
+              {suggestOpen && (suggest.data?.length ?? 0) > 0 && (
+                <ul
+                  role="listbox"
+                  className="bg-popover absolute inset-x-0 top-11 z-20 overflow-hidden rounded-lg border shadow-lg"
+                >
+                  {suggest.data!.map((x) => (
+                    <li key={x.type + x.pk}>
+                      <Link
+                        to={`/objects/${x.type}/${encodeURIComponent(x.pk)}`}
+                        className="hover:bg-accent flex items-center gap-3 px-3 py-2 text-sm"
+                      >
+                        <TypeAvatar name={x.title || x.pk} size="sm" />
+                        <span className="min-w-0 flex-1 truncate font-medium">{x.title || x.pk}</span>
+                        <span className="text-muted-foreground text-xs">
+                          {byName.get(x.type)?.plural || x.type} · <span className="font-mono">{x.pk}</span>
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
             {search.error && <ErrorAlert title="The search failed" error={search.error} />}
@@ -97,6 +129,20 @@ export function ObjectsPage() {
                     <TypeAvatar name={t.api_name} size="sm" />
                     <CardTitle className="text-sm">{t.plural || t.api_name}</CardTitle>
                     <LayerBadge layer={t.source.layer} />
+                    {g.engine === "index" ? (
+                      <span
+                        className="flex items-center gap-1 text-xs text-violet-700 dark:text-violet-300"
+                        title="Searched in the fast-search index"
+                      >
+                        <Zap className="size-3" /> fast search
+                      </span>
+                    ) : (
+                      g.note && (
+                        <span className="text-status-cancelled text-xs" title={g.note}>
+                          index unavailable: searched the lake
+                        </span>
+                      )
+                    )}
                     {!type && g.more && (
                       <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setType(t.api_name)}>
                         More <ArrowRight />

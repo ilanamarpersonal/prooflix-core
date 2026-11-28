@@ -208,6 +208,24 @@ docker run --rm --name prooflix-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_USER
 then set `PROOFLIX_DATABASE_URL=postgresql://localhost:5432/prooflix`, `_USER=prooflix` and
 `_PASSWORD` in the System tab and restart the server.
 
+**OpenSearch.** The chart runs OpenSearch (`opensearchproject/opensearch:2.19.1`, Apache 2.0) as a
+one-node StatefulSet with its own volume, for the object model's fast search, and gives the server
+`PROOFLIX_SEARCH_URL`. Its security plugin is off: a NetworkPolicy lets only the Prooflix server
+reach it, and its Service is never exposed outside the cluster. The index is a copy, rebuilt from the
+lake when needed, so its volume is deleted with the release.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `opensearch.enabled` | `true` | Run OpenSearch in the release |
+| `opensearch.javaOpts` | `-Xms1g -Xmx1g` | Its memory (give it about half of `resources.limits.memory`) |
+| `opensearch.externalUrl` | `""` | With `enabled: false`: your own OpenSearch, with `auth.user` and `auth.existingSecret` when its security is on |
+| `opensearch.persistence.*` | `20Gi` volume | The indexes (about 150 bytes per object per searchable property; 65 million objects took several GB) |
+
+Locally, the `prooflix-opensearch` entry of `.claude/launch.json` runs it in Docker (127.0.0.1 only,
+1 GB of heap, data in the `prooflix-opensearch-data` volume); then set
+`PROOFLIX_SEARCH_URL=http://localhost:9200` in the System tab and restart the server. Indexing runs
+about 40,000 objects a second on a laptop.
+
 ## Terraform (`deploy/terraform`)
 
 Installs the chart with the `hashicorp/helm` provider (v3), so the chart stays

@@ -83,6 +83,30 @@ postgres:
     limits:
       memory: 1Gi
 
+# OpenSearch for the object model's fast search (types with "Fast search" on). On by default; or
+# turn it off and give your own with externalUrl (and user / a Secret with key "password").
+opensearch:
+  enabled: true
+  image:
+    repository: opensearchproject/opensearch
+    tag: "2.19.1"
+    pullPolicy: IfNotPresent
+  javaOpts: "-Xms1g -Xmx1g"
+  externalUrl: ""          # with enabled: false, e.g. https://search.internal:9200
+  auth:
+    user: ""               # for an external OpenSearch with its security on
+    existingSecret: ""     # a Secret with key "password"
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 2Gi
+    limits:
+      memory: 3Gi
+
 # ClickHouse: the ClickHouse tab copies gold tables here, with the same columns and
 # types, for people outside Prooflix to query. Prooflix writes as auth.user; outside
 # users connect as auth.readerUser, which can only SELECT (readonly profile).

@@ -21,6 +21,7 @@ from .. import delta_log, ontology
 from ..auth import User
 from ..ontology import CheckFailed, ObjectType
 from ..ontology_store import OntologyStore, StoreError, store_for
+from ..search_index import SearchError, alias_name, backend_for, search_fields
 from .deps import CatalogPaths, get_catalog_paths
 from .sql import QUERY_TIMEOUT_S, _cell, _only_select, hidden_schemas, open_database
 
@@ -250,6 +251,7 @@ def unpublish(name: str, request: Request) -> None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"No published object type {name}")
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from None
+    request.app.state.indexer.drop(request.app, name)
     _audit(request, "unpublish", name)
 
 
@@ -379,6 +381,11 @@ def publish(body: PublishIn, request: Request, engine: _Engine = Depends(_engine
         except StoreError as e:
             problem = str(e)
     problem = _audit(request, "publish", t.api_name, detail={"version": version}) or problem
+    # fast search: (re)index it, or remove an index it no longer wants
+    if t.index:
+        request.app.state.indexer.request(request.app, t, "update")
+    else:
+        request.app.state.indexer.drop(request.app, t.api_name)
     return {"type": t.model_dump(), "modified": modified, "path": f"ontology/{ontology.file_name(t.api_name)}",
             "checks": result["checks"], "version": version, "database_error": problem}
 
@@ -402,14 +409,40 @@ def audit_log(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
 
 
+@router.get("/index")
+def index_status(request: Request) -> dict:
+    """Each published type's fast-search index: enabled, built, stale, documents, and the current job."""
+    return request.app.state.indexer.status(request.app, _published(_root(request)))
+
+
+@router.post("/index/{name}/rebuild")
+def rebuild_index(name: str, request: Request) -> dict:
+    """Rebuild a type's index from the whole table (a new index, swapped in when complete)."""
+    t = _published_type(_root(request), name)
+    if not t.index:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Fast search is off for {name}: turn it on in the wizard")
+    job = request.app.state.indexer.request(request.app, t, "full")
+    if job is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Fast search needs OpenSearch: set PROOFLIX_SEARCH_URL in "
+                                                       "Settings & Management → System, then restart the server")
+    return job.public()
+
+
+@router.post("/index/{name}/cancel")
+def cancel_index(name: str, request: Request) -> dict:
+    return {"cancelled": request.app.state.indexer.cancel(request.app, name)}
+
+
 # ------------------------------------------------------------ Objects tab
 @router.get("/objects/status")
 def objects_status(request: Request) -> dict:
     """Whether the object model's database (actions, history, audit) is set and reachable."""
     store = _store(request)
     database = store.status() if store else {"configured": False, "ok": False, "kind": None, "error": None}
+    backend = backend_for(request.app.state.settings)
+    search = backend.status() if backend else {"configured": False, "ok": False, "version": None, "error": None}
     me = _user(request)
-    return {"database": database, "admin": me is None or me.role == "admin"}
+    return {"database": database, "search": search, "admin": me is None or me.role == "admin"}
 
 
 @router.get("/objects/types")
@@ -424,6 +457,7 @@ def object_types(request: Request) -> list[dict]:
             "all_links": ontology.links_of(t.api_name, visible),
             "my_actions": [a.api_name for a in t.actions if ontology.can_run(me, a)],
             "sees_sensitive": ontology.can_see_sensitive(me, t),
+            "indexed": request.app.state.indexer.ready(request.app, t) is not None,
         }
         for t in visible.values()
     ]
@@ -446,16 +480,48 @@ def search(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No published object type {type}")
     groups = []
     for t in chosen:
-        try:
-            cols, rows = engine.query(ontology.search_sql(t, q, limit + 1, offset))
-        except CheckFailed as e:
-            groups.append({"type": t.api_name, "objects": [], "more": False, "error": str(e)})
-            continue
+        engine_used, note = "lake", None
+        rows: list[list] | None = None
+        cols = [p.api_name for p in t.properties]
+        backend = request.app.state.indexer.ready(request.app, t)
+        if backend is not None:  # fast search: the type's index (sensitive properties aren't in it)
+            try:
+                hits = backend.search(alias_name(_root(request), t.api_name), q, search_fields(t), limit + 1, offset)
+                rows = [[(doc_id if c == t.primary_key and src.get(c) is None else src.get(c)) for c in cols]
+                        for doc_id, src in hits]
+                engine_used = "index"
+            except SearchError as e:
+                note = f"the index can't be searched, so the lake was: {e}"
+        if rows is None:
+            try:
+                cols, rows = engine.query(ontology.search_sql(t, q, limit + 1, offset))
+            except CheckFailed as e:
+                groups.append({"type": t.api_name, "objects": [], "more": False, "error": str(e), "engine": "lake"})
+                continue
         objects, _ = _objects(request, t, cols, rows[:limit])
         if _shows_sensitive(request, t, objects):
             _audit(request, "read_sensitive", t.api_name, detail={"search": q, "objects": len(objects)})
-        groups.append({"type": t.api_name, "objects": objects, "more": len(rows) > limit, "error": None})
+        groups.append({"type": t.api_name, "objects": objects, "more": len(rows) > limit, "error": None,
+                       "engine": engine_used, "note": note})
     return {"groups": groups}
+
+
+@router.get("/objects/suggest")
+def suggest(request: Request, q: str = Query("", max_length=100), limit: int = Query(8, ge=1, le=20)) -> list[dict]:
+    """Autocomplete for the search box: titles that start with what was typed, from the indexed types."""
+    if not q.strip():
+        return []
+    out: list[dict] = []
+    for t in _visible(request).values():
+        backend = request.app.state.indexer.ready(request.app, t)
+        if backend is None:
+            continue
+        try:
+            hits = backend.search(alias_name(_root(request), t.api_name), q, search_fields(t), 5, 0)
+        except SearchError:
+            continue
+        out += [{"type": t.api_name, "pk": doc_id, "title": src.get("prooflix_title")} for doc_id, src in hits]
+    return out[:limit]
 
 
 @router.get("/objects/{type}/{pk}")

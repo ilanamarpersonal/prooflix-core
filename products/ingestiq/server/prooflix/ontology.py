@@ -194,6 +194,7 @@ class ObjectType(BaseModel):
     links: list[Link] = []
     access: Access = Access()
     actions: list[Action] = []
+    index: bool = False  # "Fast search": an OpenSearch index of its objects (search_index.py)
 
     @model_validator(mode="after")
     def _consistent(self):

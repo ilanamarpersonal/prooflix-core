@@ -64,6 +64,8 @@ export interface ObjectType {
   links: Link[]
   access?: Access
   actions?: Action[]
+  /** Fast search: an OpenSearch index of its objects */
+  index?: boolean
 }
 
 export interface SourceTable {
@@ -128,6 +130,41 @@ export interface PublishedType extends ObjectType {
   all_links: ObjectLink[]
   my_actions: string[]
   sees_sensitive: boolean
+  indexed: boolean
+}
+
+export interface IndexJob {
+  type: string
+  kind: "full" | "update"
+  state: "queued" | "running" | "done" | "failed" | "cancelled"
+  done: number
+  total: number | null
+  started: string | null
+  finished: string | null
+  error: string | null
+  note: string
+}
+
+export interface TypeIndex {
+  enabled: boolean
+  ready: boolean
+  stale: boolean
+  state: { docs: number; built: string; updated: string; fingerprint: string; last_changed?: number } | null
+  job: IndexJob | null
+}
+
+export interface IndexStatus {
+  configured: boolean
+  ok: boolean
+  error: string | null
+  types: Record<string, TypeIndex>
+}
+
+export interface SearchStatus {
+  configured: boolean
+  ok: boolean
+  version: string | null
+  error: string | null
 }
 
 export interface Principal {
