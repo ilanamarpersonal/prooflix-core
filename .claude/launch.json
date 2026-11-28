@@ -58,6 +58,8 @@
         "DISABLE_INSTALL_DEMO_CONFIG=true",
         "-e",
         "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g",
+        "-e",
+        "action.auto_create_index=-prooflix-*,+*",
         "-v",
         "prooflix-opensearch-data:/usr/share/opensearch/data",
         "opensearchproject/opensearch:2.19.1"

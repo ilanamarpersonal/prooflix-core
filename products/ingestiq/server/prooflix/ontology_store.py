@@ -101,6 +101,9 @@ class OntologyStore:
                     f"CREATE TABLE IF NOT EXISTS prooflix_audit (id {serial}, at TEXT NOT NULL, username TEXT, "
                     "workspace TEXT NOT NULL, event TEXT NOT NULL, object_type TEXT, pk TEXT, detail TEXT)",
                     "CREATE INDEX IF NOT EXISTS prooflix_audit_workspace ON prooflix_audit (workspace, id)",
+                    f"CREATE TABLE IF NOT EXISTS prooflix_object_set (id {serial}, workspace TEXT NOT NULL, "
+                    "name TEXT NOT NULL, description TEXT, owner TEXT, shared INTEGER NOT NULL, definition TEXT NOT NULL, "
+                    "created TEXT NOT NULL, updated TEXT NOT NULL)",
                 ):
                     cur.execute(stmt)
                 cur.execute("SELECT version FROM prooflix_schema")
@@ -219,6 +222,56 @@ class OntologyStore:
                           "VALUES (?, ?, ?, ?, ?, ?, ?)"),
                 (_now(), user, workspace, event, object_type, pk, json.dumps(detail or {})),
             )
+
+    # ------------------------------------------------------------ object sets
+    def _set_row(self, row) -> dict:
+        i, name, description, owner, shared, definition, created, updated = row
+        return {"id": int(i), "name": name, "description": description or "", "owner": owner, "shared": bool(shared),
+                "set": json.loads(definition), "created": created, "updated": updated}
+
+    _SET_COLS = "id, name, description, owner, shared, definition, created, updated"
+
+    def list_sets(self, workspace: str, user: str | None) -> list[dict]:
+        """The user's own sets and every shared one (all of them while users are off)."""
+        self._ensure()
+        with self._cursor() as cur:
+            if user is None:
+                cur.execute(self._sql(f"SELECT {self._SET_COLS} FROM prooflix_object_set WHERE workspace = ? "
+                                      "ORDER BY name"), (workspace,))
+            else:
+                cur.execute(self._sql(f"SELECT {self._SET_COLS} FROM prooflix_object_set WHERE workspace = ? "
+                                      "AND (owner = ? OR shared = 1) ORDER BY name"), (workspace, user))
+            return [self._set_row(r) for r in cur.fetchall()]
+
+    def get_set(self, workspace: str, set_id: int) -> dict | None:
+        self._ensure()
+        with self._cursor() as cur:
+            cur.execute(self._sql(f"SELECT {self._SET_COLS} FROM prooflix_object_set WHERE workspace = ? AND id = ?"),
+                        (workspace, set_id))
+            rows = cur.fetchall()
+        return self._set_row(rows[0]) if rows else None
+
+    def save_set(self, workspace: str, set_id: int | None, name: str, description: str, owner: str | None,
+                 shared: bool, definition: dict) -> int:
+        self._ensure()
+        now = _now()
+        with self._cursor() as cur:
+            if set_id is None:
+                cur.execute(self._sql("INSERT INTO prooflix_object_set (workspace, name, description, owner, shared, "
+                                      "definition, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+                            (workspace, name, description, owner, int(shared), json.dumps(definition), now, now))
+                cur.execute(self._sql("SELECT MAX(id) FROM prooflix_object_set WHERE workspace = ? AND name = ?"),
+                            (workspace, name))
+                return int(cur.fetchall()[0][0])
+            cur.execute(self._sql("UPDATE prooflix_object_set SET name = ?, description = ?, shared = ?, "
+                                  "definition = ?, updated = ? WHERE workspace = ? AND id = ?"),
+                        (name, description, int(shared), json.dumps(definition), now, workspace, set_id))
+            return set_id
+
+    def delete_set(self, workspace: str, set_id: int) -> None:
+        self._ensure()
+        with self._cursor() as cur:
+            cur.execute(self._sql("DELETE FROM prooflix_object_set WHERE workspace = ? AND id = ?"), (workspace, set_id))
 
     def audit_log(self, workspace: str, limit: int = 200, event: str | None = None,
                   object_type: str | None = None, user: str | None = None) -> list[dict]:

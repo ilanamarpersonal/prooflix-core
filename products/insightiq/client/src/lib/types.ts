@@ -1,7 +1,8 @@
 /** The ontology's definitions (prooflix/ontology.py on the server). */
 export type Layer = "bronze" | "silver" | "gold" | "unclassified"
 export type PropType = "auto" | "string" | "integer" | "number" | "decimal" | "boolean" | "date" | "timestamp"
-export type Cardinality = "one-to-one" | "one-to-many" | "many-to-one"
+export type Cardinality = "one-to-one" | "one-to-many" | "many-to-one" | "many-to-many"
+export type LinkStorage = "property" | "table" | "computed"
 
 export interface RowRules {
   filter?: string | null
@@ -28,6 +29,13 @@ export interface Link {
   from_property: string
   to_property: string
   description?: string
+  /** property: a property on each side; table: a link table your pipelines build; computed: built from sql */
+  storage?: LinkStorage
+  table?: string | null
+  from_column?: string
+  to_column?: string
+  sql?: string | null
+  schedule?: string | null
 }
 
 /** role:admin, role:user (every signed-in user) or user:<name> */
@@ -197,4 +205,55 @@ export interface AuditEvent {
   type: string | null
   pk: string | null
   detail: Record<string, unknown>
+}
+
+export interface SetFilter {
+  property: string
+  op: "eq" | "ne" | "contains" | "gt" | "gte" | "lt" | "lte" | "in" | "is_null" | "not_null"
+  value?: string | number | null
+}
+
+export interface SetStep {
+  link: string
+  filters: SetFilter[]
+}
+
+export interface ObjectSetDef {
+  type: string
+  filters: SetFilter[]
+  steps: SetStep[]
+}
+
+export interface SavedSet {
+  id: number
+  name: string
+  description: string
+  owner: string | null
+  shared: boolean
+  set: ObjectSetDef
+  created: string
+  updated: string
+}
+
+export interface SetResult {
+  steps: { type: string; link: string | null; count: number }[]
+  objects: OntologyObject[]
+  more: boolean
+  sql: string
+}
+
+export interface ExportJob {
+  id: string
+  owner: string | null
+  name: string
+  type: string
+  format: "csv" | "parquet"
+  state: "queued" | "running" | "done" | "failed"
+  rows: number
+  total: number | null
+  created: string
+  finished: string | null
+  error: string | null
+  bytes: number
+  truncated: boolean
 }

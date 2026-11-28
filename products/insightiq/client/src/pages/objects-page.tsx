@@ -14,6 +14,7 @@ import { LayerBadge, show, TypeAvatar, useDebounced } from "@/components/ontolog
 import { useHistory, useLinked, useObject, useObjectTypes, useRunAction, useSearch, useSuggest } from "@/lib/api"
 import type { Action, ObjectLink, OntologyObject, PublishedType } from "@/lib/types"
 import { cn, formatDateTime } from "@/lib/utils"
+import { ObjectsNav } from "@/pages/sets-page"
 
 const objectPath = (o: OntologyObject) => `/objects/${o.type}/${encodeURIComponent(o.pk ?? "")}`
 
@@ -41,6 +42,7 @@ export function ObjectsPage() {
       <PageHeader
         title="Objects"
         description="Search the published object types: customers, accounts, anything the object model defines. Open an object to see its properties and follow its links."
+        actions={<ObjectsNav active="search" />}
       />
       {types.error && <ErrorAlert title="The object types can't be read" error={types.error} />}
       {types.data && types.data.length === 0 ? (

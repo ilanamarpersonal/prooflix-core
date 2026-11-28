@@ -11,14 +11,20 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import asdict
 from pathlib import Path
+from typing import Literal
 
 import duckdb
+import pyarrow as pa
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, ValidationError
 
-from .. import delta_log, ontology
+from .. import delta_log, link_pipelines, object_sets, ontology
+from ..exports import Exports
 from ..auth import User
+from ..pipelines import PipelineValidationError
 from ..ontology import CheckFailed, ObjectType
 from ..ontology_store import OntologyStore, StoreError, store_for
 from ..search_index import SearchError, alias_name, backend_for, search_fields
@@ -252,6 +258,7 @@ def unpublish(name: str, request: Request) -> None:
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from None
     request.app.state.indexer.drop(request.app, name)
+    link_pipelines.remove(request.app.state.workspace, name)
     _audit(request, "unpublish", name)
 
 
@@ -360,6 +367,16 @@ def publish(body: PublishIn, request: Request, engine: _Engine = Depends(_engine
     changed meanwhile."""
     t = _parse(body.type)
     root = _root(request)
+    # a computed link's SQL runs on Spark, which can call Java: writing it is an admin power (principle 14)
+    me = _user(request)
+    if me is not None and me.role != "admin":
+        old = _published(root).get(t.api_name)
+        before = {k.api_name: (k.sql, k.table) for k in (old.links if old else []) if k.storage == "computed"}
+        changed = [k.api_name for k in t.links if k.storage == "computed" and before.get(k.api_name) != (k.sql, k.table)]
+        if changed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                f"Only an admin can publish new or changed computed links ({', '.join(changed)}): "
+                                "their SQL runs on Spark")
     try:
         result = ontology.check(t, engine.run, engine.tables, _published(root))
     except CheckFailed as e:
@@ -381,13 +398,19 @@ def publish(body: PublishIn, request: Request, engine: _Engine = Depends(_engine
         except StoreError as e:
             problem = str(e)
     problem = _audit(request, "publish", t.api_name, detail={"version": version}) or problem
+    # computed links: their pipelines (written, or removed with the links)
+    pipelines = {"written": [], "removed": [], "error": None}
+    try:
+        pipelines = link_pipelines.sync(request.app.state.workspace, t)
+    except PipelineValidationError as e:
+        pipelines["error"] = "; ".join(e.errors)
     # fast search: (re)index it, or remove an index it no longer wants
     if t.index:
         request.app.state.indexer.request(request.app, t, "update")
     else:
         request.app.state.indexer.drop(request.app, t.api_name)
     return {"type": t.model_dump(), "modified": modified, "path": f"ontology/{ontology.file_name(t.api_name)}",
-            "checks": result["checks"], "version": version, "database_error": problem}
+            "checks": result["checks"], "version": version, "database_error": problem, "pipelines": pipelines}
 
 
 @router.get("/audit")
@@ -413,6 +436,17 @@ def audit_log(
 def index_status(request: Request) -> dict:
     """Each published type's fast-search index: enabled, built, stale, documents, and the current job."""
     return request.app.state.indexer.status(request.app, _published(_root(request)))
+
+
+@router.post("/index/rebuild")
+def rebuild_all_indexes(request: Request) -> dict:
+    """Rebuild the index of every published type with Fast search on (queued; they run one at a time)."""
+    types = [t for t in _published(_root(request)).values() if t.index]
+    jobs = [request.app.state.indexer.request(request.app, t, "full") for t in types]
+    if types and jobs[0] is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Fast search needs OpenSearch: set PROOFLIX_SEARCH_URL in "
+                                                       "Settings & Management → System, then restart the server")
+    return {"queued": [t.api_name for t in types]}
 
 
 @router.post("/index/{name}/rebuild")
@@ -546,11 +580,13 @@ def get_object(type: str, pk: str, request: Request, engine: _Engine = Depends(_
         value = raw.get(k["here"])
         count, error = 0, None
         if target and value is not None:
-            try:
-                count = engine.run(f"SELECT count(*) FROM ({ontology.object_view(target)}) AS v "
-                                   f"WHERE CAST({ontology.q(k['there'])} AS VARCHAR) = {ontology.lit(str(value))}")[0][0]
-            except CheckFailed as e:
-                error = str(e)
+            if k["via"] and k["via"]["table"] not in engine.tables:
+                error = f"{k['via']['table']} isn't built yet"
+            else:
+                try:
+                    count = engine.run(ontology.linked_sql(target, k, str(value), count=True))[0][0]
+                except CheckFailed as e:
+                    error = str(e)
         links.append({**k, "count": count, "error": error})
     return {"object": obj, "layer": t.source.layer, "table": t.source.table, "links": links,
             "database_error": problem}
@@ -580,7 +616,9 @@ def linked(
         objects: list[dict] = []
         more = False
         if value is not None:
-            tcols, trows = engine.query(ontology.by_value_sql(target, k["there"], str(value), limit + 1))
+            if k["via"] and k["via"]["table"] not in engine.tables:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"{k['via']['table']} isn't built yet: run its pipeline")
+            tcols, trows = engine.query(ontology.linked_sql(target, k, str(value), limit + 1))
             objects, _ = _objects(request, target, tcols, trows[:limit])
             more = len(trows) > limit
             if _shows_sensitive(request, target, objects):
@@ -662,3 +700,220 @@ def history(type: str, pk: str, request: Request) -> dict:
         for r in runs:
             r["values"] = {k: (ontology.MASK if k in sensitive else v) for k, v in r["values"].items()}
     return {"available": True, "error": None, "runs": runs}
+
+
+# ------------------------------------------------------------ Object sets tab
+def _parse_set(data: dict) -> object_sets.ObjectSet:
+    try:
+        return object_sets.ObjectSet.model_validate(data)
+    except ValidationError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, ontology.errors(e)) from None
+
+
+def _compile(request: Request, s: object_sets.ObjectSet, tables: dict) -> tuple[list[dict], dict[str, ObjectType]]:
+    visible = _visible(request)
+    try:
+        stages = object_sets.compile(s, visible, _user(request))
+    except object_sets.SetError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+    missing = [t for t in object_sets.link_tables(s, visible) if t not in tables]
+    if missing:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{', '.join(missing)} isn't built yet: run its pipeline")
+    return stages, visible
+
+
+class SetRunIn(BaseModel):
+    set: dict
+    limit: int = Field(50, ge=1, le=MAX_OBJECTS)
+    offset: int = Field(0, ge=0)
+
+
+@router.post("/sets/run")
+def run_set(body: SetRunIn, request: Request, engine: _Engine = Depends(_engine)) -> dict:
+    """Run a set: how many objects each step gives, and a page of the last step's objects."""
+    s = _parse_set(body.set)
+    stages, visible = _compile(request, s, engine.tables)
+    steps = []
+    try:
+        for st in stages:
+            steps.append({"type": st["type"], "link": st["link"], "count": int(engine.run(object_sets.count_sql(st))[0][0])})
+        last = stages[-1]
+        t = visible[last["type"]]
+        cols, rows = engine.query(object_sets.page_sql(last, t, body.limit + 1, body.offset))
+    except CheckFailed as e:
+        raise _fail(e, "The set can't run") from None
+    objects, _ = _objects(request, t, cols, rows[: body.limit])
+    if _shows_sensitive(request, t, objects):
+        _audit(request, "read_sensitive", t.api_name, detail={"set": s.model_dump(), "objects": len(objects)})
+    return {"steps": steps, "objects": objects, "more": len(rows) > body.limit, "sql": last["sql"]}
+
+
+class SetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field("", max_length=1000)
+    shared: bool = False
+    set: dict
+
+
+def _set_owner_check(request: Request, saved: dict) -> None:
+    me = _user(request)
+    if me is not None and me.role != "admin" and saved["owner"] != me.username:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Only {saved['owner']} or an admin can change this set")
+
+
+@router.get("/sets")
+def list_sets(request: Request) -> dict:
+    """The user's own sets and the shared ones."""
+    store = _store(request)
+    if store is None:
+        return {"available": False, "sets": []}
+    try:
+        return {"available": True, "sets": store.list_sets(_workspace(request), _username(request))}
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+
+
+@router.post("/sets", status_code=status.HTTP_201_CREATED)
+def create_set(body: SetIn, request: Request) -> dict:
+    s = _parse_set(body.set)
+    store = _need_store(request)
+    try:
+        set_id = store.save_set(_workspace(request), None, body.name.strip(), body.description, _username(request),
+                                body.shared, s.model_dump())
+        return store.get_set(_workspace(request), set_id)
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+
+
+def _saved_set(request: Request, store: OntologyStore, set_id: int) -> dict:
+    try:
+        saved = store.get_set(_workspace(request), set_id)
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+    me = _user(request)
+    if saved is None or (me is not None and me.role != "admin" and not saved["shared"] and saved["owner"] != me.username):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No object set {set_id}")
+    return saved
+
+
+@router.put("/sets/{set_id}")
+def update_set(set_id: int, body: SetIn, request: Request) -> dict:
+    s = _parse_set(body.set)
+    store = _need_store(request)
+    saved = _saved_set(request, store, set_id)
+    _set_owner_check(request, saved)
+    try:
+        store.save_set(_workspace(request), set_id, body.name.strip(), body.description, saved["owner"], body.shared,
+                       s.model_dump())
+        return store.get_set(_workspace(request), set_id)
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+
+
+@router.delete("/sets/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_set(set_id: int, request: Request) -> None:
+    store = _need_store(request)
+    saved = _saved_set(request, store, set_id)
+    _set_owner_check(request, saved)
+    try:
+        store.delete_set(_workspace(request), set_id)
+    except StoreError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from None
+
+
+# ------------------------------------------------------------ exports
+class ExportIn(BaseModel):
+    set: dict
+    format: Literal["csv", "parquet"] = "csv"
+    name: str = Field("objects", min_length=1, max_length=80)
+
+
+def _export_folder(request: Request) -> Path:
+    folder = Exports.folder(request.app.state.settings.home)
+    if folder is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Exports need PROOFLIX_HOME (a folder for server state)")
+    return folder
+
+
+@router.post("/exports", status_code=status.HTTP_202_ACCEPTED)
+def start_export(body: ExportIn, request: Request, paths: CatalogPaths = Depends(get_catalog_paths)) -> dict:
+    """Export a set's last step to CSV or Parquet in the background (as the user sees it; kept 24 hours)."""
+    s = _parse_set(body.set)
+    folder = _export_folder(request)
+    probe = _Engine(paths)
+    try:
+        stages, visible = _compile(request, s, probe.tables)
+    finally:
+        probe.close()
+    last = stages[-1]
+    t = visible[last["type"]]
+    me = _user(request)
+    see = ontology.can_see_sensitive(me, t)
+    store = _store(request)
+    workspace = _workspace(request)
+    editable = {x.property for a in t.actions for x in a.parameters}  # may hold edited values: always text
+    masked = {p.api_name for p in t.properties if p.sensitive and not see}
+
+    def run(export, write):
+        engine = _Engine(paths)
+        try:
+            export.total = int(engine.run(object_sets.count_sql(last))[0][0])
+            reader = engine.conn.sql(last["sql"]).to_arrow_reader(20_000)
+            for batch in reader:
+                table = pa.Table.from_batches([batch])
+                if store is not None and editable:
+                    pks = [str(v) for v in table.column(t.primary_key).to_pylist() if v is not None]
+                    edits = store.latest_edits(workspace, t.api_name, pks)
+                    for name in editable & set(table.column_names):
+                        values = [None if v is None else str(v) for v in table.column(name).to_pylist()]
+                        for i, pk in enumerate(table.column(t.primary_key).to_pylist()):
+                            e = edits.get(str(pk), {}).get(name)
+                            if e is not None:
+                                values[i] = None if e["value"] is None else str(e["value"])
+                        table = table.set_column(table.column_names.index(name), name, pa.array(values, pa.string()))
+                for name in masked & set(table.column_names):
+                    col = table.column(name)
+                    values = [None if v is None else ontology.MASK for v in col.to_pylist()]
+                    table = table.set_column(table.column_names.index(name), name, pa.array(values, pa.string()))
+                if not write(table):
+                    break
+        finally:
+            engine.close()
+
+    e = request.app.state.exports.start(folder, _username(request), body.name.strip(), t.api_name, body.format, run)
+    _audit(request, "export", t.api_name, detail={"set": s.model_dump(), "format": body.format,
+                                                  "sensitive": bool(see and any(p.sensitive for p in t.properties))})
+    return asdict(e)
+
+
+@router.get("/exports")
+def list_exports(request: Request) -> list[dict]:
+    me = _user(request)
+    folder = Exports.folder(request.app.state.settings.home)
+    return request.app.state.exports.list(folder, _username(request), me is None or me.role == "admin")
+
+
+def _own_export(request: Request, export_id: str):
+    folder = _export_folder(request)
+    e = request.app.state.exports.get(folder, export_id)
+    me = _user(request)
+    if e is None or (me is not None and me.role != "admin" and e.owner != me.username):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such export")
+    return folder, e
+
+
+@router.get("/exports/{export_id}/file")
+def export_file(export_id: str, request: Request) -> FileResponse:
+    folder, e = _own_export(request, export_id)
+    path = request.app.state.exports.file(folder, e)
+    if e.state != "done" or not path.is_file():
+        raise HTTPException(status.HTTP_409_CONFLICT, "The export isn't ready")
+    safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in e.name).strip() or "objects"
+    media = "text/csv" if e.format == "csv" else "application/vnd.apache.parquet"
+    return FileResponse(path, media_type=media, filename=f"{safe}.{e.format}")
+
+
+@router.delete("/exports/{export_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_export(export_id: str, request: Request) -> None:
+    folder, e = _own_export(request, export_id)
+    request.app.state.exports.delete(folder, e)

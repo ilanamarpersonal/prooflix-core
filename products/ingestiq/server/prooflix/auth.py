@@ -74,6 +74,8 @@ TAB_PATHS: dict[str, tuple[str, ...]] = {
     "/api/semantic": ("semantic",),
     "/api/ontology": ("ontology",),  # build, check and publish object types
     "/api/ontology/objects": ("objects", "ontology"),  # search and read objects
+    "/api/ontology/sets": ("objects", "ontology"),  # object sets: build, run, save, share
+    "/api/ontology/exports": ("objects", "ontology"),  # exports of object sets
     "/api/system": ("system",),
     "/api/ai-assist/status": TABS,  # whether AI Assist can answer: any signed-in user
     "/api/ai-assist/ask": TABS,  # general questions from the AI Assist panel on any screen

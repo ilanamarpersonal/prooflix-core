@@ -131,13 +131,59 @@ class Property(BaseModel):
 
 
 class Link(BaseModel):
+    """A named relationship. Stored as a property on each side (``property``), or as a table of key
+    pairs (``table``: one your pipelines build; ``computed``: built from ``sql`` by a pipeline the
+    Object Model generates, on ``schedule``)."""
+
     api_name: str = Field(pattern=FIELD_NAME)
     target: str = Field(pattern=TYPE_NAME)
-    cardinality: Literal["one-to-one", "one-to-many", "many-to-one"] = "one-to-many"
+    cardinality: Literal["one-to-one", "one-to-many", "many-to-one", "many-to-many"] = "one-to-many"
     reverse: str | None = Field(default=None, pattern=FIELD_NAME)  # its name seen from the target
-    from_property: str  # a property of this type
-    to_property: str  # a property of the target type
+    from_property: str  # a property of this type (its values are in from_column of a link table)
+    to_property: str  # a property of the target type (its values are in to_column)
     description: str = ""
+    storage: Literal["property", "table", "computed"] = "property"
+    table: str | None = None  # the link table (for computed links: set from the type and link names)
+    from_column: str = "from_key"
+    to_column: str = "to_key"
+    sql: str | None = None  # computed: a Spark SQL SELECT giving from_key, to_key
+    schedule: str | None = None  # computed: a cron expression; None: built when its pipeline is run
+
+    @field_validator("table")
+    @classmethod
+    def _table(cls, v: str | None) -> str | None:
+        if v and not TABLE.match(v):
+            raise ValueError(f"table '{v}': a catalog table as written in SQL")
+        return v or None
+
+    @field_validator("sql")
+    @classmethod
+    def _sql(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        text = v.strip().rstrip(";").strip()
+        if ";" in text or not re.match(r"(?is)^\s*(select|with)\b", text):
+            raise ValueError("a computed link is one SELECT (or WITH … SELECT) statement")
+        if len(text) > 20_000:
+            raise ValueError("the SQL is limited to 20,000 characters")
+        return text
+
+    @field_validator("from_column", "to_column")
+    @classmethod
+    def _column(cls, v: str) -> str:
+        if not COLUMN.match(v):
+            raise ValueError(f"'{v}' isn't a column name")
+        return v
+
+    @model_validator(mode="after")
+    def _storage(self):
+        if self.storage == "property" and self.cardinality == "many-to-many":
+            raise ValueError(f"link {self.api_name}: many-to-many needs a link table (storage: table or computed)")
+        if self.storage == "table" and not self.table:
+            raise ValueError(f"link {self.api_name}: give the link table")
+        if self.storage == "computed" and not self.sql:
+            raise ValueError(f"link {self.api_name}: give the SQL that computes it")
+        return self
 
 
 PRINCIPAL = r"^(role:(admin|user)|user:[a-z0-9][a-z0-9._-]{2,31})$"
@@ -214,6 +260,9 @@ class ObjectType(BaseModel):
         for k in self.links:
             if k.from_property not in names:
                 raise ValueError(f"link {k.api_name}: '{k.from_property}' isn't one of the properties")
+            if k.storage == "computed":
+                k.table = computed_table(self, k)
+                k.from_column, k.to_column = "from_key", "to_key"
         actions = [a.api_name for a in self.actions]
         if len(set(actions)) != len(actions):
             raise ValueError("two actions have the same name")
@@ -230,6 +279,13 @@ class ObjectType(BaseModel):
 
     def prop(self, name: str) -> Property:
         return next(p for p in self.properties if p.api_name == name)
+
+
+def computed_table(t: "ObjectType", k: Link) -> str:
+    """Where a computed link is built: <catalog>.gold.link_<type>_<link>, next to the type's table."""
+    parts = t.source.table.split(".")
+    name = "link_" + file_name(t.api_name).removesuffix(".yaml") + "_" + k.api_name
+    return f"{parts[0]}.gold.{name}" if len(parts) == 3 else f"gold.{name}"
 
 
 def layer_of(table: str) -> Layer:
@@ -498,6 +554,9 @@ def check(
             if k.to_property not in {p.api_name for p in target.properties}:
                 out.append(_check("links", name, False, "block", f"{k.target} has no property {k.to_property}"))
                 continue
+            if k.storage != "property":
+                out += _check_link_table(t, k, target, view, run, tables, name)
+                continue
             f, to = q(k.from_property), q(k.to_property)
             sql = (
                 f"WITH a AS ({view}), b AS ({object_view(target)}) SELECT "
@@ -572,17 +631,82 @@ MASK = "••••"
 
 
 def links_of(api_name: str, types: dict[str, ObjectType]) -> list[dict]:
-    """The links of a type, both ways: its own, and those of other types that name a reverse."""
+    """The links of a type, both ways: its own, and those of other types that name a reverse. ``via``:
+    the link table and its two columns as seen from this side (None for a link on properties)."""
     out = []
     t = types.get(api_name)
     for k in t.links if t else []:
+        via = {"table": k.table, "here": k.from_column, "there": k.to_column} if k.storage != "property" else None
         out.append({"name": k.api_name, "target": k.target, "here": k.from_property, "there": k.to_property,
-                    "many": k.cardinality == "one-to-many", "description": k.description})
+                    "many": k.cardinality in ("one-to-many", "many-to-many"), "description": k.description,
+                    "storage": k.storage, "via": via})
     for other in types.values():
         for k in other.links:
             if k.target == api_name and k.reverse:
+                via = {"table": k.table, "here": k.to_column, "there": k.from_column} if k.storage != "property" else None
                 out.append({"name": k.reverse, "target": other.api_name, "here": k.to_property,
-                            "there": k.from_property, "many": k.cardinality == "many-to-one", "description": ""})
+                            "there": k.from_property, "many": k.cardinality in ("many-to-one", "many-to-many"),
+                            "description": "", "storage": k.storage, "via": via})
+    return out
+
+
+def linked_sql(target: ObjectType, link: dict, value: str, limit: int | None = None, count: bool = False) -> str:
+    """The target objects a link leads to from one object's value (through its link table if it has one)."""
+    there = f"CAST(v.{q(link['there'])} AS VARCHAR)"
+    if link.get("via"):
+        via = link["via"]
+        cond = (f"{there} IN (SELECT CAST({q(via['there'])} AS VARCHAR) FROM {table_sql(via['table'])} "
+                f"WHERE CAST({q(via['here'])} AS VARCHAR) = {lit(value)})")
+    else:
+        cond = f"{there} = {lit(value)}"
+    if count:
+        return f"SELECT count(*) FROM ({object_view(target)}) AS v WHERE {cond}"
+    return (f"SELECT * FROM ({object_view(target)}) AS v WHERE {cond} "
+            f"ORDER BY {q(target.title)} NULLS LAST LIMIT {int(limit or 50)}")
+
+
+def _check_link_table(t: ObjectType, k: Link, target: ObjectType, view: str, run: Run, tables: dict,
+                      name: str) -> list[dict]:
+    """A link stored as a table: it exists (or, computed, will once its pipeline runs), has its two
+    columns, and its keys find objects on both sides."""
+    out = []
+    if k.storage == "computed":
+        try:  # a first look with DuckDB: Spark SQL may differ, so this only warns
+            run(f"SELECT from_key, to_key FROM ({k.sql}) AS s LIMIT 0")
+            out.append(_check("links", f"{name}: the SQL", True, "warn", "runs on DuckDB too, with from_key and to_key"))
+        except CheckFailed as e:
+            out.append(_check("links", f"{name}: the SQL", False, "warn",
+                              f"DuckDB couldn't run it (Spark may still): {e}"))
+    info = tables.get(k.table)
+    if info is None:
+        if k.storage == "computed":
+            out.append(_check("links", f"{name}: link table", None, "info",
+                              f"{k.table} is built by its pipeline after publishing" +
+                              (f", on its schedule ({k.schedule})" if k.schedule else " (run it from Pipelines)")))
+        else:
+            out.append(_check("links", f"{name}: link table", False, "block", f"{k.table} isn't a table of the catalog"))
+        return out
+    missing = [c for c in (k.from_column, k.to_column) if c not in info["columns"]]
+    if missing:
+        out.append(_check("links", f"{name}: link table", False, "block", f"{k.table} has no {', '.join(missing)}"))
+        return out
+    fc, tc = q(k.from_column), q(k.to_column)
+    sql = (f"WITH l AS (SELECT DISTINCT CAST({fc} AS VARCHAR) AS f, CAST({tc} AS VARCHAR) AS t FROM "
+           f"{table_sql(k.table)} WHERE {fc} IS NOT NULL AND {tc} IS NOT NULL), "
+           f"a AS (SELECT DISTINCT CAST({q(k.from_property)} AS VARCHAR) AS k FROM ({view}) AS v), "
+           f"b AS (SELECT DISTINCT CAST({q(k.to_property)} AS VARCHAR) AS k FROM ({object_view(target)}) AS v) "
+           "SELECT (SELECT count(*) FROM l), (SELECT count(*) FROM l WHERE f IN (SELECT k FROM a)), "
+           "(SELECT count(*) FROM l WHERE t IN (SELECT k FROM b))")
+    try:
+        total, hit_a, hit_b = (int(x) for x in run(sql)[0])
+    except CheckFailed as e:
+        out.append(_check("links", f"{name}: link table", False, "block", f"it can't be read: {e}"))
+        return out
+    worst = min(hit_a, hit_b)
+    rate = worst / total if total else 0.0
+    out.append(_check("links", f"{name}: match rate", rate >= MATCH_RATE, "warn",
+                      f"{total:,} pairs; {_pct(hit_a, total)} find a {t.api_name}, {_pct(hit_b, total)} find a "
+                      f"{k.target}"))
     return out
 
 

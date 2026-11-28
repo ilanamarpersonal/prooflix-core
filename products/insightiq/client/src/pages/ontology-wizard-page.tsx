@@ -26,6 +26,7 @@ import { Button } from "@prooflix/ui/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@prooflix/ui/components/ui/card"
 import { Input } from "@prooflix/ui/components/ui/input"
 import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
+import { Textarea } from "@prooflix/ui/components/ui/textarea"
 import {
   blocking,
   CheckList,
@@ -1047,6 +1048,7 @@ function LinksStep({ def, update, result, checking }: StepProps) {
                       <option value="one-to-many">one to many</option>
                       <option value="many-to-one">many to one</option>
                       <option value="one-to-one">one to one</option>
+                      {(l.storage ?? "property") !== "property" && <option value="many-to-many">many to many</option>}
                     </select>
                   </Field>
                   <Field label={`Name (${def.api_name} →)`}>
@@ -1097,8 +1099,13 @@ function LinksStep({ def, update, result, checking }: StepProps) {
                     </Button>
                   </div>
                 </div>
+                <LinkStorageFields def={def} link={l} onChange={(patch) => setLink(i, patch)} />
                 <code className="text-xs text-violet-700 dark:text-violet-300">
-                  {l.target}.{l.to_property} = {def.api_name}.{l.from_property}
+                  {(l.storage ?? "property") === "property"
+                    ? `${l.target}.${l.to_property} = ${def.api_name}.${l.from_property}`
+                    : `${def.api_name}.${l.from_property} → ${linkTable(def, l)}(${l.from_column ?? "from_key"} → ${
+                        l.to_column ?? "to_key"
+                      }) → ${l.target}.${l.to_property}`}
                 </code>
                 {s && <MatchRate stats={s} />}
               </CardContent>
@@ -1696,5 +1703,109 @@ function ChoicesInput({ value, onChange }: { value: string[]; onChange: (v: stri
         )
       }}
     />
+  )
+}
+
+// ------------------------------------------------------------ links stored in a table
+/** Where a computed link is built: the same rule as the server (catalog.gold.link_<type>_<link>). */
+const linkTable = (def: ObjectType, l: Link) => {
+  if ((l.storage ?? "property") !== "computed") return l.table || "a link table"
+  const parts = def.source.table.split(".")
+  const name = `link_${def.api_name.replace(/(?<!^)(?=[A-Z])/g, "_").toLowerCase()}_${l.api_name}`
+  return parts.length === 3 ? `${parts[0]}.gold.${name}` : `gold.${name}`
+}
+
+function LinkStorageFields({
+  def,
+  link: l,
+  onChange,
+}: {
+  def: ObjectType
+  link: Link
+  onChange: (patch: Partial<Link>) => void
+}) {
+  const sources = useSources()
+  const storage = l.storage ?? "property"
+  return (
+    <div className="grid gap-3 rounded-lg border border-dashed p-3">
+      <Field label="Stored as">
+        <select
+          className={selectClass}
+          value={storage}
+          onChange={(e) => {
+            const next = e.target.value as Link["storage"]
+            onChange({
+              storage: next,
+              cardinality: next === "property" && l.cardinality === "many-to-many" ? "one-to-many" : l.cardinality,
+              from_column: l.from_column ?? "from_key",
+              to_column: l.to_column ?? "to_key",
+            })
+          }}
+        >
+          <option value="property">a property on each side</option>
+          <option value="table">a link table your pipelines build</option>
+          <option value="computed">computed with Spark SQL (Prooflix generates its pipeline)</option>
+        </select>
+      </Field>
+      {storage === "table" && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Link table">
+            <select
+              className={selectClass}
+              value={l.table ?? ""}
+              onChange={(e) => onChange({ table: e.target.value || null })}
+            >
+              <option value="">Choose…</option>
+              {(sources.data ?? []).map((t) => (
+                <option key={t.table}>{t.table}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label={`Column with ${def.api_name} keys`}>
+            <Input
+              className="font-mono"
+              value={l.from_column ?? "from_key"}
+              onChange={(e) => onChange({ from_column: e.target.value })}
+            />
+          </Field>
+          <Field label={`Column with ${l.target} keys`}>
+            <Input
+              className="font-mono"
+              value={l.to_column ?? "to_key"}
+              onChange={(e) => onChange({ to_column: e.target.value })}
+            />
+          </Field>
+        </div>
+      )}
+      {storage === "computed" && (
+        <div className="grid gap-3">
+          <Field
+            label="Spark SQL"
+            hint={`One SELECT giving from_key (a ${def.api_name}.${l.from_property}) and to_key (a ${l.target}.${l.to_property}); tables as tenant1.silver.x. Built into ${linkTable(def, l)}. Only admins can publish it: it runs on Spark.`}
+          >
+            <Textarea
+              rows={5}
+              className="font-mono text-xs"
+              placeholder={
+                "SELECT a.customer_id AS from_key, b.customer_id AS to_key\nFROM tenant1.silver.devices a\nJOIN tenant1.silver.devices b ON a.device_id = b.device_id AND a.customer_id <> b.customer_id"
+              }
+              value={l.sql ?? ""}
+              onChange={(e) => onChange({ sql: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="Schedule"
+            hint="A cron expression in UTC, e.g. 0 3 * * * (every day at 03:00). Empty: run its pipeline by hand."
+          >
+            <Input
+              className="font-mono"
+              placeholder="0 3 * * *"
+              value={l.schedule ?? ""}
+              onChange={(e) => onChange({ schedule: e.target.value || null })}
+            />
+          </Field>
+        </div>
+      )}
+    </div>
   )
 }

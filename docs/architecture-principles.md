@@ -21,7 +21,9 @@ changing one is fine, but on purpose: update this file in the same change and sa
    version (`delta_log.py`), and never writes them. Changes made by the object model's
    actions are rows in its PostgreSQL database (`ontology_store.py`), laid over the
    objects when they are read, never writes to the lake. The fast-search indexes are copies
-   in OpenSearch (`search_index.py`), built by reading the lake the same way. The one
+   in OpenSearch (`search_index.py`), built by reading the lake the same way. Exports of
+   object sets read it the same way too. Computed links are built by Spark, in pipelines
+   the Object Model generates (`link_pipelines.py`). The one
    exception is the Catalog's **Drop schema → Delete permanently** (admins only when
    users are on): on an explicit request it deletes the schema's table folders; Unity
    Catalog registrations are left for Spark to drop.

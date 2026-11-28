@@ -10,8 +10,12 @@ import type {
   ObjectLink,
   ObjectType,
   OntologyObject,
+  ExportJob,
   IndexJob,
   IndexStatus,
+  ObjectSetDef,
+  SavedSet,
+  SetResult,
   Principal,
   PublishedType,
   SearchStatus,
@@ -56,6 +60,19 @@ export const api = {
     request<{ database: DatabaseStatus; search: SearchStatus; admin: boolean }>("/ontology/objects/status"),
   indexStatus: () => request<IndexStatus>("/ontology/index"),
   rebuildIndex: (name: string) => request<IndexJob>(`/ontology/index/${enc(name)}/rebuild`, { method: "POST" }),
+  rebuildAllIndexes: () => request<{ queued: string[] }>("/ontology/index/rebuild", { method: "POST" }),
+  runSet: (set: ObjectSetDef, offset = 0) =>
+    request<SetResult>("/ontology/sets/run", { method: "POST", ...json({ set, limit: 50, offset }) }),
+  sets: () => request<{ available: boolean; sets: SavedSet[] }>("/ontology/sets"),
+  createSet: (body: { name: string; description: string; shared: boolean; set: ObjectSetDef }) =>
+    request<SavedSet>("/ontology/sets", { method: "POST", ...json(body) }),
+  updateSet: (id: number, body: { name: string; description: string; shared: boolean; set: ObjectSetDef }) =>
+    request<SavedSet>(`/ontology/sets/${id}`, { method: "PUT", ...json(body) }),
+  deleteSet: (id: number) => request<void>(`/ontology/sets/${id}`, { method: "DELETE" }),
+  startExport: (set: ObjectSetDef, format: "csv" | "parquet", name: string) =>
+    request<ExportJob>("/ontology/exports", { method: "POST", ...json({ set, format, name }) }),
+  exports: () => request<ExportJob[]>("/ontology/exports"),
+  deleteExport: (id: string) => request<void>(`/ontology/exports/${id}`, { method: "DELETE" }),
   cancelIndex: (name: string) =>
     request<{ cancelled: boolean }>(`/ontology/index/${enc(name)}/cancel`, { method: "POST" }),
   suggest: (q: string) =>
@@ -186,3 +203,13 @@ export const useSuggest = (q: string) =>
     queryFn: () => api.suggest(q),
     enabled: q.trim().length > 0,
   })
+
+export const useSets = () => useQuery({ queryKey: ["ontology", "sets"], queryFn: api.sets })
+/** Exports; polled every 2 seconds while one runs. */
+export const useExports = () =>
+  useQuery({
+    queryKey: ["ontology", "exports"],
+    queryFn: api.exports,
+    refetchInterval: (q) => (q.state.data?.some((e) => e.state === "queued" || e.state === "running") ? 2000 : false),
+  })
+export const exportFileUrl = (id: string) => `/api/ontology/exports/${id}/file`

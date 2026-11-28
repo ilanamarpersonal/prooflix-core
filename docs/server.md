@@ -113,7 +113,10 @@ flowchart TB
 | `api/semantic.py` | The Semantic tab's routes |
 | `ontology.py` | InsightIQ's ontology: object types (source table in any layer, row rules, properties, links) in `ontology/<type>.yaml` (drafts in `ontology/.drafts/`), the object view each read goes through, the wizard's checks, search and links |
 | `ontology_store.py` | The object model's database (PostgreSQL, `PROOFLIX_DATABASE_URL`): numbered versions of published types, actions' edits (laid over objects when read, never written to the lake) and the audit log, per workspace; tables created on first use (`sqlite:///` works for tests) |
-| `search_index.py` | Fast search: an OpenSearch index per type with `index: true` (`PROOFLIX_SEARCH_URL`): full builds into a new index swapped in by alias, updates of only the objects in the files a new Delta version added or removed (`delta_log.changes_since`), a watcher that checks the indexed tables every minute (with `PROOFLIX_SCHEDULER`), one job at a time, state kept in OpenSearch (`prooflix-index-state`) |
+| `search_index.py` | Fast search: an OpenSearch index per type with `index: true` (`PROOFLIX_SEARCH_URL`): full builds into a new index swapped in by alias, updates of only the objects in the files a new Delta version added or removed (`delta_log.changes_since`), a watcher that checks the indexed tables every minute (with `PROOFLIX_SCHEDULER`), one job at a time (builds check their document count), state kept in OpenSearch (`prooflix-index-state`); when it starts, the watcher removes indexes of builds cut off by a stop |
+| `object_sets.py` | Object sets: a type with filters, then links followed with filters of their own (at most 4 steps), compiled into one SELECT per step over the object views, with the viewer's access (no hidden types, no filters on sensitive properties they don't see) |
+| `exports.py` | Background exports of a set to CSV or Parquet in `PROOFLIX_HOME/exports` (mode 600), edits laid over and masking applied, at most 5 million rows, one at a time, deleted after 24 hours |
+| `link_pipelines.py` | The pipelines of computed links: one per link (`pipelines/object-link-<type>-<link>.yaml`), a Python task calling the workspace's `gold.link_tables:build` on the link's schedule; written or removed when its type is published or unpublished |
 | `api/ontology.py` | The Object Model and Objects tabs' routes, on one locked-down DuckDB per request (the SQL Editor's) |
 | `alerts.py` | Alerts: message formats (`{field}` templates or regular expressions), channels (Email over SMTP, Slack, Teams, webhook) and rules in `PROOFLIX_HOME/alerts.json`, the engine that checks task log lines, cooldowns, delivery on background threads, and the history |
 | `api/alerts.py` | The Alerts tab's routes |
@@ -336,13 +339,20 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/ontology/index` | | `{configured, ok, error, types: {name: {enabled, ready, stale, state: {docs, built, updated, fingerprint}, job}}}`: each type's fast-search index and its current job (`job.state` queued, running, done, failed, cancelled; `done`/`total` for progress) |
 | POST | `/api/ontology/index/{name}/rebuild` | | Rebuilds the index from the whole table (a new index, swapped in when complete); `409` when Fast search is off or OpenSearch isn't set |
 | POST | `/api/ontology/index/{name}/cancel` | | `{cancelled}`: stops the running job (a half-built index is deleted; the watcher doesn't restart it until Rebuild or a publish) |
+| POST | `/api/ontology/index/rebuild` | | `{queued}`: rebuilds the index of every type with Fast search on, one after another |
+| POST | `/api/ontology/sets/run` | `{set, limit, offset}` | `{steps: [{type, link, count}], objects, more, sql}`: each step's count and a page of the last step's objects; `422` for a type, link or property the viewer can't use, `409` when a link table isn't built yet |
+| GET, POST | `/api/ontology/sets` | POST `{name, description, shared, set}` | The user's own sets and the shared ones (`{available, sets}`); POST saves a new one (needs the database) |
+| PUT, DELETE | `/api/ontology/sets/{id}` | PUT as POST | Only its owner or an admin; a private set of someone else answers `404` |
+| POST | `/api/ontology/exports` | `{set, format, name}` | Starts an export of the set's last step (`csv` or `parquet`): `{id, state, rows, total, ...}` |
+| GET | `/api/ontology/exports` | | The user's exports (all for admins), newest first; older than 24 hours are deleted |
+| GET, DELETE | `/api/ontology/exports/{id}/file`, `/api/ontology/exports/{id}` | | Download (its owner or an admin) / delete |
 | GET | `/api/ontology/objects/suggest?q=&limit=` | | Autocomplete from the indexed types the user sees: `[{type, pk, title}]` |
 | GET | `/api/ontology/audit?event=&type=&user=&limit=` | | The audit log, newest first: `[{id, at, user, event, type, pk, detail}]`; events `publish`, `unpublish`, `action`, `read_sensitive`, `view_as`. Admins only while users are on |
 
 Each type's `access` (`view`, `sensitive`: `role:admin`, `role:user`, `user:<name>`) says who sees it
 (empty: everyone with the Objects tab) and its sensitive properties (besides admins); a type the user
 may not see is left out everywhere (types, search, links) and answers `404`. Each action's `allowed`
-says who may run it (empty: admins only). Search uses a type's index when it is built for its current definition (each group says `engine`: `index` or `lake`, with a `note` when the index couldn't be reached and the lake was searched); the index holds no sensitive properties, and results get access, masking and edits as any read. `/api/ontology/preview` takes `as_user` (*View as user*:
+says who may run it (empty: admins only). Links are stored as a property on each side, as a link table your pipelines build (`storage: table`, `table`, `from_column`, `to_column`; many-to-many allowed) or computed (`storage: computed`, `sql`, `schedule`): publishing writes its pipeline, which builds `<catalog>.gold.link_<type>_<link>` with Spark; publishing a new or changed computed link needs an admin while users are on (its SQL runs on Spark, principle 14). `/api/ontology/sets` and `/api/ontology/exports` belong to the `objects` or `ontology` tab. Search uses a type's index when it is built for its current definition (each group says `engine`: `index` or `lake`, with a `note` when the index couldn't be reached and the lake was searched); the index holds no sensitive properties, and results get access, masking and edits as any read. `/api/ontology/preview` takes `as_user` (*View as user*:
 never more than the caller sees). Publishing records a version (`version` in the answer) when the
 database is set.
 

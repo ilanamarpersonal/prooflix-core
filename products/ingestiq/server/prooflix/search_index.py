@@ -145,6 +145,10 @@ class OpenSearch:
             if bad:
                 raise SearchError(f"{len(bad)} documents weren't indexed: {next(iter(bad[0].values()))['error']}")
 
+    def indices(self, prefix: str) -> list[str]:
+        res = self._req("GET", f"/_cat/indices/{prefix}*?format=json&h=index", ok404=True)
+        return sorted(r["index"] for r in res or [])
+
     def alias_targets(self, alias: str) -> list[str]:
         res = self._req("GET", f"/_alias/{alias}", ok404=True)
         return sorted(res) if res else []
@@ -250,6 +254,7 @@ class Job:
     finished: str | None = None
     error: str | None = None
     note: str = ""
+    index: str | None = None  # the index a full build is filling
     cancel: bool = field(default=False, repr=False)
 
     def public(self) -> dict:
@@ -302,13 +307,21 @@ def build_full(backend: OpenSearch, paths, root: Path, t: ObjectType, job: Job) 
         job.total = table.row_count or None
         alias = alias_name(root, t.api_name)
         name = f"{alias}-{int(time.time() * 1000)}"
+        job.index = name
         backend.create_index(name, mapping(t))
         try:
+            indexed = 0
             for rows in _stream(conn, f"SELECT * FROM ({object_view(t)}) AS v", job):
                 ops = [("index", *d) for d in (document(t, r) for r in rows) if d]
                 backend.bulk(name, ops)
+                indexed += len(ops)
                 job.done += len(rows)
             backend.finish_index(name)
+            # the index must hold every document written (it can't have been deleted or replaced meanwhile)
+            found = backend.count(name)
+            if found != indexed:
+                raise SearchError(f"the new index holds {found:,} of the {indexed:,} objects written to it "
+                                  "(was it deleted while it was built?): rebuild it")
             for old in backend.swap_alias(alias, name):
                 backend.delete_index(old)
         except BaseException:
@@ -399,6 +412,7 @@ class Indexer:
         self._stop = threading.Event()
         self._watcher: threading.Thread | None = None
         self.last_error: str | None = None
+        self._cleaned: set[str] = set()  # workspaces whose leftover indexes were removed
 
     # the app's current settings, workspace and catalog are read on every call (principle 5)
     @staticmethod
@@ -518,6 +532,7 @@ class Indexer:
             self.last_error = str(e)
             return
         self.last_error = None
+        self._remove_leftovers(backend, root)
         prefix = workspace_key(root) + ":"
         for key, state in states.items():
             name = key[len(prefix):] if key.startswith(prefix) else None
@@ -533,6 +548,26 @@ class Indexer:
                     time.time() - datetime.fromisoformat(last.finished).timestamp() < RETRY_SECONDS:
                 continue  # don't retry a failing build every minute
             self.request(app, t, "update" if state_key(root, t.api_name) in states else "full")
+
+    def _remove_leftovers(self, backend, root: Path) -> None:
+        """Once per workspace, before its first jobs: delete its indexes no alias points to (builds that
+        were cut off when the server stopped)."""
+        key = workspace_key(root)
+        if key in self._cleaned:
+            return
+        prefix = f"prooflix-{key}-"
+        try:
+            names = backend.indices(prefix)
+            used = {i for n in names for i in backend.alias_targets(n.rsplit("-", 1)[0])}
+            used |= {j.index for j in self.jobs.values() if j.index and j.state in ("queued", "running")}
+            for name in names:
+                if name not in used:
+                    backend.delete_index(name)
+                    log.info("removed the leftover index %s", name)
+        except SearchError as e:
+            log.warning("leftover indexes not checked: %s", e)
+            return
+        self._cleaned.add(key)
 
     def start(self, app) -> None:
         if self._watcher is not None:

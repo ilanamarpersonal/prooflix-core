@@ -1,6 +1,6 @@
 # InsightIQ Object Model: product design
 
-Status: **phases A, B and C built** (sections [12](#12-phase-a-what-is-built), [13](#13-phase-b-what-is-built) and [14](#14-phase-c-what-is-built)); phases D and E are proposed. This document describes the first product
+Status: **phases A to D built** (sections [12](#12-phase-a-what-is-built) to [15](#15-phase-d-what-is-built)); phase E is proposed. This document describes the first product
 in InsightIQ: an ontology that turns lake tables into business **objects** (a *Customer*, an
 *Account*, a *Transaction*), the **links** between them and the **actions** allowed on them,
 built step by step in a guided GUI and used by people, Python tasks and AI Assist.
@@ -329,7 +329,7 @@ building and publishing belong to the `ontology` tab, reading objects to `object
 | A (**built**) | The tabs, the wizard (steps ① to ④ and ⑥), object views over any layer, object search and object pages, YAML definitions | none |
 | B (**built**) | Access (⑤) with masking, actions with an edits table, audit; versions of the definitions in PostgreSQL | PostgreSQL |
 | C (**built**) | Indexing through the object view, following new Delta versions; fast search and autocomplete | OpenSearch |
-| D | Object sets, links precomputed by Spark, background exports | none |
+| D (**built**) | Object sets, links precomputed by Spark, background exports | none |
 | E | AI Assist tools, and an MCP server over the Object API | none |
 
 Phase A is useful on its own: one type from any layer, searchable and with object pages.
@@ -418,4 +418,32 @@ pipeline task that writes edits back into a table, and searching on edited value
 
 Not built: Change Data Feed (versions are followed through the Delta log instead), facets and
 aggregations from the index, and more than one OpenSearch node.
+
+## 15. Phase D: what is built
+
+- **Links stored in tables**: a link can be a property on each side (as before), a **link table**
+  your pipelines build (two key columns; many-to-many allowed), or **computed**: Spark SQL written in
+  the Links step, giving `from_key` and `to_key`. Publishing writes one pipeline per computed link
+  (`pipelines/object-link-<type>-<link>.yaml`, the GUI's output like an ingestion job) calling the
+  workspace's `gold.link_tables:build`, which runs the SQL on Spark into
+  `<catalog>.gold.link_<type>_<link>`, on the link's cron schedule. Only admins publish new or changed
+  computed SQL (it runs on Spark, principle 14). Until its table is built, object pages say so.
+- **Object sets** (the **Object sets** switch on the Objects page): a type with filters, then up to
+  four *search around* steps with filters, the count after each step, a page of the last step's
+  objects, **Open in SQL Editor**. Saved privately or **shared** (anyone with the Objects tab can save
+  and share); a shared set runs with each viewer's own access and masking. Saved sets live in the
+  object model's database.
+- **Exports**: CSV or Parquet of a set's last step, in the background with progress, edits laid over
+  and masking applied, up to 5 million rows, downloadable by the person who started it (or an admin)
+  for 24 hours, audited.
+- **Rebuild all fast search** in the Object Model header.
+- **Measured locally**: customers in Haifa (6.5 million of 65 million) → their accounts over 20,000
+  (1.2 million) counts in 0.8 s; exporting those 1.2 million accounts to CSV (106 MB) takes 5 s.
+- **Safety found while testing**: an index build now checks its document count before it is swapped
+  in, and OpenSearch no longer creates `prooflix-*` indexes on its own.
+  When the watcher starts, it removes its workspace's indexes that no alias points to (builds cut
+  off when the server stopped), keeping any build that is running.
+
+Not built: filters on actions' edited values, sets as AI Assist tools (phase E), graph analytics
+beyond what the computed SQL expresses.
 

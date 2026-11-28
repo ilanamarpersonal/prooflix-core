@@ -6,6 +6,7 @@ import { AuditPage } from "@/pages/audit-page"
 import { ObjectRoute, ObjectsPage } from "@/pages/objects-page"
 import { OntologyPage } from "@/pages/ontology-page"
 import { OntologyWizardPage } from "@/pages/ontology-wizard-page"
+import { SetsPage } from "@/pages/sets-page"
 
 export const router = createBrowserRouter(
   [
@@ -18,6 +19,8 @@ export const router = createBrowserRouter(
         { path: "ontology/audit", caseSensitive: true, element: <AuditPage /> }, // a type named Audit stays /ontology/Audit
         { path: "ontology/:name", element: <OntologyWizardPage /> },
         { path: "objects", element: <ObjectsPage /> },
+        { path: "objects/sets", element: <SetsPage key="new" /> },
+        { path: "objects/sets/:id", element: <SetsPage /> },
         { path: "objects/:type/:pk", element: <ObjectRoute /> },
       ],
     },

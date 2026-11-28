@@ -37,6 +37,9 @@ spec:
               value: "true"
             - name: OPENSEARCH_JAVA_OPTS
               value: {{ .Values.opensearch.javaOpts | quote }}
+            # Prooflix creates its indexes itself: a write to a deleted one fails instead of making a bare index
+            - name: action.auto_create_index
+              value: "-prooflix-*,+*"
           ports:
             - name: http
               containerPort: 9200

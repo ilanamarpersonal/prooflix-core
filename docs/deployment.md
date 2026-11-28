@@ -210,7 +210,7 @@ then set `PROOFLIX_DATABASE_URL=postgresql://localhost:5432/prooflix`, `_USER=pr
 
 **OpenSearch.** The chart runs OpenSearch (`opensearchproject/opensearch:2.19.1`, Apache 2.0) as a
 one-node StatefulSet with its own volume, for the object model's fast search, and gives the server
-`PROOFLIX_SEARCH_URL`. Its security plugin is off: a NetworkPolicy lets only the Prooflix server
+`PROOFLIX_SEARCH_URL`. It doesn't create `prooflix-*` indexes on its own (`action.auto_create_index`), so a write to an index deleted by hand fails instead of making a bare one. Its security plugin is off: a NetworkPolicy lets only the Prooflix server
 reach it, and its Service is never exposed outside the cluster. The index is a copy, rebuilt from the
 lake when needed, so its volume is deleted with the release.
 

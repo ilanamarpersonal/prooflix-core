@@ -69,6 +69,9 @@ class FakeSearch:
             else:
                 docs.pop(doc_id, None)
 
+    def indices(self, prefix):
+        return sorted(n for n in self.indexes if n.startswith(prefix))
+
     def alias_targets(self, alias):
         return [self.aliases[alias]] if alias in self.aliases else []
 
@@ -254,4 +257,40 @@ def test_the_watcher_respects_cancel_and_waits_after_a_failure(setup):
     assert app.state.indexer.jobs[key].state == "failed"  # not retried yet
     assert c.post("/api/ontology/index/Customer/rebuild").status_code == 200  # a person can always rebuild
     assert _wait(app).state == "done"
+
+
+def test_rebuild_every_indexed_type(setup):
+    c, app, fake, table = setup
+    c.post("/api/ontology/publish", json={"type": CUSTOMER})
+    _wait(app)
+    off = copy.deepcopy(CUSTOMER) | {"api_name": "Other", "index": False}
+    c.post("/api/ontology/publish", json={"type": off})
+    assert c.post("/api/ontology/index/rebuild").json() == {"queued": ["Customer"]}  # only types with Fast search
+    job = _wait(app)
+    assert job.kind == "full" and job.state == "done"
+
+
+def test_a_build_that_loses_documents_fails(setup):
+    c, app, fake, table = setup
+    real_bulk = fake.bulk
+
+    def lossy(index, ops):  # as if the index were deleted and created again halfway
+        real_bulk(index, ops[1:])
+
+    fake.bulk = lossy
+    c.post("/api/ontology/publish", json={"type": CUSTOMER})
+    job = _wait(app)
+    assert job.state == "failed" and "holds 1 of the 2" in job.error
+    alias = search_index.alias_name(app.state.workspace.root, "Customer")
+    assert alias not in fake.aliases  # never swapped in
+
+
+def test_leftover_indexes_are_removed_once(setup):
+    c, app, fake, table = setup
+    c.post("/api/ontology/publish", json={"type": CUSTOMER})
+    _wait(app)
+    alias = search_index.alias_name(app.state.workspace.root, "Customer")
+    fake.indexes[alias + "-1"] = {"x": {}}  # a build cut off by a stop
+    app.state.indexer.tick(app)
+    assert alias + "-1" not in fake.indexes and fake.aliases[alias] in fake.indexes  # the live one stays
 

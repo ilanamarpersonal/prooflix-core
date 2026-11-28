@@ -60,6 +60,27 @@ export function OntologyPage() {
     [nodes],
   )
   const [adding, setAdding] = useState<string | null>(null)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuilt, setRebuilt] = useState<string | null>(null)
+  const [rebuildError, setRebuildError] = useState<unknown>(null)
+  const qc = useQueryClient()
+  const rebuildAll = async () => {
+    setRebuilding(true)
+    setRebuildError(null)
+    try {
+      const r = await api.rebuildAllIndexes()
+      setRebuilt(
+        r.queued.length
+          ? `Rebuilding ${r.queued.join(", ")}: one after another, progress in each type's details.`
+          : "No type has Fast search on.",
+      )
+      await qc.invalidateQueries({ queryKey: ["ontology", "index"] })
+    } catch (e) {
+      setRebuildError(e)
+    } finally {
+      setRebuilding(false)
+    }
+  }
   const [addError, setAddError] = useState<unknown>(null)
 
   // a suggestion goes into the source type's draft (started from the published type when there is none),
@@ -102,6 +123,16 @@ export function OntologyPage() {
                 </button>
               ))}
             </div>
+            {status.data?.search.ok && nodes.some((n) => !n.draft && n.type.index) && (
+              <Button
+                variant="outline"
+                loading={rebuilding}
+                onClick={rebuildAll}
+                title="Rebuild the fast-search index of every type with Fast search on (one after another)"
+              >
+                <RefreshCw /> Rebuild all fast search
+              </Button>
+            )}
             {status.data?.admin && db?.ok && (
               <Button variant="outline" onClick={() => navigate("/ontology/audit")}>
                 <ScrollText /> Audit log
@@ -114,6 +145,24 @@ export function OntologyPage() {
         }
       />
       {types.error && <ErrorAlert title="The object model can't be read" error={types.error} />}
+      {rebuildError != null && (
+        <div className="mb-4">
+          <ErrorAlert title="Fast search wasn't rebuilt" error={rebuildError} />
+        </div>
+      )}
+      {rebuilt && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2 text-sm">
+          <Zap className="size-4 text-violet-500" /> {rebuilt}
+          <button
+            type="button"
+            className="text-muted-foreground ml-auto"
+            onClick={() => setRebuilt(null)}
+            aria-label="Close"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
       {db && !db.ok && (
         <div className="text-muted-foreground mb-4 flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm">
           <Database className="size-4" />
