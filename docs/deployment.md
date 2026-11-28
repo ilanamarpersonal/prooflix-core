@@ -1,7 +1,9 @@
 # Deployment
 
 Prooflix ships as **one container**: the FastAPI server, which also serves the
-built React client, on port 8000. The repository has three layers on top of
+built React clients on port 8000: the portal at `/` (sign-in, product tiles),
+IngestIQ under `/ingestiq/`, InsightIQ under `/insightiq/` and Settings & Management
+under `/settings/`. The repository has three layers on top of
 each other:
 
 ```mermaid
@@ -12,11 +14,12 @@ flowchart LR
     HC -->|"helm install"| K8S
 ```
 
-## Image (`Dockerfile`)
+## Image (`products/ingestiq/Dockerfile`)
 
-* **Stage 1** (Node 20) builds `client/dist`.
+* **Stage 1** (Node 20) builds the four clients (portal, IngestIQ, InsightIQ, Settings) from the npm
+  workspace (with `packages/ui`).
 * **Stage 2** (Python 3.12 + uv) installs the server from `uv.lock`, with the
-  `spark` extra (PySpark), and copies the client build next to it.
+  `spark` extra (PySpark), and copies the client builds next to it.
 * **Spark**: Java 17 is copied in from `eclipse-temurin:17-jre` (OpenJDK, GPLv2
   with the Classpath Exception, free for commercial use; `JAVA_HOME=/opt/java/openjdk`).
   The Spark packages pipelines use (Delta Lake 4.3.1, the Unity Catalog connector
@@ -25,8 +28,9 @@ flowchart LR
   `/opt/spark-ivy` (`PROOFLIX_SPARK_IVY`, `PROOFLIX_SPARK_PACKAGES`), so pods
   start without downloading anything. Rebuild the image now and then for Java
   security updates. The repository layout is kept under `/app`
-  (`/app/server`, `/app/client/dist`), because the server finds the client
-  relative to the repository root.
+  (`/app/products/ingestiq/server`, `/app/products/ingestiq/client/dist`,
+  `/app/products/portal/client/dist`, `/app/products/insightiq/client/dist`, `/app/products/settings/client/dist`), because the server finds the clients
+  relative to its product folder.
 * Runs as a non-root user (uid 10001) with
   `prooflix serve --host 0.0.0.0 --port 8000`.
 * Data lives under `/data`: `PROOFLIX_WORKSPACES=/data/workspaces`,
@@ -191,7 +195,7 @@ lock file is committed.
 ## Local cluster workflow (kind)
 
 ```bash
-docker build -t prooflix:dev .
+docker build -t prooflix:dev -f products/ingestiq/Dockerfile .
 kind load docker-image prooflix:dev
 cd deploy/terraform && terraform init && terraform apply
 kubectl port-forward svc/prooflix 8000:8000

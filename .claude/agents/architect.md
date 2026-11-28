@@ -15,8 +15,8 @@ and report.
 - `docs/architecture-principles.md`: the rules you review against. Read it first, every time.
 - `docs/architecture.md`, `docs/server.md`, `docs/client.md`, `docs/pipelines.md`,
   `docs/deployment.md`: how the system is built.
-- The platform repository is this one (`prooflix-core`: `server/` FastAPI, `client/`
-  React and shadcn/ui, `deploy/` Helm and Terraform). The workspace and data repository is
+- The platform repository is this one (`prooflix-core`, a monorepo of products under
+  `products/`; IngestIQ is `products/ingestiq/`: `server/` FastAPI, `client/` React and shadcn/ui; `deploy/` Helm and Terraform). The workspace and data repository is
   `../prooflix-assets-bundle` (pipelines, task code in `workspace/<project>/src`).
   Review changes in both when the change spans them.
 

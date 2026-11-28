@@ -1,6 +1,38 @@
 # Client
 
-The client is a single-page React app in `client/`.
+Prooflix has four single-page React apps: the **portal** (`products/portal/client`, at `/`),
+**IngestIQ** (`products/ingestiq/client`, at `/ingestiq/`: Pipelines, Ingestion, Workspace,
+SQL Editor, Catalog, Semantic model, ClickHouse, Alerts), **InsightIQ**
+(`products/insightiq/client`, at `/insightiq/`: Object Model and Objects) and **Settings & Management**
+(`products/settings/client`, at `/settings/`: System, Users, AI Assist settings; dev server
+port 5176). The screens below are described
+together; each belongs to the product that has its tab. Their look and frame come from the
+shared package `packages/ui` (`@prooflix/ui`), which every product uses (principle 25):
+
+| `@prooflix/ui` | What it holds |
+|---|---|
+| `styles.css` | theme tokens (light and dark), status colours, radius, base styles |
+| `components/ui/*` | shadcn/ui primitives: alert, badge, button, card, input, label, separator, skeleton, table, tabs, textarea |
+| `components/icon-tile`, `components/theme-toggle` | menu icon tiles; the light/dark switch (`setTheme`) |
+| `layout/product-shell` | the frame of every product: top bar (logo, product name, actions), grouped side menu, theme switch |
+| `lib/products` | the products (`PRODUCTS`): name, path, colour |
+| `lib/utils`, `lib/api-error` | `cn`; `ApiError` and `errorMessages` |
+| `auth/*` | sign-in for every product: `api` (status, sign in and out, password, `goToSignIn`), `login-page`, `user-menu`, `password-rules` |
+| `layout/product-switcher` | the products menu in the top bar (the portal and the products the user can open) |
+| `components/error-message` | a plain error alert for shared screens (sign-in) |
+| `components/product-icon` | each product's gradient icon (portal tiles, switcher, top bar) |
+| `components/resize-divider`, `lib/use-fill-height`, `lib/format`, `lib/dom-guard` | panel dividers, panels that fill the window, date and duration formats, the page-translation guard |
+| `app/product-app` | the root route of IngestIQ, InsightIQ and Settings (a product with no tabs yet gets its frame and a coming soon note): sign-in check, `ProductShell` with the user's tabs, search, AI Assist panel, user menu, product switcher |
+| `app/screens` | every product's tabs (`SCREENS`) and menu groups (`GROUPS`): one list for the menus, the Users tab and links between products |
+| `app/sections` | the current product's tabs for shared screens (`useCurrentSection`, `useScreens` for links to any product, `useTabs`) |
+| `app/command-palette` | Ctrl/Cmd+K: pages and common actions; each product adds its own commands (`lib/commands.ts`) |
+| `app/error-alert`, `app/page-header`, `app/request` | errors offered to AI Assist, the page title with its tab tile, the API helper (`request`, `UNAUTHORIZED_EVENT`) |
+| `ai-assist/*` | the AI Assist panel on every screen (`dock`), its icon and API (status, ask, settings fix) |
+| `assets/*` | the Prooflix logos |
+
+A product's `index.css` imports Tailwind, then `@prooflix/ui/styles.css`, and adds a
+`@source` for the package. Add new shadcn components to the package (its
+`components.json`), not to a product.
 
 | Concern | Choice |
 |---|---|
@@ -17,26 +49,21 @@ The client is a single-page React app in `client/`.
 
 ```text
 client/
-├── components.json          shadcn/ui config (aliases, style, base color)
 ├── index.html               sets the theme before first paint; translate="no"
 ├── vite.config.ts           @ alias, /api proxy to 127.0.0.1:8000
 └── src/
     ├── main.tsx             installs the DOM guard, QueryClientProvider + RouterProvider
     ├── router.tsx           route table
-    ├── index.css            Tailwind import, theme tokens, status colors
+    ├── index.css            Tailwind and @prooflix/ui/styles.css imports
     ├── lib/
     │   ├── api.ts           fetch wrapper, ApiError, query and mutation hooks
     │   ├── types.ts         TypeScript mirror of the server schemas
-    │   ├── tabs.ts          the six sections (sidebar + tabs) and their last page
+    │   ├── commands.ts      the product's search commands (pipelines, jobs, runs)
     │   ├── schedule.ts      trigger presets <-> cron, cron descriptions
-    │   ├── dom-guard.ts     keeps React working if page translation rewrites text
-    │   ├── sql-completion.ts, sql-names.ts   SQL editor completion and table names
+    │   ├── sql-names.ts     table names in the workspace
     │   ├── run-search.ts    search in the runs list
-    │   └── utils.ts, use-pagination.ts, use-fill-height.ts
+    │   └── utils.ts, use-pagination.ts
     ├── components/
-    │   ├── ui/              shadcn/ui primitives: alert, badge, button, card, input,
-    │   │                    label, separator, skeleton, table, tabs, textarea
-    │   ├── layout/app-shell.tsx    sidebar, section tabs, theme toggle
     │   ├── pipeline-graph.tsx      DAG view (layered layout, SVG edges)
     │   ├── yaml-editor.tsx         YAML editor with Validate / Save
     │   ├── trigger-card.tsx        a pipeline's schedule: show, pause, edit (presets or cron)
@@ -49,8 +76,7 @@ client/
     │   ├── run-tree-view.tsx       nested run → task → sub-run hierarchy
     │   ├── import-workspace-panel.tsx  upload a folder as a new workspace
     │   ├── new-workspace-panel.tsx, switch-workspace-panel.tsx, folder-picker.tsx
-    │   ├── catalog-import-panel.tsx, data-grid.tsx   catalog import, result grids
-    │   └── ...                     status-badge, page-header, pager, error-alert (with copy), ...
+    │   └── ...                     status-badge, pager, ...
     └── pages/
         ├── pipelines-page.tsx        /pipelines (pipelines + all runs)
         ├── new-pipeline-page.tsx     /pipelines/new
@@ -58,18 +84,40 @@ client/
         ├── ingestion-page.tsx        /ingestion (database connections, ingestion jobs)
         ├── runs-page.tsx             /runs
         ├── run-detail-page.tsx       /runs/:runId
-        ├── sql-editor-page.tsx       /sql
-        ├── catalog-page.tsx          /catalog
         ├── workspace-page.tsx        /workspace
-        ├── clickhouse-page.tsx       /clickhouse (copy gold tables to ClickHouse)
         └── system-page.tsx           /system (system parameters)
 ```
 
+InsightIQ (`products/insightiq/client/src`) is the Object Model, an ontology ([design](insightiq-ontology-design.md)). The
+name people see is **Object Model**; routes, files, the tab id and the API keep `ontology`:
+
+```text
+src/
+├── router.tsx                    ProductApp + the routes below (basename /insightiq)
+├── lib/api.ts, types.ts          /api/ontology hooks and types
+├── lib/commands.ts               search: New object type, each published type
+├── components/ontology-ui.tsx    LayerBadge, TypeAvatar, CheckList, a first draft from a table
+└── pages/
+    ├── ontology-page.tsx         /ontology: the types as a graph or a list, with details
+    ├── ontology-wizard-page.tsx  /ontology/new, /ontology/:name: the wizard
+    └── objects-page.tsx          /objects (search), /objects/:type/:pk (an object and its links)
+```
+
+| Screen | What it shows |
+|---|---|
+| **Object Model** | The workspace's object types (published, and drafts with a dashed border) as a graph of cards and labelled link arrows, or a list. The side panel shows the selected type (source, row rules, key, title, properties, links, layer) with **Edit in the wizard**, **Open in Objects** and **Unpublish** / **Discard the draft**. **Suggested links** (dashed grey arrows marked ✦, and a list under the graph) come from columns named like another type's key (`Account.customer_id` → Customer's key `customer_id`: Customer **accounts** → Account, one to many); **Add link** puts it in the type's draft and opens the wizard on its Links step (`?step=links`) to check and publish it. |
+| **Wizard** | Five steps, each checked against the data as you type (red blocks **Next**, amber is a warning, blue is information), with a live preview object, and the draft saved at every **Next**. **Source**: any table of the catalog, filtered by layer (bronze, silver, gold); choosing one makes a full first draft (every column a property, a guessed key, title and sensitive columns). **Identity**: name, plural, description, key, title and the row rules (a filter, the newest row per key, with suggested ordering columns) and what they do (rows, distinct, duplicate and empty keys, before and after). **Properties**: names, descriptions, casts, units, searchable, sensitive; add or leave out columns. **Links**: suggested links as one-click chips; target, cardinality, names both ways, the properties to join on, and the match rate and cardinality found. **Review & publish**: the changes against the published version, every check on the whole table, **Publish**. |
+| **Objects** | One search box over every published type, results grouped by type (a type's facet shows up to 50). An object page shows the title, key, layer and table, then **Properties** (with descriptions and units) and **Links** (both ways, with counts; choosing one lists the linked objects, which open their own page). Sensitive properties show as `••••` to everyone but admins. |
+
+It's built with `base: "/insightiq/"` and the router's `/insightiq` basename (dev server: port 5175).
+Layer colours are theme tokens of `@prooflix/ui` (`--layer-bronze`, `--layer-silver`, `--layer-gold`). Links to another product's page are full
+page loads (`productHref`); the SQL Editor also accepts a query as `/ingestiq/sql?sql=…` for them.
+
 ## Sections, routes and screens
 
-**AI Assist on every screen.** When AI Assist is set up (or for an admin, who can set it up), every screen has an **AI Assist** panel on the right. It starts hidden: the **AI Assist** button at the top right of the top bar (next to the search box) shows and hides it, as does **›** in the panel, and it keeps its conversation while hidden. A red dot on the button means the screen shows an error. A divider on its left edge sets its width (drag, or focus it and use the arrow keys; double-click resets), remembered in the browser. It opens by itself when something fails: a failed run (run page), a failed query (SQL Editor), or any error message a screen shows (a save, import, test or delete that fails), once per error. On the run page and in the SQL Editor it holds their own AI Assist; on other screens it is a chat about Prooflix and the current screen, which offers to explain the error the screen shows. It goes step by step: first the offer to explain the screen's error, then the explanation, and only after an answer do users with the System tab get **Do you want AI Assist to fix it?**: it proposes System tab settings to change (shown as current → new, never secrets) and steps to do yourself; **Apply changes** saves the settings and **Restart server** applies them. Each question sends the question, the screen's name and that error (values that look like secrets masked) to Claude, never data. On wide screens (1280 px and up) it is a column beside the page; on narrower ones it slides over the page from the right.
+**AI Assist on every screen.** When AI Assist is set up (or for an admin, who can set it up), every screen has an **AI Assist** panel on the right. It starts hidden. The top bar has an **Ask AI Assist…** box (next to the search box): Enter opens the panel and asks right away, on the run page about that run, elsewhere in the general chat (in the SQL Editor it appears under the SQL panel). The button beside the box shows and hides the panel, as does **›** in it, and the panel keeps its conversation while hidden; a red dot on the button means the screen shows an error. On small screens only the button shows. A divider on its left edge sets its width (drag, or focus it and use the arrow keys; double-click resets), remembered in the browser. It opens by itself when something fails: a failed run (run page), a failed query (SQL Editor), or any error message a screen shows (a save, import, test or delete that fails), once per error. On the run page and in the SQL Editor it holds their own AI Assist; on other screens it is a chat about Prooflix and the current screen, which offers to explain the error the screen shows. It goes step by step: first the offer to explain the screen's error, then the explanation, and only after an answer that says a setting change might fix the problem do users with the System tab get **Do you want AI Assist to fix it?** (not after plain questions or explanations). When an answer points to a screen ("take me to ClickHouse"), it has an **Open …** button for it (only screens the user has): it proposes System tab settings to change (shown as current → new, never secrets) and steps to do yourself; **Apply changes** saves the settings and **Restart server** applies them. Each question sends the question, the screen's name and that error (values that look like secrets masked) to Claude, never data. On wide screens (1280 px and up) it is a column beside the page; on narrower ones it slides over the page from the right.
 
-The sidebar is the one menu, grouped into **Build** (Pipelines, Ingestion, Workspace), **Data** (SQL Editor, Catalog, Semantic model, ClickHouse) and **Admin** (Alerts, System, Users); a user sees the sections an admin gave them. **Collapse** shrinks it to an icon rail (remembered in the browser). The top bar has the search box: **Ctrl+K / ⌘K** opens the command palette, which jumps to any page, pipeline, ingestion job, table (open in the Catalog or query in the SQL Editor) or recent run, and runs actions (run a pipeline or an ingestion job, new pipeline, new query, add user, dark mode, sign out), offering only what the user's tabs allow. On small screens the menu is a row of icons in the top bar. Each section remembers the last page you
+Each product's sidebar is its one menu: IngestIQ's is grouped into **Build** (Pipelines, Ingestion, Workspace), **Data** (SQL Editor, Catalog, Semantic model, ClickHouse) and **Monitor** (Alerts), Settings & Management's into **Platform** (System, AI Assist) and **Access** (Users); a user sees the tabs an admin gave them, and the product switcher in the top bar moves between products. **Collapse** shrinks it to an icon rail (remembered in the browser). The top bar has the search box: **Ctrl+K / ⌘K** opens the command palette, which jumps to any page of the product and runs actions (dark mode, sign out), plus the product's own: in IngestIQ pipelines, ingestion jobs, tables (open in the Catalog or query in the SQL Editor) and recent runs (run a pipeline or a job, new pipeline, new query), in Settings add user, offering only what the user's tabs allow. On small screens the menu is a row of icons in the top bar. Each section remembers the last page you
 opened in it.
 
 ```mermaid
@@ -111,7 +159,7 @@ flowchart LR
 | **Alerts** | Two tabs. **Alerts** (the default) lists the alerts raised; **Definitions** (`?tab=definitions`) holds the **alert rules** (message format with ready-made presets or a regular expression, a live "Try a log line" check showing the fields, severity, cooldown, all or chosen pipelines, all or chosen channels; pause, edit, delete), **Channels** (Email, Slack, Microsoft Teams, webhook, each with its icon and fields; **Test** sends a test alert) ; the Alerts tab is **Recent alerts** (paged, with each channel's delivery; delete one, the selected ones, or all). Admins, and users given the Alerts permission. |
 | **AI Assist** (admins) | The Claude account AI Assist uses: on or off, the saved key as a masked row (`sk-ant-api03-••••••••abcd`, when it was saved, **Replace** and **Remove**), the model (each with its price per million input and output tokens, and a rough cost per answer) and the effort; **Test connection** checks the key without using tokens. |
 | **Users** (admins) | Every user with their role, tabs and last sign-in; **Add user** and edit (role, the tabs they see as checkboxes, set a new password with a live check of the rules), disable / enable, delete. |
-| **Login** | Shown when signed out: user name and password, or, with no users yet, creating the first admin. The signed-in user is in the top bar, with **Change password** and **Sign out**; the menu and tabs show only that user's tabs. |
+| **Login** | On the portal (`/`), the only sign-in page: user name and password, or, with no users yet, creating the first admin. After signing in, the portal's Home. The signed-in user is in every product's top bar, with **Change password** and **Sign out**; the menu shows only that user's tabs. |
 
 ## Component tree
 
@@ -241,13 +289,31 @@ spinner next to such a text used to crash the page ("Failed to execute
 ## Development
 
 ```bash
-cd client
-npm install
+npm install        # once, at the repository root (npm workspaces)
+cd products/ingestiq/client
 npm run dev        # http://localhost:5173, proxies /api to the Python server
 npm run build      # type-check and build to client/dist
 ```
 
-When `client/dist` exists, the Python server also serves the built client at
-`http://127.0.0.1:8000/`, so production needs only one process. The page is
+IngestIQ is built with `base: "/ingestiq/"` and its router uses the `/ingestiq` basename.
+When `client/dist` exists, the Python server serves it at
+`http://127.0.0.1:8000/ingestiq/`, and the portal's build at `/`, so production needs only
+one process. Old links at the root (`/pipelines/...`) are redirected to `/ingestiq/...`. The page is
 served with `no-cache` and the hashed assets as immutable, so a reload always
 picks up a new build.
+
+## Portal (`products/portal/client`)
+
+The enterprise portal, served at `/`. It's the only sign-in page: other products send a
+signed-out user to `/` (`goToSignIn`). After signing in, the portal always shows **Home**: a
+welcome and a tile per product from `PRODUCTS`, and below them, under **Administration**, a
+**Settings & Management** link for users who can open it (admins, and users with the System tab). A product the user can open is a link. A product the server
+doesn't serve yet shows **Coming soon**, and one the user has no tab of shows
+**No access**. A user can open a product when they have one of its tabs (`visible_products`
+from `/api/auth/status`). The portal has no side menu: it uses `ProductShell` with no items.
+
+```bash
+cd products/portal/client
+npm run dev        # http://localhost:5174, proxies /api to the Python server
+npm run build      # type-check and build to client/dist (served at / by the server)
+```

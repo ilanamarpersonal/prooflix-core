@@ -1,0 +1,21 @@
+# The build context is the repository root (the client needs packages/ui), so this
+# file lists only what the image uses (IngestIQ, and the portal, InsightIQ and Settings it serves) and leaves everything else out.
+# Docker reads it because it sits next to the Dockerfile with the same name.
+*
+!package.json
+!package-lock.json
+!packages/ui
+!products/ingestiq/client
+!products/ingestiq/server
+!products/portal/client
+!products/insightiq/client
+!products/settings/client
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.DS_Store
+products/ingestiq/server/tests
+products/ingestiq/server/spark-warehouse

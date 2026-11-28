@@ -1,6 +1,6 @@
 # Server
 
-The server is the Python package `prooflix` in `server/`. It is built with
+The server is the Python package `prooflix` in `products/ingestiq/server/`. It is built with
 **FastAPI** and **Pydantic v2**, runs on **uvicorn**, and is managed with
 **uv**. It needs Python 3.11 or newer.
 
@@ -90,7 +90,7 @@ flowchart TB
 | Module | Responsibility |
 |---|---|
 | `config.py` | `Settings` from environment variables and the values edited in the System tab (`<PROOFLIX_HOME>/parameters.json`, which win): workspaces folder, default workspace, home folder, catalog folder, scheduler on/off, max nesting depth, CORS origins, start date, linked folder defaults, client build folder |
-| `main.py` | Builds the FastAPI app: makes the registry, builds the active workspace's services into `app.state`, starts/stops the scheduler with the app, serves `client/dist` when it exists |
+| `main.py` | Builds the FastAPI app: makes the registry, builds the active workspace's services into `app.state`, starts/stops the scheduler with the app, serves the clients when built: the portal (`portal_dist`) at `/`, IngestIQ (`client_dist`) under `/ingestiq/`, InsightIQ (`insightiq_dist`) under `/insightiq/` and Settings & Management (`settings_dist`) under `/settings/`; old links to a tab (`/pipelines/...`, `/sql`, `/ingestiq/catalog`) redirect to the product that has it (`LEGACY_ROUTES`) |
 | `linked_folders.py` | The source data (`source/`) and data lake (`data/`) folders per workspace (its setting, `PROOFLIX_SOURCE_DATA` / `PROOFLIX_DATA_LAKE`, or its own folder) and the links to them |
 | `workspaces.py` | `WorkspaceRegistry`: finds the workspaces in the workspaces folder, tracks added ones and the active one, saved to `<PROOFLIX_HOME>/workspaces.json` |
 | `runtime.py` | `build_services()` makes `Workspace`, `RunStore`, `PipelineExecutor` and `Scheduler` for a workspace; `switch_workspace()` swaps them in `app.state`; `restart()` reads the parameters again and rebuilds everything, for **Restart server** (both refused while runs are going) |
@@ -111,6 +111,8 @@ flowchart TB
 | `api/auth.py` | Sign in and out, the first admin, changing your password, and the Users tab's routes |
 | `semantic.py` | The semantic model: entities (dimensions, measures, joins) and metrics, the `semantic/model.yaml` file, and the SQL a choice of measures and dimensions compiles to |
 | `api/semantic.py` | The Semantic tab's routes |
+| `ontology.py` | InsightIQ's ontology: object types (source table in any layer, row rules, properties, links) in `ontology/<type>.yaml` (drafts in `ontology/.drafts/`), the object view each read goes through, the wizard's checks, search and links |
+| `api/ontology.py` | The Object Model and Objects tabs' routes, on one locked-down DuckDB per request (the SQL Editor's) |
 | `alerts.py` | Alerts: message formats (`{field}` templates or regular expressions), channels (Email over SMTP, Slack, Teams, webhook) and rules in `PROOFLIX_HOME/alerts.json`, the engine that checks task log lines, cooldowns, delivery on background threads, and the history |
 | `api/alerts.py` | The Alerts tab's routes |
 | `connections.py` | Database connections (Oracle, SQL Server, MySQL, PostgreSQL): the fields of each type, the JDBC URL and driver, the store in `PROOFLIX_HOME/connections.json` (mode 600), and listing a database's tables and columns with pure-Python drivers (pg8000, PyMySQL, python-oracledb thin, python-tds) |
@@ -309,6 +311,27 @@ Interactive docs are at `http://127.0.0.1:8000/docs` while the server runs.
 | GET | `/api/clickhouse/gold-tables` | | `[{table, target, rows, columns: [{name, clickhouse_type}], error}]`: every table of a `gold` schema and the ClickHouse table it becomes (`tenant1.gold.x` -> `tenant1.x`) |
 | POST | `/api/clickhouse/import` | `{tables: ["tenant1.gold.x", ...]}` | One result per table: `{table, target, ok, rows, columns, replaced, seconds, error}`. Each table is replaced as a whole; one failing leaves its old copy and doesn't stop the others. `409` when ClickHouse isn't configured. |
 
+**Object Model** (InsightIQ's ontology; `/api/ontology` belongs to the `ontology` tab (shown as Object Model), `/api/ontology/objects` to `objects` or `ontology`; definitions are `ontology/<type>.yaml` in the active workspace, drafts `ontology/.drafts/<type>.yaml`)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/ontology/sources` | | `[{table, layer, delta, rows, columns: [{name, type}]}]`: the catalog's tables in any layer (hidden schemas left out) |
+| GET | `/api/ontology/types` | | `{types, drafts, broken}`: published types, drafts, and files that can't be read |
+| GET, DELETE | `/api/ontology/types/{name}` | | `{type, modified, path}`; DELETE unpublishes (removes the file) |
+| GET, PUT, DELETE | `/api/ontology/drafts/{name}` | PUT `{type, modified}` | `{type, modified}`. PUT is validated (`422` with the reasons, and when the name differs from the path); `409` when the draft changed since `modified` |
+| POST | `/api/ontology/check` | `{type, steps?}` | `{ok, checks: [{step, name, status, severity, detail}], stats: {before, after, links}}`: the wizard's checks against the data (`status` ok, fail or info; `severity` block or warn) |
+| POST | `/api/ontology/preview` | `{type, limit}` | `{sql, objects}`: sample objects through the draft's object view, masked for the user |
+| POST | `/api/ontology/publish` | `{type, modified}` | Runs every check on the whole table; `422` with the blocking ones, `409` when the published type changed since `modified` (or exists and `modified` is null); else writes the file, drops the draft and answers `{type, modified, path, checks}` |
+| GET | `/api/ontology/objects/types` | | The published types, each with `all_links` (its own and the reverse ones) |
+| GET | `/api/ontology/objects/search?q=&type=&limit=&offset=` | | `{groups: [{type, objects, more, error}]}`: objects whose key or searchable (not sensitive) properties contain `q` |
+| GET | `/api/ontology/objects/{type}/{pk}` | | `{object, layer, table, links: [{name, target, count, ...}]}` |
+| GET | `/api/ontology/objects/{type}/{pk}/links/{link}?limit=` | | `{link, layer, objects, more}` |
+
+Objects are `{type, pk, title, properties}`. Sensitive properties are `••••` for everyone but admins
+while users are on. Row filters are one expression on the table's own columns (no `;`, comments,
+`SELECT`, `FROM` or table functions); every query is one read-only SELECT on the SQL Editor's
+locked-down DuckDB, stopped after 30 seconds.
+
 **Semantic model** (the Semantic tab; the model is `semantic/model.yaml` in the active workspace)
 
 | Method | Path | Body | Response |
@@ -343,7 +366,7 @@ Every task log line is checked against the enabled rules as it is written (`Task
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/auth/status` | | `{enabled, setup_needed, user, tabs}`: whether sign-in is on, whether the first admin is still to be created, and the signed-in user (`{username, role, tabs, visible_tabs, disabled, created_at, last_login}`) |
+| GET | `/api/auth/status` | | `{enabled, setup_needed, user, tabs, products}`: whether sign-in is on, whether the first admin is still to be created, the signed-in user (`{username, role, tabs, visible_tabs, visible_products, disabled, created_at, last_login}`), and the products the server serves (`PRODUCT_TABS` in `auth.py`). A user can open a product when they have one of its tabs |
 | POST | `/api/auth/setup` | `{username, password}` | Creates the first admin and signs in; `409` once a user exists |
 | POST | `/api/auth/login` | `{username, password}` | Sets the session cookie (HttpOnly, SameSite=Lax, Secure behind TLS, 12 hours); `401` for a wrong password or a disabled account, `429` with `Retry-After` after 5 wrong passwords (locked for a minute). `500` when `users.json` exists but can't be read: the server fails closed |
 | POST | `/api/auth/logout` | | `204`, cookie removed |
@@ -408,7 +431,7 @@ is used. The key never leaves the server: responses carry only its kind and last
 | POST | `/api/ai-assist/settings/test` | | `{ok, model, display_name}`: the key can see the model; uses no tokens (admins only) |
 | POST | `/api/ai-assist/sql/fix` | `{sql, error}` | `{diagnosis, explanation, fixed_sql, confidence, runnable, problem, model}`. Sends the query, the error and the catalog's table and column names (no rows); the fix is checked to be one read-only `SELECT` and is never run here (SQL Editor users) |
 | POST | `/api/ai-assist/runs/{id}/explain` | | `{diagnosis, failed_task, steps, confidence, model}` for a failed run (`409` otherwise). Sends the run and its sub-runs: parameters, each task's status and error, and the last 40 lines each task printed, with values that look like passwords, tokens or keys masked. Nothing is changed or re-run (Pipelines and Ingestion users) |
-| POST | `/api/ai-assist/ask` | `{question, page, error, turns: [{question, answer}]}` | `{answer, model}`: a question from the AI Assist panel on any screen. Sends the screen's name, the error it shows (if any) and up to 20 earlier questions and answers, with values that look like secrets masked; no data, files or runs. Any signed-in user; `413` over 2,000 characters, `422` when empty |
+| POST | `/api/ai-assist/ask` | `{question, page, error, turns: [{question, answer}]}` | `{answer, can_fix, open_screen, model}`: a question from the AI Assist panel on any screen. `can_fix` is true only when a setting change might fix the problem (the panel then offers Fix it); `open_screen` is a tab id to offer a button to, or `""`. Sends the screen's name, the error it shows (if any) and up to 20 earlier questions and answers, with values that look like secrets masked; no data, files or runs. Any signed-in user; `413` over 2,000 characters, `422` when empty |
 | POST | `/api/ai-assist/fix` | `{page, error, turns}` | `{summary, changes: [{name, current, value, reason, live}], steps, model}`: System tab settings to change and steps to do by hand that would fix what a screen shows, for the user to review. Sends the screen's name, its error, the conversation and the editable parameters without secrets (secret parameters are never sent or changed). Nothing is saved: the client applies each change with `PUT /api/system/parameters/{name}`, then `POST /api/system/restart`. System tab users only (`403`); `422` when there is no error or conversation yet |
 | POST | `/api/ai-assist/runs/{id}/fix` | `{explanation}` (optional) | `{summary, changes: [{path, reason, before, after, modified, problems}], model}`: changes to the workspace files behind a failed run that would fix it, for the user to review. Sends the run (masked), the YAML of each pipeline in it and the Python files its python tasks call; files that look like they hold secrets are left out. A changed pipeline's YAML is checked by the validator (`problems`). Nothing is saved: the client applies each change with `PUT /api/workspace/file` and its `modified`. Needs the Workspace tab when users are on (`403`); `422` when there are no files to change |
 | POST | `/api/ai-assist/runs/{id}/ask` | `{question, explanation, turns: [{question, answer}]}` | `{answer, model}`: a question about a failed run, before or after `/explain` (`explanation` is optional). The run is sent again as for `/explain` (masked), then the explanation if given and up to 20 earlier questions and answers; values that look like secrets in the questions are masked too. A question is at most 2,000 characters (`413`); `422` when empty, `409` if the run didn't fail. Nothing is changed or re-run (Pipelines and Ingestion users) |
@@ -489,7 +512,7 @@ not expose it on a network until authentication is added.
 ## Testing
 
 ```bash
-cd server
+cd products/ingestiq/server
 uv run pytest
 ```
 

@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@prooflix/ui/styles.css";
+
+/* build the classes the shared components use */
+@source "../../../../packages/ui/src";

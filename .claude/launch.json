@@ -7,7 +7,7 @@
       "runtimeArgs": [
         "run",
         "--directory",
-        "server",
+        "products/ingestiq/server",
         "--extra",
         "spark",
         "prooflix",
@@ -25,9 +25,42 @@
         "run",
         "dev",
         "--prefix",
-        "client"
+        "products/ingestiq/client"
       ],
       "port": 5173
+    },
+    {
+      "name": "prooflix-portal-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "products/portal/client"
+      ],
+      "port": 5174
+    },
+    {
+      "name": "prooflix-insightiq-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "products/insightiq/client"
+      ],
+      "port": 5175
+    },
+    {
+      "name": "prooflix-settings-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "products/settings/client"
+      ],
+      "port": 5176
     },
     {
       "name": "prooflix-website",

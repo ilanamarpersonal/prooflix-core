@@ -7,14 +7,14 @@ __pycache__/
 
 # Node
 node_modules/
-client/dist/
+products/*/client/dist/
 
 # workspaces/ holds the workspaces (projects and run history), and catalog/ holds
 # imported datasets: user content, not repository code
 workspaces/*
 !workspaces/.gitkeep
 catalog/
-server/tests/fixtures/sample_workspace/data/output/
+products/ingestiq/server/tests/fixtures/sample_workspace/data/output/
 
 # Terraform: providers and local state (the lock file is committed)
 .terraform/

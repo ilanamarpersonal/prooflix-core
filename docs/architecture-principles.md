@@ -16,8 +16,9 @@ changing one is fine, but on purpose: update this file in the same change and sa
    between them is a task entrypoint plus `ctx` (`TaskContext`).
 3. **Delta in Unity Catalog through Spark is the storage of record.** Bronze, silver
    and gold are external Delta tables registered in Unity Catalog, written by Spark.
-   DuckDB in the server reads them only for the SQL Editor, Catalog and ClickHouse
-   copies, at their current version (`delta_log.py`), and never writes them. The one
+   DuckDB in the server reads them only for the SQL Editor, Catalog, ClickHouse
+   copies and InsightIQ's ontology (object views, `ontology.py`), at their current
+   version (`delta_log.py`), and never writes them. The one
    exception is the Catalog's **Drop schema → Delete permanently** (admins only when
    users are on): on an explicit request it deletes the schema's table folders; Unity
    Catalog registrations are left for Spark to drop.
@@ -44,7 +45,9 @@ changing one is fine, but on purpose: update this file in the same change and sa
    `/api` route needs a session, and each path belongs to the tabs that use it
    (`TAB_PATHS` in `auth.py`). A new API route must be added there, or it is admin
    only. Sessions are HttpOnly, SameSite=Lax cookies that end when the password
-   changes or the user is disabled.
+   changes or the user is disabled. One session covers every product: the portal signs
+   users in, and a user can open a product when they have one of its tabs
+   (`PRODUCT_TABS`), so product access never needs a second check.
 9. **Least privilege towards other systems.** Read-only database users for
    ingestion, a read-only ClickHouse user for outside queries, internal services
    not exposed by default.
@@ -103,6 +106,17 @@ changing one is fine, but on purpose: update this file in the same change and sa
     and off where it matters); `README.md`, `docs/server.md` (routes and
     configuration), `docs/client.md` (screens) and this file are updated in the same
     change. Every `PROOFLIX_*` parameter appears in the System tab and in the docs.
-24. **The client follows the existing patterns:** shadcn/ui components, TanStack
-    Query hooks in `lib/api.ts`, types in `lib/types.ts`, sections in `lib/tabs.ts`,
+24. **The client follows the existing patterns:** shadcn/ui components from
+    `@prooflix/ui`, TanStack Query hooks in `lib/api.ts`, types in `lib/types.ts`, sections in `lib/tabs.ts`,
     no semicolons, 120-character lines, light and dark themes, usable at narrow widths.
+25. **Every product looks the same: one UI package.** The portal, IngestIQ and InsightIQ
+    build their screens from `packages/ui` (`@prooflix/ui`): the theme tokens
+    (`styles.css`), the shadcn/ui primitives, `IconTile`, the theme switch and
+    `ProductShell` (top bar with the Prooflix logo and the product's name, grouped side
+    menu, theme switch). A product passes its menu and top-bar actions to `ProductShell`
+    and never builds its own frame, copies a primitive or redefines a theme token. A
+    new shared component goes into the package, not into one product. Product names and
+    colours come from `PRODUCTS` in `lib/products.ts`; every tab, with its product, icon and
+    colour, from `SCREENS` in `app/screens.ts`. IngestIQ and InsightIQ use `ProductApp` as
+    their root route (sign-in check, frame, search, AI Assist), adding only their routes and
+    search commands.

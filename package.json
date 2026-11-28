@@ -1,0 +1,9 @@
+{
+  "name": "prooflix",
+  "private": true,
+  "description": "Prooflix monorepo: one folder per product under products/, shared code under packages/.",
+  "workspaces": [
+    "packages/*",
+    "products/*/client"
+  ]
+}

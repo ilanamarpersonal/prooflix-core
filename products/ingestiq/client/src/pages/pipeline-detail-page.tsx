@@ -1,0 +1,252 @@
+import { useEffect, useState } from "react"
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router"
+import { ArrowUpRight, FileCode2, List, Loader2, PanelRightOpen, Trash2, Workflow, X } from "lucide-react"
+
+import { ErrorAlert, ValidationErrors } from "@prooflix/ui/app/error-alert"
+import { KeyValues } from "@/components/key-values"
+import { PageHeader } from "@prooflix/ui/app/page-header"
+import { PipelineGraph } from "@/components/pipeline-graph"
+import { RunButton } from "@/components/run-button"
+import { RunOutput } from "@/components/run-output"
+import { RunsTable } from "@/components/runs-table"
+import { TaskActionsMenu, type TaskAction } from "@/components/task-actions-menu"
+import { StatusBadge } from "@/components/status-badge"
+import { TaskTypeIcon } from "@/components/task-type-icon"
+import { RunningBadge, isRunActive } from "@/components/running-badge"
+import { StopButton } from "@/components/stop-button"
+import { TaskCodeView } from "@/components/task-code-view"
+import { TriggerCard } from "@/components/trigger-card"
+import { YamlEditor } from "@/components/yaml-editor"
+import { Button } from "@prooflix/ui/components/ui/button"
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@prooflix/ui/components/ui/card"
+import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@prooflix/ui/components/ui/tabs"
+import { ApiError, useDeletePipeline, usePipeline, useRunTree, useRuns } from "@/lib/api"
+import type { RunStatus } from "@/lib/types"
+import { cn, formatDateTime } from "@/lib/utils"
+
+export function PipelineDetailPage() {
+  const { pipelineId = "" } = useParams()
+  const navigate = useNavigate()
+  const { data: pipeline, isLoading, error } = usePipeline(pipelineId)
+  const runs = useRuns({ pipeline: pipelineId, rootOnly: false })
+  const del = useDeletePipeline()
+  const [params] = useSearchParams()
+  const [selected, setSelected] = useState<string | null>(null)
+  // a run of this pipeline that is (or was, on this visit) running: its printout shows under the graph
+  const activeId = runs.data?.find((r) => r.pipeline === pipelineId && isRunActive(r))?.id
+  const [watched, setWatched] = useState<string | null>(null)
+  useEffect(() => {
+    if (activeId) setWatched(activeId)
+  }, [activeId])
+
+  if (isLoading) return <Skeleton className="h-96 w-full" />
+  // The pipeline was removed from the workspace: show the list (empty if none are left).
+  if (error instanceof ApiError && error.status === 404) return <Navigate to="/pipelines" replace />
+  if (error || !pipeline) return <ErrorAlert title="Could not load pipeline" error={error} />
+
+  // newest run started from this pipeline (not as a sub-run of another one)
+  const latest = runs.data?.find((r) => r.pipeline === pipeline.id && r.depth === 0) ?? runs.data?.[0]
+  // runs of this pipeline still going, also as a sub-pipeline of another (newest first)
+  const activeRuns = runs.data?.filter((r) => r.pipeline === pipeline.id && isRunActive(r)) ?? []
+  const running = activeRuns[0]
+  const shown = running ?? latest // the run the card shows
+  // while a run is going, the graph shows each task's live status (the runs list polls every second)
+  const liveStatuses = running
+    ? (Object.fromEntries(Object.entries(running.tasks).map(([k, t]) => [k, t.status])) as Record<string, RunStatus>)
+    : undefined
+  const runningTasks = running
+    ? Object.entries(running.tasks)
+        .filter(([, t]) => t.status === "RUNNING")
+        .map(([k]) => k)
+    : []
+  const tasks = (pipeline.spec?.tasks as Record<string, unknown>[] | undefined) ?? []
+  const selectedTask = tasks.find((t) => t.key === selected)
+
+  // A task's links: its source code and the pipeline it calls.
+  const taskLinks = (key: string): TaskAction[] => {
+    const node = pipeline.graph.nodes.find((n) => n.key === key)
+    const links: TaskAction[] = []
+    if (node?.source_file)
+      links.push({
+        label: "Open source code",
+        icon: FileCode2,
+        onSelect: () => navigate(`/workspace?${new URLSearchParams({ path: node.source_file! })}`),
+      })
+    if (node?.pipeline)
+      links.push({
+        label: `Open pipeline ${node.pipeline}`,
+        icon: Workflow,
+        onSelect: () => navigate(`/pipelines/${node.pipeline}`),
+      })
+    return links
+  }
+
+  const remove = () => {
+    if (!confirm(`Delete pipeline '${pipeline.id}'? This deletes its YAML file.`)) return
+    del.mutate(pipeline.id, { onSuccess: () => navigate("/pipelines") })
+  }
+
+  return (
+    <>
+      <PageHeader
+        eyebrow={
+          <Link to="/pipelines" className="hover:underline">
+            Pipelines
+          </Link>
+        }
+        title={
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{pipeline.name}</span>
+            <RunningBadge runs={activeRuns} className="text-sm" />
+          </span>
+        }
+        description={pipeline.description}
+        actions={
+          <>
+            <Button variant="outline" asChild>
+              <Link to="/pipelines">
+                <List /> All pipelines
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={remove} disabled={del.isPending}>
+              <Trash2 /> Delete
+            </Button>
+            {pipeline.file && (
+              <Button variant="outline" asChild>
+                <Link to={`/workspace?${new URLSearchParams({ path: pipeline.file })}`}>
+                  <FileCode2 /> Source
+                </Link>
+              </Button>
+            )}
+            <StopButton runs={activeRuns} />
+            <RunButton pipeline={pipeline} openParameters={params.get("run") === "1"} />
+          </>
+        }
+      />
+
+      <div className="mb-4 grid gap-4">
+        {del.error && <ErrorAlert title="Could not delete" error={del.error} />}
+        <ValidationErrors errors={pipeline.errors} />
+        {pipeline.valid && <TriggerCard pipeline={pipeline} />}
+        {shown && (
+          <Card className={cn("py-3", running && "border-status-running/50 bg-status-running/5")}>
+            <CardContent className="flex flex-wrap items-center gap-3 px-4 text-sm">
+              <span className="font-medium">
+                {running
+                  ? activeRuns.length > 1
+                    ? `Running now (${activeRuns.length} runs)`
+                    : "Running now"
+                  : "Latest run"}
+              </span>
+              <StatusBadge status={shown.status} />
+              <span className="text-muted-foreground">
+                <span className="font-mono">{shown.id}</span> · {running ? "started " : ""}
+                {formatDateTime(shown.started_at ?? shown.created_at)}
+                {running && running.depth > 0 && " · as a sub-pipeline"}
+              </span>
+              {runningTasks.length > 0 && (
+                <span className="text-status-running flex items-center gap-1.5 font-medium">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  now: <span className="font-mono">{runningTasks.join(", ")}</span>
+                </span>
+              )}
+              <Button variant="outline" size="sm" className="ml-auto" asChild>
+                <Link to={`/runs/${shown.id}`}>
+                  Open tasks and printout <ArrowUpRight />
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      <Tabs defaultValue="graph">
+        <TabsList>
+          <TabsTrigger value="graph">Graph</TabsTrigger>
+          <TabsTrigger value="yaml">YAML</TabsTrigger>
+          <TabsTrigger value="runs">Runs</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="graph" className="grid grid-cols-[minmax(0,1fr)] gap-4">
+          <div className="grid min-w-0 content-start gap-4">
+            {pipeline.graph.nodes.length ? (
+              <PipelineGraph
+                nodes={pipeline.graph.nodes}
+                edges={pipeline.graph.edges}
+                statuses={liveStatuses}
+                selected={selected}
+                onSelect={setSelected}
+                actions={(n) => [
+                  { label: "Open task", icon: PanelRightOpen, onSelect: () => setSelected(n.key) },
+                  ...taskLinks(n.key),
+                ]}
+              />
+            ) : (
+              <p className="text-muted-foreground text-sm">Fix the YAML errors to see the graph.</p>
+            )}
+            {selectedTask && (
+              <Card className="gap-3">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TaskTypeIcon type={selectedTask.type as "python"} /> {String(selectedTask.key)}
+                  </CardTitle>
+                  <CardAction>
+                    <TaskActionsMenu
+                      taskKey={String(selectedTask.key)}
+                      actions={[
+                        ...taskLinks(String(selectedTask.key)),
+                        { label: "Close", icon: X, onSelect: () => setSelected(null) },
+                      ]}
+                    />
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="grid gap-4">
+                  <TaskCodeView pipelineId={pipeline.id} taskKey={String(selectedTask.key)} />
+                  <KeyValues
+                    values={Object.fromEntries(
+                      Object.entries(selectedTask).filter(
+                        ([k, v]) =>
+                          k !== "key" &&
+                          v !== null &&
+                          !(Array.isArray(v) && !v.length) &&
+                          !(typeof v === "object" && !Array.isArray(v) && !Object.keys(v as object).length),
+                      ),
+                    )}
+                  />
+                </CardContent>
+              </Card>
+            )}
+            {watched && <LiveRunOutput runId={watched} />}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="yaml">
+          {/* re-mount when the saved file changes so the editor shows the new text */}
+          <YamlEditor key={pipeline.source} pipelineId={pipeline.id} savedSource={pipeline.source} />
+        </TabsContent>
+
+        <TabsContent value="runs">
+          <Card className="py-2">
+            <CardContent className="px-2">
+              <RunsTable runs={runs.data} loading={runs.isLoading} showPipeline={false} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </>
+  )
+}
+
+/** The printout of a run of this pipeline, live while it runs (the same Output panel as the run's page). */
+function LiveRunOutput({ runId }: { runId: string }) {
+  const tree = useRunTree(runId)
+  if (tree.error) return <ErrorAlert title="Could not load the run's printout" error={tree.error} assist={false} />
+  if (!tree.data) return <Skeleton className="h-40 w-full" />
+  return (
+    <RunOutput
+      run={tree.data}
+      description={`What each task of run ${runId} printed, in the order they ran. Open tasks and printout shows one task's own.`}
+    />
+  )
+}

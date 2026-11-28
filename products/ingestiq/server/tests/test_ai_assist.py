@@ -1,0 +1,438 @@
+"""AI Assist: the Claude account settings and the SQL editor's suggested fixes (Claude is faked)."""
+
+from __future__ import annotations
+
+import stat
+from pathlib import Path
+from types import SimpleNamespace
+
+import anthropic
+import httpx
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from fastapi.testclient import TestClient
+
+from prooflix import ai_assist
+from prooflix.ai_assist import (AiAssistStore, FileChange, GeneralReply, RunFix, RunHelp, RunReply, SettingChange,
+                                 SettingsFix, SqlFix)
+from prooflix.config import Settings
+from prooflix.main import create_app
+
+KEY = "sk-ant-api03-" + "x" * 40 + "WXYZ"
+GOOD = "Secret123"
+
+
+@pytest.fixture(autouse=True)
+def _no_env_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+class FakeClaude:
+    """Records what Prooflix sends and answers with ``answer``."""
+
+    calls: list[dict] = []
+    answer: SqlFix | None = None
+    stop_reason = "end_turn"
+    raises: Exception | None = None
+
+    def __init__(self, api_key: str, **_):
+        self.api_key = api_key
+        self.beta = SimpleNamespace(messages=SimpleNamespace(parse=self._parse))
+        self.models = SimpleNamespace(retrieve=lambda m: SimpleNamespace(id=m, display_name="Claude Test"))
+
+    def _parse(self, **kw):
+        FakeClaude.calls.append({"api_key": self.api_key, **kw})
+        if FakeClaude.raises:
+            raise FakeClaude.raises
+        return SimpleNamespace(stop_reason=FakeClaude.stop_reason, parsed_output=FakeClaude.answer, model=kw["model"])
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    FakeClaude.calls = []
+    FakeClaude.answer = SqlFix(diagnosis="The column is amount, not amt.", explanation="Renamed amt to amount.",
+                               fixed_sql="SELECT sum(amount) FROM orders;", confidence="high")
+    FakeClaude.stop_reason = "end_turn"
+    FakeClaude.raises = None
+    monkeypatch.setattr(ai_assist.anthropic, "Anthropic", FakeClaude)
+    return FakeClaude
+
+
+def test_the_key_is_private_and_never_shown(tmp_path: Path):
+    store = AiAssistStore(tmp_path)
+    assert ai_assist.public(store.get())["key_source"] == "none"
+    with pytest.raises(ValueError, match="model"):
+        store.update(enabled=True, model="gpt-4", effort="medium")
+    with pytest.raises(ValueError, match="API key"):
+        store.update(enabled=True, model="claude-opus-5-5", effort="medium", api_key="short")
+    store.update(enabled=True, model="claude-opus-5-5", effort="medium", api_key=KEY)
+    assert stat.S_IMODE((tmp_path / "ai_assist.json").stat().st_mode) == 0o600
+    p = ai_assist.public(store.get())
+    assert KEY not in str(p) and p["key_hint"] == "…WXYZ" and p["ready"] and p["key_source"] == "saved"
+    assert p["key_prefix"] == "sk-ant-api03" and p["key_saved_at"]
+    haiku = next(m for m in p["models"] if m["id"] == "claude-haiku-5-5")
+    assert haiku["input_price"] == 0.10 and haiku["output_price"] == 0.50
+    saved_at = p["key_saved_at"]
+    # saving without a key keeps it; removing it takes it away
+    store.update(enabled=True, model="claude-sonnet-5-5", effort="low")
+    assert store.get().api_key == KEY and store.get().model == "claude-sonnet-5-5"
+    assert store.get().key_saved_at == saved_at  # keeping the key keeps its date
+    store.update(enabled=True, model="claude-sonnet-5-5", effort="low", remove_key=True)
+    assert store.get().api_key == "" and store.get().key_saved_at == ""
+
+
+def test_environment_key_is_used_when_none_is_saved(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    p = ai_assist.public(AiAssistStore(tmp_path).get())
+    assert p["key_source"] == "environment" and p["ready"]
+
+
+def test_unreadable_settings_fail_closed(tmp_path: Path):
+    (tmp_path / "ai_assist.json").write_text("{ nope")
+    with pytest.raises(ai_assist.AiAssistFileError):
+        AiAssistStore(tmp_path).get()
+
+
+@pytest.fixture
+def client(tmp_path: Path):
+    ws = tmp_path / "ws"
+    (ws / "pipelines").mkdir(parents=True)
+    (ws / "data").mkdir()
+    pq.write_table(pa.table({"order_id": [1, 2], "amount": [10.0, 5.0]}), ws / "data" / "orders.parquet")
+    settings = Settings(workspace=ws, home=tmp_path / "home", scheduler=False, catalog=tmp_path / "catalog", auth=True)
+    with TestClient(create_app(settings)) as c:
+        c.post("/api/auth/setup", json={"username": "boss", "password": GOOD})
+        yield c
+
+
+def test_only_admins_see_the_account_and_sql_users_ask(client, fake):
+    c = client
+    assert c.get("/api/auth/status").json()["user"]["visible_tabs"][-1] == "ai-assist"
+    assert c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT amt FROM orders", "error": "x"}).status_code == 409
+    assert c.put("/api/ai-assist/settings", json={"model": "claude-opus-5-5", "api_key": KEY}).status_code == 200
+    got = c.get("/api/ai-assist/settings").json()
+    assert got["ready"] and KEY not in str(got)
+    assert c.post("/api/ai-assist/settings/test").json()["display_name"] == "Claude Test"
+
+    c.post("/api/users", json={"username": "dana", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/users", json={"username": "carl", "password": GOOD, "tabs": ["catalog"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "dana", "password": GOOD})
+    assert c.get("/api/ai-assist/settings").status_code == 403
+    assert c.put("/api/ai-assist/settings", json={"model": "claude-opus-5-5"}).status_code == 403
+    assert c.get("/api/ai-assist/status").json() == {"ready": True, "enabled": True, "model": "claude-opus-5-5"}
+    r = c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT amt FROM orders", "error": 'column "amt" not found'})
+    assert r.status_code == 200
+    assert r.json() | {"model": None} == {
+        "diagnosis": "The column is amount, not amt.", "explanation": "Renamed amt to amount.",
+        "fixed_sql": "SELECT sum(amount) FROM orders", "confidence": "high", "runnable": True, "problem": None,
+        "model": None,
+    }
+    call = fake.calls[-1]
+    assert call["api_key"] == KEY and call["model"] == "claude-opus-5-5" and call["fallbacks"] == "default"
+    sent = call["messages"][0]["content"]
+    assert "orders (2 rows): order_id BIGINT, amount DOUBLE" in sent and 'column "amt" not found' in sent
+    assert "10.0" not in sent  # table names and columns only, never rows
+
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "carl", "password": GOOD})
+    assert c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1"}).status_code == 403
+    assert c.get("/api/ai-assist/status").status_code == 200
+
+
+def test_suggestions_must_be_one_read_only_select(client, fake):
+    c = client
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = SqlFix(diagnosis="d", explanation="e", fixed_sql="DROP TABLE orders", confidence="low")
+    r = c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1 FROM nope", "error": "x"}).json()
+    assert r["runnable"] is False and "SELECT" in r["problem"]
+    assert "fallbacks" not in fake.calls[-1]  # Haiku has no server-side fallback
+
+    fake.stop_reason = "refusal"
+    assert c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1", "error": "x"}).status_code == 422
+    fake.stop_reason = "end_turn"
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    fake.raises = anthropic.AuthenticationError("bad", response=httpx.Response(401, request=req), body=None)
+    r = c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1", "error": "x"})
+    assert r.status_code == 400 and "API key" in r.json()["detail"]
+    low = {"type": "error", "error": {"type": "invalid_request_error", "message": "Your credit balance is too low"}}
+    fake.raises = anthropic.BadRequestError(
+        "Your credit balance is too low", response=httpx.Response(400, request=req), body=low
+    )
+    r = c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1", "error": "x"})
+    assert r.status_code == 402 and "out of credit" in r.json()["detail"]
+
+    c.put("/api/ai-assist/settings", json={"enabled": False, "model": "claude-haiku-5-5"})
+    assert c.post("/api/ai-assist/sql/fix", json={"sql": "SELECT 1", "error": "x"}).status_code == 409
+
+
+def _failed_run(store):
+    """A failed E2E run whose bronze sub-run failed (Unity Catalog down), with a secret in the printout."""
+    from prooflix.runs import Run, RunStatus, TaskRun
+
+    child = Run(pipeline="bronze", status=RunStatus.FAILED, error="Task 'ingest' failed: Unity Catalog down")
+    child.tasks["ingest"] = TaskRun(
+        key="ingest", type="python", status=RunStatus.FAILED,
+        error="RuntimeError: Unity Catalog is not reachable at http://localhost:8080",
+        logs=["starting Spark", "password=hunter2xyz token: abc123", "sk-ant-api03-leakedkey"],
+    )
+    root = Run(pipeline="e2e", status=RunStatus.FAILED, parameters={"tenant_id": "tenant1"}, error="run_bronze failed")
+    root.tasks["run_bronze"] = TaskRun(key="run_bronze", type="pipeline", status=RunStatus.FAILED, child_run_id=child.id)
+    root.tasks["run_silver"] = TaskRun(key="run_silver", type="pipeline", status=RunStatus.SKIPPED,
+                                       depends_on=["run_bronze"])
+    child.parent_run_id = root.id
+    child.root_run_id = root.id
+    child.depth = 1
+    store.save(root)
+    store.save(child)
+    ok = Run(pipeline="e2e", status=RunStatus.SUCCEEDED)
+    store.save(ok)
+    return root, ok
+
+
+def test_a_failed_run_can_be_explained(client, fake):
+    c = client
+    root, ok = _failed_run(c.app.state.store)
+    assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = RunHelp(diagnosis="Unity Catalog is down.", failed_task="ingest (bronze)",
+                          steps=["Start Unity Catalog", " "], confidence="high")
+
+    r = c.post(f"/api/ai-assist/runs/{root.id}/explain")
+    assert r.status_code == 200
+    assert r.json() | {"model": None} == {"diagnosis": "Unity Catalog is down.", "failed_task": "ingest (bronze)",
+                                          "steps": ["Start Unity Catalog"], "confidence": "high", "model": None}
+    sent = fake.calls[-1]["messages"][0]["content"]
+    assert "Unity Catalog is not reachable" in sent and '"tenant_id": "tenant1"' in sent
+    assert "run_silver (pipeline): SKIPPED, after run_bronze" in sent and "Run " + root.tasks["run_bronze"].child_run_id in sent
+    assert "hunter2xyz" not in sent and "abc123" not in sent and "leakedkey" not in sent  # secrets masked
+
+    assert c.post(f"/api/ai-assist/runs/{ok.id}/explain").status_code == 409  # only failed runs
+    assert c.post("/api/ai-assist/runs/nope/explain").status_code == 404
+
+    # Pipelines users may ask; others may not
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["pipelines"]})
+    c.post("/api/users", json={"username": "sam", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 200
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/explain").status_code == 403
+
+
+
+def test_follow_up_questions_about_a_failed_run(client, fake):
+    c = client
+    root, ok = _failed_run(c.app.state.store)
+    explanation = {"diagnosis": "Unity Catalog is down.", "failed_task": "ingest (bronze)", "steps": ["Start it"]}
+    body = {"question": "How do I start it?", "explanation": explanation, "turns": []}
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = RunReply(answer="  Run docker start prooflix-uc.  ")
+
+    r = c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body)
+    assert r.status_code == 200 and r.json()["answer"] == "Run docker start prooflix-uc."
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert "Unity Catalog is not reachable" in msgs[0]["content"]  # the run is sent again
+    assert "hunter2xyz" not in msgs[0]["content"]  # still masked
+    assert "Unity Catalog is down." in msgs[1]["content"] and "1. Start it" in msgs[1]["content"]
+    assert msgs[2]["content"] == "How do I start it?"
+
+    # earlier turns go before the new question; secrets typed in a question are masked too
+    body = {"question": "And the token=abc999?", "explanation": explanation,
+            "turns": [{"question": "How do I start it?", "answer": "Run docker start prooflix-uc."}]}
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 200
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant", "user"]
+    assert msgs[3]["content"] == "Run docker start prooflix-uc." and "abc999" not in msgs[4]["content"]
+
+    # a question before any explanation: the run and the question are one user message
+    r = c.post(f"/api/ai-assist/runs/{root.id}/ask", json={"question": "Why did it fail?"})
+    assert r.status_code == 200
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user"]
+    assert msgs[0]["content"].startswith("<run>") and msgs[0]["content"].endswith("Why did it fail?")
+
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body | {"question": "  "}).status_code == 422
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body | {"question": "x" * 2001}).status_code == 413
+    assert c.post(f"/api/ai-assist/runs/{ok.id}/ask", json=body).status_code == 409  # only failed runs
+    assert c.post("/api/ai-assist/runs/nope/ask", json=body).status_code == 404
+
+    # Pipelines users may ask; others may not
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["pipelines"]})
+    c.post("/api/users", json={"username": "sam", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 200
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
+    assert c.post(f"/api/ai-assist/runs/{root.id}/ask", json=body).status_code == 403
+
+
+def test_general_questions_from_any_screen(client, fake):
+    c = client
+    body = {"question": "What is a schema?", "page": "Catalog (/catalog)"}
+    assert c.post("/api/ai-assist/ask", json=body).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = GeneralReply(answer=" A folder of tables. ", can_fix=False, open_screen="none")
+
+    r = c.post("/api/ai-assist/ask", json=body)
+    assert r.status_code == 200
+    assert r.json() | {"model": None} == {"answer": "A folder of tables.", "can_fix": False, "open_screen": "",
+                                          "model": None}
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user"]
+    assert "<screen>Catalog (/catalog)</screen>" in msgs[0]["content"] and "error_on_screen" not in msgs[0]["content"]
+
+    # the screen's error goes along, masked; earlier turns come first
+    body = {"question": "Why?", "page": "System (/system)", "error": "Could not save: password=hunter2xyz rejected",
+            "turns": [{"question": "Hi", "answer": "Hello"}]}
+    assert c.post("/api/ai-assist/ask", json=body).status_code == 200
+    msgs = fake.calls[-1]["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert "Could not save" in msgs[2]["content"] and "hunter2xyz" not in str(msgs)
+    assert "<screen>System (/system)</screen>" in msgs[2]["content"]
+
+    assert c.post("/api/ai-assist/ask", json={"question": " "}).status_code == 422
+    assert c.post("/api/ai-assist/ask", json={"question": "x" * 2001}).status_code == 413
+
+    # any signed-in user may ask, whatever their tabs
+    c.post("/api/users", json={"username": "sam", "password": GOOD, "tabs": ["sql"]})
+    c.post("/api/auth/logout")
+    assert c.post("/api/ai-assist/ask", json={"question": "Hi"}).status_code == 401
+    c.post("/api/auth/login", json={"username": "sam", "password": GOOD})
+    assert c.post("/api/ai-assist/ask", json={"question": "Hi"}).status_code == 200
+
+
+
+E2E_YAML = """name: E2E
+tasks:
+  - key: fail_fast
+    type: python
+    entrypoint: checks.fail_fast:fail
+  - key: done
+    type: shell
+    command: echo done
+    depends_on: [fail_fast]
+"""
+FAIL_PY = "def fail():\n    raise RuntimeError('on purpose')\n"
+
+
+def _fix_workspace(c):
+    """E2E (a python task that raises, then a shell task) and a module holding a secret."""
+    from prooflix.runs import Run, RunStatus, TaskRun
+
+    ws = c.app.state.workspace.root
+    (ws / "pipelines" / "e2e.yaml").write_text(E2E_YAML)
+    (ws / "src" / "checks").mkdir(parents=True)
+    (ws / "src" / "checks" / "__init__.py").write_text("")
+    (ws / "src" / "checks" / "fail_fast.py").write_text(FAIL_PY)
+    (ws / "src" / "checks" / "secret.py").write_text("password = 'hunter2xyz'\n")
+    run = Run(pipeline="e2e", status=RunStatus.FAILED, error="Task 'fail_fast' failed")
+    run.tasks["fail_fast"] = TaskRun(key="fail_fast", type="python", status=RunStatus.FAILED,
+                                     error="RuntimeError: on purpose")
+    c.app.state.store.save(run)
+    return ws, run
+
+
+def test_a_failed_run_gets_proposed_fixes_to_review(client, fake):
+    c = client
+    ws, run = _fix_workspace(c)
+    url = f"/api/ai-assist/runs/{run.id}/fix"
+    assert c.post(url, json={}).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fixed_yaml = E2E_YAML.replace("""  - key: fail_fast
+    type: python
+    entrypoint: checks.fail_fast:fail
+""", "").replace("    depends_on: [fail_fast]\n", "")
+    fake.answer = RunFix(summary="Remove the task that fails on purpose.", changes=[
+        FileChange(path="pipelines/e2e.yaml", reason="drop fail_fast", content=fixed_yaml),
+        FileChange(path="src/checks/fail_fast.py", reason="unchanged", content=FAIL_PY),  # no change: dropped
+        FileChange(path="../outside.txt", reason="nope", content="x"),  # not a file sent: dropped
+    ])
+    r = c.post(url, json={"explanation": {"diagnosis": "fail_fast raised on purpose", "steps": ["Remove it"]}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["summary"] == "Remove the task that fails on purpose."
+    assert [ch["path"] for ch in body["changes"]] == ["pipelines/e2e.yaml"]
+    change = body["changes"][0]
+    assert change["before"] == E2E_YAML and change["after"] == fixed_yaml and change["problems"] == []
+    assert change["modified"] == (ws / "pipelines" / "e2e.yaml").stat().st_mtime
+    assert (ws / "pipelines" / "e2e.yaml").read_text() == E2E_YAML  # nothing saved
+    sent = fake.calls[-1]["messages"][0]["content"]
+    assert '<file path="pipelines/e2e.yaml">' in sent and '<file path="src/checks/fail_fast.py">' in sent
+    assert "fail_fast raised on purpose" in sent and "hunter2xyz" not in sent  # secret file never sent
+
+    # a pipeline change that doesn't validate comes back with its problems
+    fake.answer = RunFix(summary="x", changes=[
+        FileChange(path="pipelines/e2e.yaml", reason="broken", content="name: E2E\ntasks: []\n")])
+    assert c.post(url, json={}).json()["changes"][0]["problems"]
+
+    # the user applies a change with the Workspace tab's save (its conflict check included)
+    save = {"path": "pipelines/e2e.yaml", "content": fixed_yaml, "modified": change["modified"]}
+    assert c.put("/api/workspace/file", json=save).status_code == 200
+    assert (ws / "pipelines" / "e2e.yaml").read_text() == fixed_yaml
+
+    # only users with the Workspace tab may ask for a fix
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["pipelines"]})
+    c.post("/api/users", json={"username": "wes", "password": GOOD, "tabs": ["pipelines", "workspace"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post(url, json={}).status_code == 403
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "wes", "password": GOOD})
+    assert c.post(url, json={}).status_code == 200
+    assert c.post("/api/ai-assist/runs/nope/fix", json={}).status_code == 404
+
+
+
+def test_any_screen_gets_proposed_setting_changes(client, fake):
+    c = client
+    body = {"page": "ClickHouse (/clickhouse)", "error": "ClickHouse is not reachable at http://localhost:8123"}
+    assert c.post("/api/ai-assist/fix", json=body).status_code == 409  # no key yet
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    c.put("/api/system/parameters/PROOFLIX_CLICKHOUSE_PASSWORD", json={"value": "hunter2xyz"})
+    fake.answer = SettingsFix(summary="Point Prooflix at port 18123 and start ClickHouse.", changes=[
+        SettingChange(name="PROOFLIX_CLICKHOUSE_URL", value="http://localhost:18123", reason="it listens there"),
+        SettingChange(name="PROOFLIX_CLICKHOUSE_PASSWORD", value="x", reason="secret: dropped"),
+        SettingChange(name="PROOFLIX_NOPE", value="1", reason="unknown: dropped"),
+    ], steps=["Start the ClickHouse container", " "])
+
+    r = c.post("/api/ai-assist/fix", json=body)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["steps"] == ["Start the ClickHouse container"]
+    assert [ch["name"] for ch in out["changes"]] == ["PROOFLIX_CLICKHOUSE_URL"]
+    assert out["changes"][0]["value"] == "http://localhost:18123"
+    sent = fake.calls[-1]["messages"][0]["content"]
+    assert "PROOFLIX_CLICKHOUSE_URL" in sent and "ClickHouse is not reachable" in sent
+    assert "PROOFLIX_CLICKHOUSE_PASSWORD" not in sent and "hunter2xyz" not in sent  # secrets never sent
+
+    # applying is the System tab's own save
+    assert c.put("/api/system/parameters/PROOFLIX_CLICKHOUSE_URL", json={"value": "http://localhost:18123"}).status_code == 200
+    assert c.post("/api/ai-assist/fix", json={"page": "Catalog"}).status_code == 422  # nothing to fix
+
+    # only users with the System tab may ask
+    c.post("/api/users", json={"username": "pat", "password": GOOD, "tabs": ["clickhouse"]})
+    c.post("/api/users", json={"username": "sys", "password": GOOD, "tabs": ["system"]})
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "pat", "password": GOOD})
+    assert c.post("/api/ai-assist/fix", json=body).status_code == 403
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "sys", "password": GOOD})
+    assert c.post("/api/ai-assist/fix", json=body).status_code == 200
+
+
+
+def test_general_answers_say_if_a_fix_applies_and_which_screen_to_open(client, fake):
+    c = client
+    c.put("/api/ai-assist/settings", json={"model": "claude-haiku-5-5", "api_key": KEY})
+    fake.answer = GeneralReply(answer="Use the button below.", can_fix=False, open_screen="clickhouse")
+    r = c.post("/api/ai-assist/ask", json={"question": "Take me to the ClickHouse tab", "page": "Catalog"})
+    assert r.json()["open_screen"] == "clickhouse" and r.json()["can_fix"] is False
+    fake.answer = GeneralReply(answer="ClickHouse is down.", can_fix=True, open_screen="none")
+    r = c.post("/api/ai-assist/ask", json={"question": "Why is it unreachable?", "page": "ClickHouse"})
+    assert r.json()["can_fix"] is True and r.json()["open_screen"] == ""

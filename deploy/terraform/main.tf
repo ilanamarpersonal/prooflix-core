@@ -2,7 +2,7 @@
 # single description of the Kubernetes resources; Terraform only installs it.
 #
 # The image is built and loaded outside Terraform:
-#   docker build -t prooflix:dev . && kind load docker-image prooflix:dev
+#   docker build -t prooflix:dev -f products/ingestiq/Dockerfile . && kind load docker-image prooflix:dev
 
 locals {
   chart_path = "${path.module}/../helm/prooflix"

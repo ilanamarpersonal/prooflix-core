@@ -65,7 +65,7 @@ flowchart LR
   cache, so edits made in an editor appear immediately), validates pipelines,
   executes runs on its asyncio event loop, starts scheduled runs, keeps run
   history and answers SQL queries over the data lake. It also serves the built
-  client, so production needs nothing else.
+  clients (the portal at `/`, IngestIQ under `/ingestiq/`, InsightIQ under `/insightiq/`, Settings under `/settings/`), so production needs nothing else.
 * **Client**: a single-page app with seven sections: **Pipelines** (list, graph,
   YAML, triggers, runs with live output), **Ingestion** (database connections and
   jobs that copy their tables into bronze, by hand or on a cron schedule), **SQL Editor**, **Catalog**,
@@ -80,7 +80,13 @@ flowchart LR
 ```text
 prooflix-core/
 ├── docs/                    design documents (this folder)
-├── server/                  Python package "prooflix"
+├── package.json             npm workspaces: packages/* and products/*/client
+├── packages/ui/             @prooflix/ui: theme, shadcn/ui components, ProductShell
+├── products/portal/client/  the enterprise portal: sign-in and product tiles
+├── products/insightiq/client/  InsightIQ: an empty product for new development
+├── products/settings/client/   Settings & Management: System, Users, AI Assist settings
+├── products/ingestiq/       IngestIQ (one folder per product)
+├── …/server/                Python package "prooflix"
 │   ├── pyproject.toml       dependencies (uv)
 │   ├── prooflix/
 │   │   ├── main.py          FastAPI app factory
@@ -93,17 +99,15 @@ prooflix-core/
 │   │   ├── engine/          executor (DAG, sub-pipelines), task runners, scheduler
 │   │   └── runs/            run records and their storage
 │   └── tests/               pytest suite (and a sample workspace in fixtures/)
-├── client/                  React app
-│   ├── components.json      shadcn/ui configuration
+├── …/client/                React app
 │   └── src/
-│       ├── components/ui/   shadcn/ui primitives (button, card, table, tabs, ...)
-│       ├── components/      app components (graph, editor, run output, panels, ...)
+│       ├── components/      app components (graph, editor, run output, panels; primitives come from @prooflix/ui)
 │       ├── pages/           one file per route
 │       └── lib/             API client, types, schedule and SQL helpers, utilities
 ├── deploy/
 │   ├── helm/prooflix/       Helm chart (one pod, volume at /data)
 │   └── terraform/           installs the chart with Terraform's Helm provider
-├── Dockerfile               one image: built client + server
+├── …/Dockerfile            one image: built client + server
 ├── workspaces/              the workspaces, one folder each (git-ignored user content)
 │   └── <workspace>/
 │       ├── pipelines/       *.yaml pipeline definitions

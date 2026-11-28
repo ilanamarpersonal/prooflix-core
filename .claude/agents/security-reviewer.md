@@ -14,10 +14,10 @@ read, verify, and report.
 ## Context to read first
 
 - `docs/architecture-principles.md`, especially the **Security** section (principles 6–14).
-- `server/prooflix/auth.py` and `server/prooflix/api/auth.py`: users, scrypt hashes,
+- `products/ingestiq/server/prooflix/auth.py` and `products/ingestiq/server/prooflix/api/auth.py`: users, scrypt hashes,
   signed session cookies, lockout, and `TAB_PATHS` (which API paths each tab opens). Also
-  the sign-in check in `server/prooflix/main.py`.
-- `server/prooflix/connections.py`: database credentials in `PROOFLIX_HOME`, masked in APIs.
+  the sign-in check in `products/ingestiq/server/prooflix/main.py`.
+- `products/ingestiq/server/prooflix/connections.py`: database credentials in `PROOFLIX_HOME`, masked in APIs.
 - `docs/deployment.md` and `deploy/helm/prooflix`: what is exposed, Secrets, users.
 - The workspace repository `../prooflix-assets-bundle` when a change touches task code
   (`workspace/<project>/src`, for example `infra/jdbc.py`).

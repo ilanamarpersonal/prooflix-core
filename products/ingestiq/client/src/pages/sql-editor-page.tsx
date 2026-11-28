@@ -1,0 +1,1152 @@
+import { useEffect, useRef, useState } from "react"
+import { useLocation, useNavigate } from "react-router"
+import {
+  ChevronRight,
+  Download,
+  FolderOpen,
+  Layers,
+  Library,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Play,
+  Plus,
+  RefreshCw,
+  Table2,
+  Upload,
+  X,
+} from "lucide-react"
+
+import { AiAssistSlot, useAiAssistDock } from "@prooflix/ui/ai-assist/dock"
+import { AiAssistSqlPanel, type SqlFailure } from "@/components/ai-assist-sql-panel"
+import { DataGrid } from "@/components/data-grid"
+import { ErrorAlert } from "@prooflix/ui/app/error-alert"
+import { PageHeader } from "@prooflix/ui/app/page-header"
+import { Button } from "@prooflix/ui/components/ui/button"
+import { Card } from "@prooflix/ui/components/ui/card"
+import { Skeleton } from "@prooflix/ui/components/ui/skeleton"
+import { Textarea } from "@prooflix/ui/components/ui/textarea"
+import { ApiError, useSqlQuery, useSqlTables } from "@/lib/api"
+import { caretPosition, completeAt, type Completion, type Suggestion } from "@/lib/sql-completion"
+import type { SqlResult, SqlTable } from "@/lib/types"
+import { useFillHeight } from "@prooflix/ui/lib/use-fill-height"
+import { cn } from "@/lib/utils"
+
+const TABS_KEY = "prooflix-sql-tabs"
+const OLD_DRAFT_KEY = "prooflix-sql-draft" // single query kept by earlier versions
+const DEFAULT_SQL = "-- Tables are listed on the left; a project's tables are written schema.table\nSELECT 1;"
+
+interface QueryTab {
+  id: string
+  title: string
+  sql: string
+}
+
+interface TabsState {
+  tabs: QueryTab[]
+  active: string
+}
+
+// Results are kept outside the components, per query tab, so they are still
+// there when you switch query tabs or leave the SQL Editor and come back.
+const results = new Map<string, SqlResult>()
+
+const newId = () => Math.random().toString(36).slice(2, 10)
+
+const EDITOR_HEIGHT_KEY = "prooflix-sql-editor-height"
+const DEFAULT_EDITOR_HEIGHT = 176
+const MIN_EDITOR_HEIGHT = 96
+const MIN_RESULTS_HEIGHT = 160 // the divider never squeezes the results below this
+const KEY_STEP = 24 // px per arrow key on the divider
+
+function loadEditorHeight() {
+  try {
+    const h = Number(localStorage.getItem(EDITOR_HEIGHT_KEY))
+    return h >= MIN_EDITOR_HEIGHT && h <= 2000 ? h : DEFAULT_EDITOR_HEIGHT
+  } catch {
+    return DEFAULT_EDITOR_HEIGHT
+  }
+}
+
+function saveEditorHeight(h: number) {
+  try {
+    localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(h)))
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+const SCHEMAS_WIDTH_KEY = "prooflix-sql-schemas-width"
+const DEFAULT_SCHEMAS_WIDTH = 240
+const MIN_SCHEMAS_WIDTH = 180
+const MAX_SCHEMAS_WIDTH = 560
+
+function loadSchemasWidth() {
+  try {
+    const w = Number(localStorage.getItem(SCHEMAS_WIDTH_KEY))
+    return w >= MIN_SCHEMAS_WIDTH && w <= MAX_SCHEMAS_WIDTH ? w : DEFAULT_SCHEMAS_WIDTH
+  } catch {
+    return DEFAULT_SCHEMAS_WIDTH
+  }
+}
+
+const MAX_SQL_FILE_BYTES = 1024 * 1024 // a query file larger than 1 MB is almost certainly not a query
+
+/** "Daily totals" -> "Daily totals.sql"; characters file systems reject become "_". */
+function sqlFileName(title: string) {
+  const base = title.replace(/[\\/:*?"<>|\x00-\x1f]+/g, "_").trim() || "query"
+  return base.toLowerCase().endsWith(".sql") ? base : `${base}.sql`
+}
+
+/** Hand the browser a text file to save (it goes to the Downloads folder or asks where). */
+function downloadText(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/sql;charset=utf-8" }))
+  const a = document.createElement("a")
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+type SaveResult = { status: "saved" | "downloaded"; name: string } | { status: "cancelled" }
+
+/**
+ * Save text through the browser's "Save as" dialog, so the user picks the folder and
+ * file name (Chrome, Edge and other Chromium browsers). Browsers without that dialog
+ * download the file instead, to the Downloads folder or wherever they ask.
+ */
+async function saveTextAs(name: string, text: string): Promise<SaveResult> {
+  type Picker = (options: object) => Promise<{
+    name: string
+    createWritable: () => Promise<{ write: (data: string) => Promise<void>; close: () => Promise<void> }>
+  }>
+  const picker = (window as unknown as { showSaveFilePicker?: Picker }).showSaveFilePicker
+  if (typeof picker === "function") {
+    try {
+      const handle = await picker({
+        suggestedName: name,
+        types: [{ description: "SQL file", accept: { "application/sql": [".sql"] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(text)
+      await writable.close()
+      return { status: "saved", name: handle.name }
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") return { status: "cancelled" } // closed the dialog
+      // not allowed here (e.g. inside a frame): fall back to a download below
+    }
+  }
+  downloadText(name, text)
+  return { status: "downloaded", name }
+}
+
+function nextTitle(tabs: QueryTab[]) {
+  const used = new Set(tabs.map((t) => t.title))
+  let n = 1
+  while (used.has(`Query ${n}`)) n++
+  return `Query ${n}`
+}
+
+function loadTabs(): TabsState {
+  try {
+    const raw = localStorage.getItem(TABS_KEY)
+    if (raw) {
+      const s = JSON.parse(raw) as TabsState
+      if (Array.isArray(s.tabs) && s.tabs.length) {
+        return { tabs: s.tabs, active: s.tabs.some((t) => t.id === s.active) ? s.active : s.tabs[0].id }
+      }
+    }
+    const first = { id: newId(), title: "Query 1", sql: localStorage.getItem(OLD_DRAFT_KEY) ?? DEFAULT_SQL }
+    return { tabs: [first], active: first.id }
+  } catch {
+    const first = { id: newId(), title: "Query 1", sql: DEFAULT_SQL }
+    return { tabs: [first], active: first.id }
+  }
+}
+
+/** What the page can do in the open query's editor */
+interface EditorApi {
+  insert: (text: string) => void
+  /** replace the query */
+  setSql: (text: string) => void
+  /** replace the query and run it */
+  runSql: (text: string) => void
+}
+
+export function SqlEditorPage() {
+  const [state, setState] = useState<TabsState>(loadTabs)
+  const tables = useSqlTables()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const editorApi = useRef<EditorApi | null>(null)
+  // AI Assist: the last failed query, offered for a suggested fix in the AI Assist panel on the right
+  const dock = useAiAssistDock()
+  const [failure, setFailure] = useState<SqlFailure | null>(null)
+  const [fixRan, setFixRan] = useState(false)
+  const pendingFix = useRef<string | null>(null)
+  // On md+ screens the schemas and the editor column fill the window; the
+  // divider splits the column between the editor and the results.
+  const panels = useRef<HTMLDivElement>(null)
+  const panelsHeight = useFillHeight(panels)
+  // width of the Schemas panel, set with the divider next to it (md+ screens)
+  const [schemasWidth, setSchemasWidth] = useState(loadSchemasWidth)
+  const resizeSchemas = (w: number, save = false) => {
+    const room = (panels.current?.getBoundingClientRect().width ?? 1200) - 360 // keep room for the editor
+    const next = Math.round(Math.min(Math.max(w, MIN_SCHEMAS_WIDTH), Math.min(MAX_SCHEMAS_WIDTH, room)))
+    setSchemasWidth(next)
+    if (save)
+      try {
+        localStorage.setItem(SCHEMAS_WIDTH_KEY, String(next))
+      } catch {
+        /* storage unavailable */
+      }
+  }
+  const autoRun = useRef<string | null>(null) // tab id to run once it shows
+  const handled = useRef<string | null>(null) // location key of the last handed-over query
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify(state))
+    } catch {
+      /* storage unavailable */
+    }
+  }, [state])
+
+  const active = state.tabs.find((t) => t.id === state.active) ?? state.tabs[0]
+  const tabFailure = failure && failure.tabId === active.id ? failure : null
+
+  const onQueryDone = (tabId: string, sql: string, error: unknown) => {
+    if (error) {
+      const text = error instanceof ApiError && error.errors.length ? error.errors.join("\n") : String(error)
+      // the suggested fix failed too: offer to look again
+      pendingFix.current = null
+      setFixRan(false)
+      setFailure((prev) => ({ id: (prev?.id ?? 0) + 1, tabId, sql, error: text }))
+      // a failed query opens the panel with the offer (nothing is sent until the user agrees)
+      dock.popUp()
+    } else if (pendingFix.current !== null && pendingFix.current === sql) {
+      pendingFix.current = null
+      setFixRan(true)
+    }
+  }
+
+  const addTab = (sql = "", title?: string) => {
+    const tab = { id: newId(), title: title ?? "", sql }
+    setState((prev) => {
+      tab.title = title ?? nextTitle(prev.tabs)
+      return { tabs: [...prev.tabs, tab], active: tab.id }
+    })
+    return tab.id
+  }
+
+  const closeTab = (id: string) => {
+    results.delete(id)
+    setState((prev) => {
+      const index = prev.tabs.findIndex((t) => t.id === id)
+      const tabs = prev.tabs.filter((t) => t.id !== id)
+      if (!tabs.length) {
+        const fresh = { id: newId(), title: "Query 1", sql: "" }
+        return { tabs: [fresh], active: fresh.id }
+      }
+      const active = prev.active === id ? (tabs[index] ?? tabs[index - 1]).id : prev.active
+      return { tabs, active }
+    })
+  }
+
+  const updateTab = (id: string, change: Partial<QueryTab>) =>
+    setState((prev) => ({ ...prev, tabs: prev.tabs.map((t) => (t.id === id ? { ...t, ...change } : t)) }))
+
+  // "Query in SQL Editor" opens the query in a new tab and runs it: from this product's Catalog and
+  // Semantic model as router state, from another product (IngestIQ's Workspace) as ?sql=&title=.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const handed =
+      (location.state as { sql?: string; title?: string } | null) ??
+      (params.get("sql") ? { sql: params.get("sql")!, title: params.get("title") ?? undefined } : null)
+    if (handed?.sql && handled.current !== location.key) {
+      handled.current = location.key
+      const fromTable = /FROM\s+([\w.]+)/i.exec(handed.sql)?.[1]
+      autoRun.current = addTab(handed.sql, handed.title ?? fromTable)
+      navigate(location.pathname, { replace: true, state: null })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, location.search])
+
+  return (
+    <>
+      <PageHeader
+        title="SQL Editor"
+        description={
+          <>
+            Read-only SQL (DuckDB) over the Parquet files in the <code className="font-mono">data/</code> folders of the
+            workspace and its projects
+          </>
+        }
+      />
+      <div
+        ref={panels}
+        style={
+          {
+            ...(panelsHeight ? { height: panelsHeight } : {}),
+            "--schemas-w": `${schemasWidth}px`,
+          } as React.CSSProperties
+        }
+        className="grid items-start gap-4 md:grid-cols-[var(--schemas-w)_auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] md:items-stretch md:gap-0"
+      >
+        <TableList
+          tables={tables.data}
+          loading={tables.isLoading}
+          error={tables.error}
+          onRefresh={() => tables.refetch()}
+          refreshing={tables.isFetching}
+          onInsert={(text) => editorApi.current?.insert(text)}
+        />
+        <SideDivider
+          width={schemasWidth}
+          onResize={(w) => resizeSchemas(w)}
+          onDone={(w) => resizeSchemas(w, true)}
+          onReset={() => resizeSchemas(DEFAULT_SCHEMAS_WIDTH, true)}
+        />
+
+        <div data-sql-column className="flex min-h-0 min-w-0 flex-col gap-3">
+          <QueryTabsBar
+            tabs={state.tabs}
+            active={active.id}
+            onSelect={(id) => setState((prev) => ({ ...prev, active: id }))}
+            onAdd={() => addTab()}
+            onClose={closeTab}
+            onRename={(id, title) => updateTab(id, { title })}
+          />
+          <QueryEditor
+            key={active.id}
+            tab={active}
+            onSqlChange={(sql) => updateTab(active.id, { sql })}
+            runOnMount={autoRun.current === active.id}
+            onMounted={() => {
+              if (autoRun.current === active.id) autoRun.current = null
+            }}
+            apiRef={editorApi}
+            tables={tables.data ?? []}
+            onLoadFile={(title, sql) => addTab(sql, title)}
+            onQueryDone={(sql, error) => onQueryDone(active.id, sql, error)}
+          />
+        </div>
+        {dock.available && (
+          <AiAssistSlot>
+            <AiAssistSqlPanel
+              failure={tabFailure}
+              ready={dock.ready}
+              canSetUp={dock.canSetUp}
+              fixRan={fixRan}
+              onRun={(sql) => {
+                pendingFix.current = sql
+                editorApi.current?.runSql(sql)
+              }}
+              onPaste={(sql) => editorApi.current?.setSql(sql)}
+              onDismiss={() => setFailure(null)}
+              onClose={() => dock.setOpen(false)}
+            />
+          </AiAssistSlot>
+        )}
+      </div>
+    </>
+  )
+}
+
+/**
+ * The bar between the Schemas panel and the queries. Drag it (or focus it and use the
+ * arrow keys) to make the panel wider or narrower; double-click to reset.
+ */
+function SideDivider({
+  width,
+  onResize,
+  onDone,
+  onReset,
+}: {
+  width: number
+  onResize: (w: number) => void
+  onDone: (w: number) => void
+  onReset: () => void
+}) {
+  const [dragging, setDragging] = useState(false)
+  const start = useRef<{ x: number; w: number } | null>(null)
+  useEffect(() => {
+    if (!dragging) return
+    const { userSelect, cursor } = document.body.style
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "col-resize"
+    return () => {
+      document.body.style.userSelect = userSelect
+      document.body.style.cursor = cursor
+    }
+  }, [dragging])
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the Schemas panel"
+      aria-valuenow={width}
+      aria-valuemin={MIN_SCHEMAS_WIDTH}
+      aria-valuemax={MAX_SCHEMAS_WIDTH}
+      tabIndex={0}
+      title="Drag to resize the Schemas panel · double-click to reset"
+      className="group hidden w-4 cursor-col-resize touch-none justify-center outline-none md:flex"
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        start.current = { x: e.clientX, w: width }
+        setDragging(true)
+      }}
+      onPointerMove={(e) => {
+        if (start.current) onResize(start.current.w + e.clientX - start.current.x)
+      }}
+      onPointerUp={(e) => {
+        if (!start.current) return
+        onDone(start.current.w + e.clientX - start.current.x)
+        start.current = null
+        setDragging(false)
+      }}
+      onPointerCancel={() => {
+        start.current = null
+        setDragging(false)
+      }}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault()
+          onDone(width + (e.key === "ArrowRight" ? 16 : -16))
+        }
+      }}
+    >
+      <div
+        className={cn(
+          "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary relative h-full w-px transition-colors",
+          dragging && "bg-primary",
+        )}
+      >
+        <span
+          className={cn(
+            "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary absolute top-1/2 left-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors",
+            dragging && "bg-primary",
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** The query tabs above the editor, with the Add query button at the end. */
+function QueryTabsBar({
+  tabs,
+  active,
+  onSelect,
+  onAdd,
+  onClose,
+  onRename,
+}: {
+  tabs: QueryTab[]
+  active: string
+  onSelect: (id: string) => void
+  onAdd: () => void
+  onClose: (id: string) => void
+  onRename: (id: string, title: string) => void
+}) {
+  const [editing, setEditing] = useState<string | null>(null)
+  return (
+    <div role="tablist" aria-label="Queries" className="flex items-end gap-1 overflow-x-auto border-b-2 pt-1">
+      {tabs.map((t) => {
+        const isActive = t.id === active
+        return (
+          <div
+            key={t.id}
+            className={cn(
+              "group -mb-0.5 flex h-9 shrink-0 items-center rounded-t-md border border-b-0 text-sm transition-colors",
+              isActive
+                ? "bg-background text-foreground border-border border-t-primary relative z-[1] border-t-2 font-semibold shadow-[0_2px_0_0_var(--background)]"
+                : "bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground",
+            )}
+          >
+            {editing === t.id ? (
+              <input
+                autoFocus
+                defaultValue={t.title}
+                aria-label="Query name"
+                className="bg-background mx-1 h-6 w-32 rounded border px-1.5 text-sm"
+                onBlur={(e) => {
+                  if (editing !== t.id) return
+                  onRename(t.id, e.target.value.trim() || t.title)
+                  setEditing(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    onRename(t.id, e.currentTarget.value.trim() || t.title)
+                    setEditing(null)
+                  }
+                  if (e.key === "Escape") setEditing(null)
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => onSelect(t.id)}
+                onDoubleClick={() => setEditing(t.id)}
+                onAuxClick={(e) => e.button === 1 && onClose(t.id)}
+                title="Double-click to rename"
+                className="h-full max-w-48 truncate pr-1 pl-3"
+              >
+                {t.title}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onClose(t.id)}
+              aria-label={`Close ${t.title}`}
+              className={cn(
+                "hover:bg-accent mr-1 grid size-5 place-items-center rounded",
+                !isActive && "opacity-40 group-hover:opacity-100 focus-visible:opacity-100",
+              )}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )
+      })}
+      <Button variant="ghost" size="sm" className="mb-0.5 h-7 shrink-0" onClick={onAdd}>
+        <Plus /> Add query
+      </Button>
+    </div>
+  )
+}
+
+/** One query tab: its SQL, Run button and results. */
+function QueryEditor({
+  tab,
+  onSqlChange,
+  runOnMount,
+  onMounted,
+  apiRef,
+  tables,
+  onLoadFile,
+  onQueryDone,
+}: {
+  tab: QueryTab
+  onSqlChange: (sql: string) => void
+  runOnMount: boolean
+  onMounted: () => void
+  apiRef: React.MutableRefObject<EditorApi | null>
+  /** for code completion: schema. -> tables, schema.table. -> columns */
+  tables: SqlTable[]
+  /** a .sql file was chosen with Load SQL: open it in a new query tab */
+  onLoadFile: (title: string, sql: string) => void
+  /** a query finished: error is set when it failed */
+  onQueryDone: (sql: string, error: unknown) => void
+}) {
+  const sql = tab.sql
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const [saveNote, setSaveNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!saveNote) return
+    const t = setTimeout(() => setSaveNote(null), 4000)
+    return () => clearTimeout(t)
+  }, [saveNote])
+  const save = async () => {
+    if (!sql.trim()) return
+    const result = await saveTextAs(sqlFileName(tab.title), sql.endsWith("\n") ? sql : `${sql}\n`)
+    if (result.status === "saved") setSaveNote(`Saved as ${result.name}`)
+    else if (result.status === "downloaded") setSaveNote(`Downloaded ${result.name}`)
+  }
+  const load = async (file: File) => {
+    setLoadError(null)
+    if (file.size > MAX_SQL_FILE_BYTES) {
+      setLoadError(`${file.name} is larger than 1 MB, so it was not opened.`)
+      return
+    }
+    try {
+      const text = (await file.text()).replace(/^\uFEFF/, "") // drop a byte-order mark
+      onLoadFile(file.name.replace(/\.(sql|txt)$/i, "") || file.name, text)
+    } catch {
+      setLoadError(`${file.name} could not be read.`)
+    }
+  }
+  const [result, setResult] = useState<SqlResult | null>(results.get(tab.id) ?? null)
+  const query = useSqlQuery()
+  const editor = useRef<HTMLTextAreaElement>(null)
+  const [height, setHeight] = useState(loadEditorHeight)
+  const [expanded, setExpanded] = useState(false)
+
+  const resultsArea = useRef<HTMLDivElement>(null)
+
+  /** Tallest the editor may get: on md+ screens, where the column fills the
+   * window, whatever the editor grows by comes out of the results, which keep
+   * at least MIN_RESULTS_HEIGHT. */
+  const maxEditorHeight = () => {
+    const results = resultsArea.current
+    if (!results || window.innerWidth < 768) return 2000
+    return Math.max(MIN_EDITOR_HEIGHT, height + results.getBoundingClientRect().height - MIN_RESULTS_HEIGHT)
+  }
+  const resize = (h: number, save = false) => {
+    const next = Math.round(Math.min(Math.max(h, MIN_EDITOR_HEIGHT), maxEditorHeight()))
+    setHeight(next)
+    if (save) saveEditorHeight(next)
+    return next
+  }
+
+  const [completion, setCompletion] = useState<(Completion & { index: number; left: number; top: number }) | null>(null)
+
+  const suggest = (text: string, cursor: number, force = false) => {
+    const el = editor.current
+    const found = el ? completeAt(text, cursor, tables, { force }) : null
+    if (!el || !found) return setCompletion(null)
+    const caret = caretPosition(el, found.from)
+    setCompletion({ ...found, index: 0, left: caret.left, top: caret.top + caret.height })
+  }
+
+  const accept = (item: Suggestion) => {
+    const el = editor.current
+    if (!el || !completion) return
+    const next = sql.slice(0, completion.from) + item.insert + sql.slice(completion.to)
+    const at = completion.from + item.insert.length
+    onSqlChange(next)
+    setCompletion(null)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(at, at)
+    })
+  }
+
+  const run = (text = sql) => {
+    if (!text.trim()) return
+    query.mutate(
+      { sql: text, limit: 10000 },
+      {
+        onSuccess: (r) => {
+          results.set(tab.id, r)
+          setResult(r)
+          onQueryDone(text, null)
+        },
+        onError: (e) => onQueryDone(text, e),
+      },
+    )
+  }
+
+  useEffect(() => {
+    if (runOnMount) run()
+    onMounted()
+    editor.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const insert = (text: string) => {
+    const el = editor.current
+    if (!el) return onSqlChange(sql + text)
+    const { selectionStart: s, selectionEnd: e } = el
+    onSqlChange(sql.slice(0, s) + text + sql.slice(e))
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(s + text.length, s + text.length)
+    })
+  }
+  const setSql = (text: string) => {
+    onSqlChange(text)
+    requestAnimationFrame(() => editor.current?.focus())
+  }
+  apiRef.current = {
+    insert,
+    setSql,
+    runSql: (text) => {
+      onSqlChange(text)
+      run(text)
+    },
+  }
+
+  return (
+    <>
+      <div className="relative shrink-0">
+        <Textarea
+          ref={editor}
+          value={sql}
+          onChange={(e) => {
+            onSqlChange(e.target.value)
+            const el = e.currentTarget
+            const typed = (e.nativeEvent as InputEvent).inputType?.startsWith("insert")
+            // suggest while typing (e.g. right after "banking."), not after deleting
+            if (typed || completion) suggest(e.target.value, el.selectionStart)
+          }}
+          onBlur={() => setTimeout(() => setCompletion(null), 150)}
+          onClick={() => setCompletion(null)}
+          onScroll={() => setCompletion(null)}
+          spellCheck={false}
+          aria-label="SQL query"
+          aria-autocomplete="list"
+          aria-expanded={!!completion}
+          placeholder="Write a query, for example SELECT * FROM banking.customers"
+          style={{ height: expanded ? "calc(100svh - 17rem)" : height }}
+          className="min-h-24 resize-none pr-10 font-mono text-sm leading-relaxed field-sizing-fixed md:text-[13px]"
+          onKeyDown={(e) => {
+            if (completion) {
+              const count = completion.items.length
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault()
+                const step = e.key === "ArrowDown" ? 1 : -1
+                setCompletion({ ...completion, index: (completion.index + step + count) % count })
+                return
+              }
+              if ((e.key === "Enter" || e.key === "Tab") && !e.metaKey && !e.ctrlKey) {
+                e.preventDefault()
+                accept(completion.items[completion.index])
+                return
+              }
+              if (e.key === "Escape") {
+                e.preventDefault()
+                setCompletion(null)
+                return
+              }
+            }
+            if (e.key === "Escape" && expanded) {
+              e.preventDefault()
+              setExpanded(false)
+              return
+            }
+            if (e.key === " " && e.ctrlKey) {
+              // Ctrl+Space: suggest schemas, tables or columns at the cursor
+              e.preventDefault()
+              suggest(e.currentTarget.value, e.currentTarget.selectionStart, true)
+              return
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+              e.preventDefault() // the browser's own "save page" isn't useful here
+              void save()
+              return
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault()
+              const el = e.currentTarget
+              const selected = sql.slice(el.selectionStart, el.selectionEnd)
+              run(selected.trim() ? selected : sql)
+            }
+            if (e.key === "Tab" && !e.shiftKey) {
+              e.preventDefault()
+              insert("  ")
+            }
+          }}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="bg-background/80 absolute top-1.5 right-1.5 size-7"
+          onClick={() => {
+            setExpanded(!expanded)
+            requestAnimationFrame(() => editor.current?.focus())
+          }}
+          title={expanded ? "Collapse the editor (Esc)" : "Expand the editor"}
+          aria-label={expanded ? "Collapse the editor" : "Expand the editor"}
+          aria-pressed={expanded}
+        >
+          {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+        </Button>
+        {completion && (
+          <ul
+            role="listbox"
+            aria-label="Suggestions"
+            className="bg-popover text-popover-foreground absolute z-20 max-h-60 min-w-56 overflow-auto rounded-md border p-1 font-mono text-xs shadow-md"
+            // kept inside the editor when the cursor is near its right edge (the list is min-w-56 = 224px)
+            style={{
+              left: Math.max(0, Math.min(completion.left, (editor.current?.clientWidth ?? 9999) - 232)),
+              top: completion.top + 2,
+            }}
+          >
+            {completion.items.map((item, i) => (
+              <li
+                key={`${item.kind}:${item.label}`}
+                role="option"
+                aria-selected={i === completion.index}
+                onMouseDown={(e) => {
+                  e.preventDefault() // keep focus in the editor
+                  accept(item)
+                }}
+                onMouseEnter={() => setCompletion({ ...completion, index: i })}
+                className={cn(
+                  "flex cursor-pointer items-center gap-2 rounded px-2 py-1",
+                  i === completion.index && "bg-accent",
+                )}
+              >
+                {item.kind === "schema" ? (
+                  <Layers className="text-primary size-3.5 shrink-0" />
+                ) : item.kind === "table" ? (
+                  <Table2 className="text-muted-foreground size-3.5 shrink-0" />
+                ) : (
+                  <span className="text-muted-foreground w-3.5 shrink-0 text-center">·</span>
+                )}
+                <span className="truncate">{item.label}</span>
+                {item.detail && <span className="text-muted-foreground ml-auto pl-3 font-sans">{item.detail}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <Button onClick={() => run()} disabled={query.isPending || !sql.trim()}>
+          <span className="contents">{query.isPending ? <Loader2 className="animate-spin" /> : <Play />}</span> Run
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => void save()}
+          disabled={!sql.trim()}
+          title={`Save this query as a .sql file: choose the folder and name (⌘/Ctrl + S)`}
+        >
+          <Download /> Save SQL…
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => fileInput.current?.click()}
+          title="Open a .sql file in a new query tab"
+        >
+          <Upload /> Load SQL
+        </Button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".sql,.txt,application/sql,text/plain"
+          className="hidden"
+          aria-hidden
+          tabIndex={-1}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = "" // so choosing the same file again still triggers a load
+            if (file) void load(file)
+          }}
+        />
+        {saveNote && (
+          <span role="status" className="text-status-succeeded text-xs font-medium">
+            {saveNote}
+          </span>
+        )}
+        <span className="text-muted-foreground text-xs">
+          <kbd className="font-sans">⌘</kbd>/<kbd className="font-sans">Ctrl</kbd> + Enter runs the query, or just the
+          selected text · type <code className="font-mono">schema.</code> for its tables,{" "}
+          <kbd className="font-sans">Ctrl</kbd> + Space for suggestions
+        </span>
+        {result && !query.isPending && (
+          <span className="text-muted-foreground ml-auto text-xs">
+            {result.row_count.toLocaleString()} row{result.row_count === 1 ? "" : "s"}
+            {result.truncated && " (first 10,000 only)"} · {result.elapsed_ms} ms
+          </span>
+        )}
+      </div>
+      {!expanded && (
+        <Divider
+          height={height}
+          onDrag={(h) => resize(h)}
+          onDone={(h) => resize(h, true)}
+          onReset={() => resize(DEFAULT_EDITOR_HEIGHT, true)}
+          max={maxEditorHeight}
+        />
+      )}
+      {loadError && (
+        <div className="shrink-0">
+          <ErrorAlert title="Could not load the file" error={new Error(loadError)} />
+        </div>
+      )}
+      {query.error && (
+        <div className="shrink-0">
+          <ErrorAlert title="Query failed" error={query.error} />
+        </div>
+      )}
+      <div ref={resultsArea} className="flex min-h-0 flex-col md:flex-1">
+        {result ? (
+          <ResultTable result={result} />
+        ) : (
+          <Card className="text-muted-foreground grid min-h-32 place-items-center p-6 text-sm md:flex-1">
+            Run a query to see its results here.
+          </Card>
+        )}
+      </div>
+    </>
+  )
+}
+
+/**
+ * The bar between the SQL editor and the results. Drag it (or focus it and use
+ * the arrow keys) to make the editor taller or shorter; the results take the
+ * rest of the space. Double-click to go back to the default height.
+ */
+function Divider({
+  height,
+  onDrag,
+  onDone,
+  onReset,
+  max,
+}: {
+  height: number
+  onDrag: (h: number) => number
+  onDone: (h: number) => void
+  onReset: () => void
+  max: () => number
+}) {
+  const [dragging, setDragging] = useState(false)
+  const start = useRef<{ y: number; h: number } | null>(null)
+
+  // While dragging, keep the page from selecting text and show the resize cursor everywhere.
+  useEffect(() => {
+    if (!dragging) return
+    const { userSelect, cursor } = document.body.style
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "row-resize"
+    return () => {
+      document.body.style.userSelect = userSelect
+      document.body.style.cursor = cursor
+    }
+  }, [dragging])
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize the editor and the results"
+      aria-valuenow={height}
+      aria-valuemin={MIN_EDITOR_HEIGHT}
+      aria-valuemax={max()}
+      tabIndex={0}
+      title="Drag to resize the editor and the results · double-click to reset"
+      className="group -my-1.5 flex h-4 shrink-0 cursor-row-resize touch-none items-center outline-none"
+      onPointerDown={(e) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        start.current = { y: e.clientY, h: height }
+        setDragging(true)
+      }}
+      onPointerMove={(e) => {
+        if (start.current) onDrag(start.current.h + e.clientY - start.current.y)
+      }}
+      onPointerUp={(e) => {
+        if (!start.current) return
+        onDone(start.current.h + e.clientY - start.current.y)
+        start.current = null
+        setDragging(false)
+      }}
+      onPointerCancel={() => {
+        start.current = null
+        setDragging(false)
+      }}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          e.preventDefault()
+          onDone(height + (e.key === "ArrowDown" ? KEY_STEP : -KEY_STEP))
+        }
+      }}
+    >
+      <div
+        className={cn(
+          "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary relative h-px w-full transition-colors",
+          dragging && "bg-primary",
+        )}
+      >
+        <span
+          className={cn(
+            "bg-border group-hover:bg-primary/60 group-focus-visible:bg-primary absolute top-1/2 left-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors",
+            dragging && "bg-primary",
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
+function TableList({
+  tables,
+  loading,
+  error,
+  refreshing,
+  onRefresh,
+  onInsert,
+}: {
+  tables?: SqlTable[]
+  loading: boolean
+  error: unknown
+  refreshing: boolean
+  onRefresh: () => void
+  onInsert: (text: string) => void
+}) {
+  // schema -> its tables, in the order the server lists them
+  const bySchema = new Map<string, SqlTable[]>()
+  for (const t of tables ?? []) bySchema.set(t.schema, [...(bySchema.get(t.schema) ?? []), t])
+
+  return (
+    <Card className="max-h-[60vh] gap-0 overflow-hidden py-0 md:h-full md:max-h-none">
+      <div className="flex shrink-0 items-center justify-between border-b px-3 py-2">
+        <span className="text-sm font-medium">Schemas</span>
+        <Button variant="ghost" size="icon" className="size-7" onClick={onRefresh} aria-label="Refresh tables">
+          <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+        </Button>
+      </div>
+      {/* the tree fills the panel's height and scrolls inside it */}
+      <div className="min-h-40 flex-1 overflow-auto">
+        {error ? (
+          <div className="p-2">
+            <ErrorAlert error={error} />
+          </div>
+        ) : loading ? (
+          <Skeleton className="m-2 h-40" />
+        ) : !bySchema.size ? (
+          <p className="text-muted-foreground p-3 text-sm">No tables yet. Import Parquet files in the Catalog tab.</p>
+        ) : (
+          <div className="py-1">
+            {groupByCatalog(bySchema).map(({ catalog, schemas }) => (
+              <CatalogItem key={catalog ? `catalog:${catalog}` : "files"} catalog={catalog}>
+                {schemas.map(([schema, list]) => (
+                  <SchemaItem key={schema} schema={schema} tables={list} onInsert={onInsert} catalog={catalog} />
+                ))}
+              </CatalogItem>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="text-muted-foreground shrink-0 border-t px-3 py-2 text-xs">
+        Click a table to see its columns, and a column to type its name into the query at the cursor.
+      </p>
+    </Card>
+  )
+}
+
+/**
+ * The tree's top level: each catalog (tenant1) with its schemas (bronze, silver, gold), in server order,
+ * then one group, catalog "", for the schemas outside a catalog (main, projects' data, imported datasets).
+ */
+function groupByCatalog(bySchema: Map<string, SqlTable[]>): { catalog: string; schemas: [string, SqlTable[]][] }[] {
+  const catalogs = new Map<string, [string, SqlTable[]][]>()
+  const files: [string, SqlTable[]][] = []
+  for (const entry of bySchema) {
+    const catalog = entry[1][0]?.catalog ?? ""
+    if (catalog) catalogs.set(catalog, [...(catalogs.get(catalog) ?? []), entry])
+    else files.push(entry)
+  }
+  const groups = [...catalogs].map(([catalog, schemas]) => ({ catalog, schemas }))
+  return files.length ? [...groups, { catalog: "", schemas: files }] : groups
+}
+
+// the top-level group for schemas that are not in a catalog
+const FILES_GROUP = "Files and datasets"
+const FILES_GROUP_HINT =
+  "Parquet files outside a catalog: the workspace's data/ folder (main), projects' data and imported datasets"
+
+/** A catalog (tenant1) and its schemas, or, with no name, the group of schemas outside a catalog. */
+function CatalogItem({ catalog, children }: { catalog: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${catalog ? `catalog ${catalog}` : FILES_GROUP}`}
+        title={catalog ? undefined : FILES_GROUP_HINT}
+        className="hover:bg-accent flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-sm"
+      >
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        {catalog ? (
+          <Library className="text-primary size-4 shrink-0" />
+        ) : (
+          <FolderOpen className="text-muted-foreground size-4 shrink-0" />
+        )}
+        <span className={cn("truncate text-xs font-medium", catalog && "font-mono")}>{catalog || FILES_GROUP}</span>
+        <span className="text-muted-foreground ml-auto text-[10px] tracking-wide uppercase">
+          {catalog ? "catalog" : "parquet"}
+        </span>
+      </button>
+      {open && children}
+    </div>
+  )
+}
+
+function SchemaItem({
+  schema,
+  tables,
+  onInsert,
+  catalog = "",
+}: {
+  schema: string
+  tables: SqlTable[]
+  onInsert: (text: string) => void
+  /** set inside a catalog: labelled with the schema's own name ("bronze") */
+  catalog?: string
+}) {
+  const [open, setOpen] = useState(true)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        title={schema}
+        className="hover:bg-accent flex w-full items-center gap-1.5 py-1 pr-1.5 pl-5 text-left text-sm"
+      >
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <Layers className="text-primary size-4 shrink-0" />
+        <span className="truncate font-mono text-xs font-medium">
+          {catalog ? schema.slice(catalog.length + 1) : schema}
+        </span>
+        <span className="text-muted-foreground ml-auto text-xs">{tables.length}</span>
+      </button>
+      {open && tables.map((t) => <TableItem key={t.qualified} table={t} onInsert={onInsert} />)}
+    </div>
+  )
+}
+
+function TableItem({ table, onInsert }: { table: SqlTable; onInsert: (text: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      {/* clicking a table shows or hides its columns; it doesn't type anything into the query */}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-label={open ? `Hide columns of ${table.name}` : `Show columns of ${table.name}`}
+        title={`${table.qualified} · ${table.row_count} rows · ${table.source}`}
+        className="hover:bg-accent flex w-full items-center gap-1 py-1 pr-2 pl-9 text-left text-sm"
+      >
+        <span className="grid size-5 shrink-0 place-items-center">
+          <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+        </span>
+        <Table2 className="text-muted-foreground size-4 shrink-0" />
+        <span className="truncate font-mono text-xs">{table.name}</span>
+      </button>
+      {open && (
+        <div className="pb-1">
+          {table.columns.map((c) => (
+            <button
+              key={c.name}
+              type="button"
+              onClick={() => onInsert(c.name)}
+              title={`Insert ${c.name}`}
+              className="hover:bg-accent flex w-full items-center justify-between gap-2 py-0.5 pr-3 pl-20 text-left"
+            >
+              <span className="truncate font-mono text-xs">{c.name}</span>
+              <span className="text-muted-foreground text-[10px] uppercase">{c.type}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ResultTable({ result }: { result: SqlResult }) {
+  return (
+    <DataGrid
+      columns={result.columns}
+      rows={result.rows}
+      maxHeight="max-h-[60vh] md:max-h-none md:min-h-0 md:flex-1"
+      className="md:min-h-0 md:flex-1"
+      footerNote={result.truncated ? `Showing the first ${result.row_count.toLocaleString()} rows` : undefined}
+    />
+  )
+}

@@ -6,8 +6,17 @@ files in a workspace, executed by a Python server, and managed from a React
 **sub-pipeline**.
 
 ```text
-server/      Python server (FastAPI) and CLI         → docs/server.md
-client/      React + shadcn/ui web client            → docs/client.md
+products/    one folder per product (a monorepo)
+  ingestiq/  IngestIQ: ingestion and the medallion pipelines
+    server/  Python server (FastAPI) and CLI         → docs/server.md
+    client/  React + shadcn/ui web client            → docs/client.md
+    Dockerfile  the image (serves IngestIQ and the portal)
+  portal/    the enterprise portal: sign-in and product tiles (client only) → docs/client.md
+  insightiq/ InsightIQ: the Object Model, objects built from bronze, silver or gold tables (client only)
+  settings/  Settings & Management: System, Users, AI Assist settings (client only; linked from the portal)
+packages/    code shared by the products
+  ui/        @prooflix/ui: theme, shadcn/ui components, product shell
+deploy/      Helm chart and Terraform                → docs/deployment.md
 workspaces/  the workspaces, one folder each (pipelines/, src/, projects) → docs/pipelines.md
 catalog/     imported datasets, one folder per schema (Parquet tables)
 docs/        design documents with diagrams           → docs/README.md
@@ -23,7 +32,7 @@ docs/        design documents with diagrams           → docs/README.md
 Server (http://127.0.0.1:8000, API docs at `/docs`):
 
 ```bash
-cd server
+cd products/ingestiq/server
 uv run prooflix serve --reload
 ```
 
@@ -34,8 +43,8 @@ The Docker image has both.
 Client (http://localhost:5173), in a second terminal:
 
 ```bash
-cd client
-npm install
+npm install                # at the repository root: installs every product and packages/ui
+cd products/ingestiq/client
 npm run dev
 ```
 
@@ -107,8 +116,13 @@ The full reference is in [docs/server.md](docs/server.md#configuration).
 
 ## Users and sign-in
 
-Prooflix asks everyone to sign in. On the first start, the login page creates the
-first **admin** (there is no default account). In the **Users** tab, admins add
+Prooflix asks everyone to sign in, on the **portal** at `/`. After sign-in the portal shows a
+tile for each product the user can open (IngestIQ: ingestion, pipelines, SQL, catalog,
+semantic model, ClickHouse; InsightIQ: the Object Model and its objects), with a **Settings & Management** link (System, Users, AI Assist settings)
+for admins and users with the System tab, and every
+product has a product switcher in its top bar. A user can open a product when they have one
+of its tabs. On the first start, the sign-in page creates the first **admin** (there is no
+default account). In the **Users** tab, admins add
 users and choose for each one:
 
 * **Role:** an admin sees every tab and manages users; a user sees only their tabs.
@@ -202,13 +216,13 @@ there with a read-only user (`SELECT` only). The Helm chart runs ClickHouse; see
 ## Use it from the command line
 
 ```bash
-cd server
+cd products/ingestiq/server
 uv run prooflix validate
 uv run prooflix run pipeline1
 ```
 
 The sample pipelines used by the tests (`daily_orders` and friends) are in
-`server/tests/fixtures/sample_workspace/`; point the CLI at them with
+`products/ingestiq/server/tests/fixtures/sample_workspace/`; point the CLI at them with
 `--workspace tests/fixtures/sample_workspace`.
 
 ## A pipeline that calls sub-pipelines
@@ -238,14 +252,14 @@ See [docs/pipelines.md](docs/pipelines.md) for the full format.
 ## Tests
 
 ```bash
-cd server
+cd products/ingestiq/server
 uv run pytest
 ```
 
 ## Run on Kubernetes (Helm)
 
-The [Dockerfile](Dockerfile) builds one image: the server, which also serves
-the built client on port 8000. The chart in
+The [Dockerfile](products/ingestiq/Dockerfile) builds one image: the server, which also serves
+the portal (`/`), IngestIQ (`/ingestiq/`) and InsightIQ (`/insightiq/`) and Settings & Management (`/settings/`) on port 8000. The chart in
 [deploy/helm/prooflix](deploy/helm/prooflix) runs it as a single pod (run
 history and the scheduler live in the server process, so it must not be scaled
 up) with the workspace and catalog on a persistent volume at `/data`.
@@ -253,7 +267,7 @@ up) with the workspace and catalog on a persistent volume at `/data`.
 On a local [kind](https://kind.sigs.k8s.io/) cluster:
 
 ```bash
-docker build -t prooflix:dev .
+docker build -t prooflix:dev -f products/ingestiq/Dockerfile .
 kind load docker-image prooflix:dev
 helm install prooflix deploy/helm/prooflix --set image.tag=dev --set image.pullPolicy=Never
 kubectl port-forward svc/prooflix 8000:8000   # then open http://localhost:8000

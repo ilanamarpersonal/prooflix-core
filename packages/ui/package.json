@@ -1,0 +1,36 @@
+{
+  "name": "@prooflix/ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The shared look and app kit of every Prooflix product: theme, shadcn/ui components, the product shell, sign-in, AI Assist, search.",
+  "exports": {
+    "./styles.css": "./src/styles.css",
+    "./components/*": "./src/components/*.tsx",
+    "./layout/*": "./src/layout/*.tsx",
+    "./lib/*": "./src/lib/*.ts",
+    "./assets/*": "./src/assets/*",
+    "./auth/api": "./src/auth/api.ts",
+    "./auth/*": "./src/auth/*.tsx",
+    "./app/request": "./src/app/request.ts",
+    "./app/screens": "./src/app/screens.ts",
+    "./app/*": "./src/app/*.tsx",
+    "./ai-assist/api": "./src/ai-assist/api.ts",
+    "./ai-assist/*": "./src/ai-assist/*.tsx"
+  },
+  "dependencies": {
+    "@radix-ui/react-separator": "^1.1.7",
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-tabs": "^1.1.12",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.511.0",
+    "tailwind-merge": "^3.3.0"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@tanstack/react-query": "^5.80.0",
+    "react-router": "^7.6.0"
+  }
+}
